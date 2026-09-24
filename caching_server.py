@@ -302,8 +302,8 @@ def fetch_from_openweathermap(lat, lon, api_key):
     main = cur.get("main", {})
     wind = cur.get("wind", {})
     sys = cur.get("sys", {})
-    temp = round(main.get("temp", 0))
-    wind_speed = round(wind.get("speed", 0), 1)
+    temp = round(main["temp"]) if main.get("temp") is not None else None
+    wind_speed = (round(wind["speed"], 1) if wind.get("speed") is not None else None)
     wind_angle = int(wind["deg"]) if wind.get("deg") is not None else None
     humidity = int(main["humidity"]) if main.get("humidity") is not None else None
     pressure_mm = (round(int(main["pressure"]) * 0.750062)
@@ -325,9 +325,9 @@ def fetch_from_openweathermap(lat, lon, api_key):
             continue
         blocks.append({
             "date": dt_l.strftime("%Y-%m-%d"), "hour": dt_l.hour,
-            "temp": round(it.get("main", {}).get("temp", 0)),
+            "temp": (round(it["main"]["temp"]) if it.get("main", {}).get("temp") is not None else None),
             "humidity": (int(it["main"]["humidity"]) if it.get("main", {}).get("humidity") is not None else None),
-            "wind_speed": round(it.get("wind", {}).get("speed", 0), 1),
+            "wind_speed": (round(it["wind"]["speed"], 1) if it.get("wind", {}).get("speed") is not None else None),
             "wind_angle": (int(it["wind"]["deg"]) if it.get("wind", {}).get("deg") is not None else None),
             "icon": _owm_icon((it.get("weather") or [{}])[0])
         })
@@ -396,20 +396,28 @@ def fetch_from_openmeteo(lat, lon, proxy=None):
     daily = om.get("daily", {})
     hourly = om.get("hourly", {})
 
-    temp = round(cw.get("temperature", 0))
-    wind_speed = round(cw.get("windspeed", 0) / 3.6, 1)
-    wind_angle = cw.get("winddirection", 0)
+    temp = round(cw["temperature"]) if cw.get("temperature") is not None else None
+    wind_speed = (round(cw["windspeed"] / 3.6, 1) if cw.get("windspeed") is not None else None)
+    wind_angle = cw.get("winddirection")
 
     curr_time = cw.get("time", "")
-    h_idx = 0
-    if "time" in hourly and curr_time in hourly["time"]:
-        h_idx = hourly["time"].index(curr_time)
+    h_idx = None
+    times = hourly.get("time") or []
+    # последний ПРОШЕДШИЙ час: cw.time с минутами ("00:30") не совпадёт точно
+    if curr_time and times:
+        best = None
+        for i, tstr in enumerate(times):
+            if str(tstr) <= curr_time:
+                best = i
+            else:
+                break
+        h_idx = best
 
     rh_list = hourly.get("relativehumidity_2m") or []
     sp_list = hourly.get("surface_pressure") or []
-    humidity = rh_list[h_idx] if h_idx < len(rh_list) and rh_list[h_idx] is not None else None
+    humidity = (rh_list[h_idx] if h_idx is not None and h_idx < len(rh_list) and rh_list[h_idx] is not None else None)
     pressure_mm = (round(sp_list[h_idx] * 0.750062)
-                   if h_idx < len(sp_list) and sp_list[h_idx] is not None else None)
+                   if h_idx is not None and h_idx < len(sp_list) and sp_list[h_idx] is not None else None)
 
     def _om_icon(wcode, is_day):
         suf = "_d" if is_day else "_n"
@@ -601,14 +609,15 @@ def fetch_from_wttr(lat, lon):
     hours_list = []
     for h in range(24):
         b = hourly[min(7, h // 3)] if hourly else {}
-        hours_list.append({"hour": str(h), "temp": int(b.get("tempC", temp) or temp)})
+        _tv = b.get("tempC", temp)
+        hours_list.append({"hour": str(h), "temp": (int(_tv) if _tv is not None else None)})
 
     def block_part(idx, fallback_icon):
         b = hourly[idx] if len(hourly) > idx else {}
         hh = int(b.get("time", "0") or 0) // 100
         s2 = "_d" if 8 <= hh < 20 else "_n"
         return {
-            "temp_avg": int(b.get("tempC", temp) or temp),
+            "temp_avg": (int(_tv2) if (_tv2 := b.get("tempC", temp)) is not None else None),
             "icon": _icon_with_suffix(_wwo_icon(b.get("weatherCode", "116")), 8 <= hh < 20),
             "wind_speed": (round(int(b["windspeedKmph"]) / 3.6, 1) if b.get("windspeedKmph") is not None else None),
             "wind_angle": (int(b["winddirDegree"]) if b.get("winddirDegree") is not None else None)
@@ -687,20 +696,20 @@ def fetch_from_7timer(lat, lon):
 
     def b_part(b, fallback_icon, hour=12):
         if not b:
-            return {"temp_avg": 0, "icon": fallback_icon, "wind_speed": None,
+            return {"temp_avg": None, "icon": fallback_icon, "wind_speed": None,
                     "wind_angle": None}
         w10 = b.get("wind10m", {}) or {}
         bft = w10.get("speed")
         direction = (w10.get("direction") or "")[:3]
         return {
-            "temp_avg": int(b.get("temp2m", 0) or 0),
+            "temp_avg": (int(b["temp2m"]) if b.get("temp2m") is not None else None),
             "icon": _icon_with_suffix(b_icon(b), 6 <= hour < 18),
             "wind_speed": (_7TIMER_BFT_MS[min(12, int(bft))] if bft is not None else None),
             "wind_angle": _7TIMER_DIR_DEG.get(direction)
         }
 
     b0 = block_at(datetime.now().hour)
-    temp = int(b0.get("temp2m", 0) or 0)
+    temp = int(b0["temp2m"]) if b0.get("temp2m") is not None else None
     rh = b0.get("rh2m")
     if isinstance(rh, str):
         digits = "".join(ch for ch in rh if ch.isdigit())

@@ -712,10 +712,10 @@ var fetch_from_owm = function(on_success, on_error) {
 							var d = new Date(Date.UTC(+dt.substring(0, 4), +dt.substring(5, 7) - 1, +dt.substring(8, 10), +dt.substring(11, 13), +dt.substring(14, 16)) + tz * 1000);
 							return d.getUTCHours();
 						})(String(it.dt_txt || '')),
-						temp: Math.round((it.main && it.main.temp) || 0),
+						temp: ((it.main || {}).temp != null ? Math.round(it.main.temp) : null),
 						icon: icon,
-						wind_speed: Math.round((((it.wind || {}).speed) || 0) * 10) / 10,
-						wind_angle: Math.round(((it.wind || {}).deg) || 180),
+						wind_speed: (((it.wind || {}).speed != null) ? Math.round(it.wind.speed * 10) / 10 : null),
+						wind_angle: (((it.wind || {}).deg != null) ? Math.round(it.wind.deg) : null),
 						humidity: ((it.main || {}).humidity != null ? it.main.humidity : null),
 						pressure_mm: (((it.main || {}).pressure != null) ? Math.round(it.main.pressure * 0.750062) : null)
 					};
@@ -843,16 +843,16 @@ var fetch_from_om_client = function(on_success, on_error) {
 					};
 				}
 				var parts = {
-					morning: (function() { var w = partWind(6, 12); return { temp_avg: Math.round(tmp[8] || 0) || 0, icon: dominant(byName.morning), wind_speed: w.wind_speed, wind_angle: w.wind_angle }; })(),
-					day: (function() { var w = partWind(12, 18); return { temp_avg: Math.round(tmp[13] || 0) || 0, icon: dominant(byName.day), wind_speed: w.wind_speed, wind_angle: w.wind_angle }; })(),
-					evening: (function() { var w = partWind(18, 24); return { temp_avg: Math.round(tmp[20] || 0) || 0, icon: dominant(byName.evening), wind_speed: w.wind_speed, wind_angle: w.wind_angle }; })(),
-					night: (function() { var w = partWind(0, 6); return { temp_avg: Math.round(tmp[2] || 0) || 0, icon: dominant(byName.night), wind_speed: w.wind_speed, wind_angle: w.wind_angle }; })()
+					morning: (function() { var w = partWind(6, 12); return { temp_avg: (tmp[8] != null ? Math.round(tmp[8]) : null), icon: dominant(byName.morning), wind_speed: w.wind_speed, wind_angle: w.wind_angle }; })(),
+					day: (function() { var w = partWind(12, 18); return { temp_avg: (tmp[13] != null ? Math.round(tmp[13]) : null), icon: dominant(byName.day), wind_speed: w.wind_speed, wind_angle: w.wind_angle }; })(),
+					evening: (function() { var w = partWind(18, 24); return { temp_avg: (tmp[20] != null ? Math.round(tmp[20]) : null), icon: dominant(byName.evening), wind_speed: w.wind_speed, wind_angle: w.wind_angle }; })(),
+					night: (function() { var w = partWind(0, 6); return { temp_avg: (tmp[2] != null ? Math.round(tmp[2]) : null), icon: dominant(byName.night), wind_speed: w.wind_speed, wind_angle: w.wind_angle }; })()
 				};
 				var converted = {
 					fact: {
-						temp: Math.round(cw.temperature || 0),
+						temp: (cw.temperature != null ? Math.round(cw.temperature) : null),
 						icon: fact_icon,
-						wind_speed: Math.round(((cw.windspeed || 0) / 3.6) * 10) / 10,
+						wind_speed: (cw.windspeed != null ? Math.round(cw.windspeed / 3.6 * 10) / 10 : null),
 						wind_angle: (cw.winddirection != null ? Math.round(cw.winddirection) : null),
 						humidity: (rh[hIdx] != null ? Math.round(rh[hIdx]) : null),
 						pressure_mm: (pr[hIdx] != null ? Math.round(pr[hIdx] * 0.750062) : null)
@@ -898,7 +898,7 @@ var fetch_from_7timer_client = function(on_success, on_error) {
 				var bft0 = parseInt(w0.speed, 10);
 				var rhRaw = String(b0.rh2m || '').replace(/[^0-9]/g, '');
 				var fact = {
-					temp: Math.round(b0.temp2m || 0),
+					temp: (b0.temp2m != null ? Math.round(b0.temp2m) : null),
 					icon: icon7(b0, new Date().getHours()),
 					wind_speed: (isNaN(bft0) ? null : BFT[Math.min(12, bft0)]),
 					wind_angle: (DIR7[w0.direction] != null ? DIR7[w0.direction] : null),
@@ -912,10 +912,10 @@ var fetch_from_7timer_client = function(on_success, on_error) {
 					var icon = icon7(ds[i], hh);
 					var w = ds[i].wind10m || {};
 					var bf = parseInt(w.speed, 10);
-					hours_list.push({ hour: String(hh), temp: Math.round(ds[i].temp2m || 0) });
+					hours_list.push({ hour: String(hh), temp: (ds[i].temp2m != null ? Math.round(ds[i].temp2m) : null) });
 					var slot = (hh >= 6 && hh < 12) ? byRange.morning : (hh >= 12 && hh < 18) ? byRange.day : (hh >= 18) ? byRange.evening : byRange.night;
 					slot.push({
-						temp_avg: Math.round(ds[i].temp2m || 0),
+						temp_avg: (ds[i].temp2m != null ? Math.round(ds[i].temp2m) : null),
 						icon: icon,
 						wind_speed: (isNaN(bf) ? null : BFT[Math.min(12, bf)]),
 						wind_angle: (DIR7[w.direction] != null ? DIR7[w.direction] : null)
@@ -1030,9 +1030,9 @@ function fetch_from_wttr(on_success, on_error) {
 						});
 					}
 
-					var max_t = Math.round(iv(day.maxtempC, dayHours[13].temp));
-					var min_t = Math.round(iv(day.mintempC, dayHours[1].temp));
-					var m_t = Math.round(iv((dayHourly[3] || {}).tempC, max_t));
+					var max_t = rn(iv(day.maxtempC, dayHours[13] ? dayHours[13].temp : null));
+					var min_t = rn(iv(day.mintempC, dayHours[1] ? dayHours[1].temp : null));
+					var m_t = rn(iv((dayHourly[3] || {}).tempC, max_t));
 					var e_t = Math.round(iv((dayHourly[6] || {}).tempC, max_t));
 
 					var dParts = {
@@ -1552,19 +1552,24 @@ function render_weather(data) {
 
 	// 3. Min и Max по часам активного дня
 	if (fToday && fToday.hasOwnProperty('hours') && fToday.hours.length > 0) {
-		var min = 0, max = 0;
+		var min = -1, max = -1;
 		for (var id = 0; id < fToday.hours.length; id++) {
-			if (fToday.hours[id].hasOwnProperty('temp')) {
-				if (fToday.hours[id].temp < fToday.hours[min].temp) min = id;
-				if (fToday.hours[id].temp > fToday.hours[max].temp) max = id;
-			}
+			var ht = fToday.hours[id].temp;
+			if (ht == null) continue;
+			if (min === -1 || ht < fToday.hours[min].temp) min = id;
+			if (max === -1 || ht > fToday.hours[max].temp) max = id;
 		}
-		result.min = (fToday.hours[min].temp > 0 ? '+' : '') + fToday.hours[min].temp;
-		var minH = (fToday.hours[min].hour !== undefined) ? parseInt(fToday.hours[min].hour, 10) : min;
-		result.min_date = String(pad(minH)) + ':00';
-		result.max = (fToday.hours[max].temp > 0 ? '+' : '') + fToday.hours[max].temp;
-		var maxH = (fToday.hours[max].hour !== undefined) ? parseInt(fToday.hours[max].hour, 10) : max;
-		result.max_date = String(pad(maxH)) + ':00';
+		if (min !== -1 && max !== -1) {
+			result.min = (fToday.hours[min].temp > 0 ? '+' : '') + fToday.hours[min].temp;
+			var minH = (fToday.hours[min].hour !== undefined) ? parseInt(fToday.hours[min].hour, 10) : min;
+			result.min_date = String(pad(minH)) + ':00';
+			result.max = (fToday.hours[max].temp > 0 ? '+' : '') + fToday.hours[max].temp;
+			var maxH = (fToday.hours[max].hour !== undefined) ? parseInt(fToday.hours[max].hour, 10) : max;
+			result.max_date = String(pad(maxH)) + ':00';
+		} else {
+			result.min = '—';
+			result.max = '—';
+		}
 	}
 
 	// 4. Прогнозные слоты («Днём», «Вечером», «Ночью», «Утром»)
