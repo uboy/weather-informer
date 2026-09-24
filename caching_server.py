@@ -506,7 +506,7 @@ def fetch_weather(force=False):
 def _fetch_weather_locked(force=False):
     global cached_data, last_fetch_time, last_error_message
     cfg = load_config()
-    interval = cfg.get("cache_interval_minutes", 50) * 60
+    interval = cfg.get("cache_interval_minutes", 90) * 60
     now = time.time()
 
     if not force and cached_data and (now - last_fetch_time < interval):

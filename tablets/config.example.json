@@ -1,6 +1,6 @@
 {
   "server_url": "http://IP_СЕРВЕРА:8085/weather.json",
-  "api": "тот_же_ключ_что_и_на_сервере",
+  "api": "server-only",
   "allow_direct_yandex": false,
   "lat": 56.317722,
   "lon": 43.999303,

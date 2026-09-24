@@ -28,7 +28,7 @@ wttr.in (fallback) ──────┤      ├─ /weather.json — данн�
 | `config.example.json` | шаблон конфига сервера (реальный `config.json` в .gitignore!) |
 | `tablets/config.example.json` | шаблон конфига планшета |
 | `install/weather-informer.service` | systemd --user юнит |
-| `install/install-service.sh` | установка сервиса ( linger, автостарт) |
+| `install/install-service.sh` | установка сервиса (linger, автостарт) |
 | `deploy/informer-to-tablet.sh` | деплой страницы на один планшет |
 | `deploy/all-tablets.sh` | деплой на весь парк (список в `deploy/tablets.list`) |
 
@@ -45,7 +45,7 @@ cp config.example.json config.json   # вписать ключ Яндекса и
 ## Развёртывание планшета (root/adb)
 
 1. Установить kiosk-приложение (WebViewKiosk) и указать home = `file:///sdcard/Download/informer.html`
-2. Положить конфиг: `adb push tablets/config.example.json /sdcard/Download/config.json` (вписать IP сервера)
+2. Положить конфиг: `adb push tablets/config.example.json /sdcard/Download/config.json` (вписать IP сервера; поле `api` — любая строка-заглушка, ключ на планшетах не нужен)
 3. Задеплоить страницу: `./deploy/informer-to-tablet.sh <serial|ip:5555>`
 4. Автостарт adb-over-wifi после загрузки — скрипт в Magisk `/data/adb/service.d/99-adbtcp.sh`:
 

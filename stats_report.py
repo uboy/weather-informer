@@ -13,7 +13,7 @@ import statistics
 from collections import defaultdict
 from datetime import datetime
 
-DEFAULT = "/home/dmazur/services/weather-informer/weather_stats.csv"
+DEFAULT = "weather_stats.csv"
 
 
 def load(path):

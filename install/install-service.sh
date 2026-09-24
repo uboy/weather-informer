@@ -13,4 +13,4 @@ systemctl --user enable --now weather-informer
 loginctl enable-linger "$USER" 2>/dev/null || true
 sleep 3
 systemctl --user status weather-informer --no-pager | head -5
-curl -s -m 5 "http://127.0.0.1:$(grep -oP '(?<="port": )\d+' "$DIR/config.json")/status" && echo " — сервер работает"
+curl -s -m 5 "http://127.0.0.1:$(grep -oP '(?<="port": )\d+' "$DIR/config.json")/status" || echo "(сервер ещё поднимается — повтори /status через минуту)"

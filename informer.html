@@ -244,7 +244,8 @@ var pressure_max = 770; //Давление, максимум, мм рт ст
 			</div>
 		</div>
 	</div>
-<script src="https://code.jquery.com/jquery-3.7.1.min.js" integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo=" crossorigin="anonymous"></script>
+<script src="jquery.min.js"></script>
+<script>window.jQuery || document.write(String.fromCharCode(60) + 'script src="https://code.jquery.com/jquery-3.7.1.min.js" crossorigin="anonymous"><\/script' + String.fromCharCode(62));</script>
 <script>
 var day = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
 var period = {morning: 'утром', day: 'днём', evening: 'вечером', night: 'ночью', day_day: 'день', day_night: 'ночь'};
@@ -691,7 +692,7 @@ function run() {
 	var storedLastCall = parseInt(safe_get_item("weather_last_call", "0"), 10);
 	if (storedLastCall > lastcall) lastcall = storedLastCall;
 
-	if (lastcall < now - timeout * 1000 && api != 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx') {
+	if (lastcall < now - timeout * 1000 && (server_url.trim() !== '' || api != 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx')) {
 		get_data();
 	}
 
@@ -1130,13 +1131,7 @@ body {
 	width: 100%;
 	position: static;
 }
-@-webkit-keyframes blink {
-	0%, 49% { opacity: 1; }
-	50%, 100% { opacity: 0; }
 }
-@keyframes blink {
-	0%, 49% { opacity: 1; }
-	50%, 100% { opacity: 0; }
 }
 .colon {
 	display: inline-block;
