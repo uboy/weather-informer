@@ -231,11 +231,16 @@ def fetch_from_openweathermap(lat, lon, api_key):
     sunset = sunset_dt.strftime("%H:%M")
 
     # Части суток и часы из 3-часового прогноза
+    # dt_txt у OWM в UTC — приводим к локальному времени по сдвигу города
+    tz_shift = int((fc.get("city") or {}).get("timezone", 0))
     blocks = []
     for it in fc.get("list", []):
-        dt_txt = it.get("dt_txt", "")
+        try:
+            dt_l = datetime.fromisoformat(it.get("dt_txt", "")) + timedelta(seconds=tz_shift)
+        except (ValueError, TypeError):
+            continue
         blocks.append({
-            "date": dt_txt[:10], "hour": int(dt_txt[11:13]),
+            "date": dt_l.strftime("%Y-%m-%d"), "hour": dt_l.hour,
             "temp": round(it.get("main", {}).get("temp", 0)),
             "humidity": int(it.get("main", {}).get("humidity", 50) or 50),
             "wind_speed": round(it.get("wind", {}).get("speed", 0), 1),

@@ -10,6 +10,7 @@
 
 ```
 Яндекс.Погода (90 мин) ──┐
+OpenWeatherMap (fallback)┤
 Open-Meteo (fallback) ───┤→ caching_server.py :8085 ──→ планшеты (webview kiosk)
 wttr.in (fallback) ──────┤      ├─ /weather.json — данные
 7timer (fallback) ───────┘      ├─ /status — здоровье, возраст кэша

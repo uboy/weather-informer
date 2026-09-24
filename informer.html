@@ -443,9 +443,12 @@ function init_menu() {
 	var menu = $("#weather_menu");
 	function render_src() {
 		var pref = safe_get_item("weather_source_pref", "default");
-		if (pref !== "server" && pref !== "wttr") pref = "default";
+		if (pref !== "server" && pref !== "wttr" && pref !== "owm" && pref !== "yandex") pref = "default";
 		$(".menu_src").each(function() {
-			if ($(this).attr("data-src") === pref) $(this).addClass("menu_active");
+			var src = $(this).attr("data-src");
+			if (src === "yandex" && !allow_direct_yandex) { $(this).hide(); return; }
+			$(this).show();
+			if (src === pref) $(this).addClass("menu_active");
 			else $(this).removeClass("menu_active");
 		});
 	}
@@ -536,6 +539,89 @@ function load_config(callback) {
 			if (callback) callback();
 		});
 }
+
+var fetch_from_owm = function(on_success, on_error) {
+	if (!owm_key) { on_error(null, "no_owm_key", "нет ключа OpenWeatherMap"); return; }
+	var url = 'https://api.openweathermap.org/data/2.5/forecast?lat=' + lat + '&lon=' + lon + '&units=metric&appid=' + owm_key;
+	$.getJSON(url)
+		.done(function(om) {
+			try {
+				var blocks = (om.list || []).map(function(it) {
+					var w = (it.weather && it.weather[0]) || {};
+					var id = parseInt(w.id, 10) || 800;
+					var base;
+					if (id >= 200 && id < 300) base = 'ovc_ts';
+					else if (id >= 300 && id < 600) base = 'ovc_ra';
+					else if (id >= 600 && id < 700) base = 'ovc_sn';
+					else if (id >= 700 && id < 800) base = 'ovc';
+					else if (id === 800) base = 'skc';
+					else if (id === 801 || id === 802) base = 'bkn';
+					else base = 'ovc';
+					var dn = (String(w.icon || 'd').slice(-1) === 'd') ? '_d' : '_n';
+					var icon = (base === 'skc' || base === 'bkn') ? base + dn : base;
+					return {
+						date: String(it.dt_txt || '').substring(0, 10),
+						hour: parseInt(String(it.dt_txt || '0000-00-00 00').substring(11, 13), 10) || 0,
+						temp: Math.round((it.main && it.main.temp) || 0),
+						icon: icon,
+						wind_speed: Math.round((((it.wind || {}).speed) || 0) * 10) / 10,
+						wind_angle: Math.round(((it.wind || {}).deg) || 180),
+						humidity: (it.main && it.main.humidity) || 50,
+						pressure_mm: Math.round((((it.main || {}).pressure) || 1013) * 0.750062)
+					};
+				});
+				var today = blocks.length ? blocks[0].date : '';
+				var byName = { morning: [], day: [], evening: [], night: [] };
+				for (var i = 0; i < blocks.length; i++) {
+					var b = blocks[i];
+					if (b.date !== today) { if (b.hour < 6) byName.night.push(b); continue; }
+					if (b.hour >= 6 && b.hour < 12) byName.morning.push(b);
+					else if (b.hour >= 12 && b.hour < 18) byName.day.push(b);
+					else if (b.hour >= 18) byName.evening.push(b);
+					else byName.night.push(b);
+				}
+				var factB = blocks.length ? blocks[0] : null;
+				var parts = {};
+				['morning', 'day', 'evening', 'night'].forEach(function(name) {
+					var arr = byName[name];
+					var b = arr.length ? arr[Math.floor(arr.length / 2)] : null;
+					parts[name] = {
+						temp_avg: b ? b.temp : 0,
+						icon: b ? b.icon : 'bkn_d',
+						wind_speed: b ? b.wind_speed : 0,
+						wind_angle: b ? b.wind_angle : 180
+					};
+				});
+				var city = om.city || {};
+				var sr = new Date((city.sunrise || 0) * 1000);
+				var ss = new Date((city.sunset || 0) * 1000);
+				var fH = function(d) { return (d.getHours() < 10 ? '0' : '') + d.getHours() + ':' + (d.getMinutes() < 10 ? '0' : '') + d.getMinutes(); };
+				var converted = {
+					fact: {
+						temp: factB ? factB.temp : 0,
+						icon: factB ? factB.icon : 'bkn_d',
+						wind_speed: factB ? factB.wind_speed : 0,
+						wind_angle: factB ? factB.wind_angle : 180,
+						humidity: factB ? factB.humidity : 50,
+						pressure_mm: factB ? factB.pressure_mm : 750
+					},
+					forecasts: [{
+						sunrise: fH(sr), sunset: fH(ss), moon_code: 9,
+						hours: blocks.filter(function(b) { return b.date === today; }).map(function(b) { return { hour: String(b.hour), temp: b.temp }; }),
+						parts: parts
+					}, { parts: parts }]
+				};
+				on_success(converted);
+			} catch (ex) {
+				console.error('OWM parse error:', ex);
+				on_error(null, 'parse_error', ex ? ex.message : 'parse error');
+			}
+		})
+		.fail(function(xhr, status, err) {
+			console.log('OWM request failed:', status, err);
+			on_error(xhr, status, err);
+		});
+};
 
 function fetch_from_wttr(on_success, on_error) {
 	var wt_url = 'https://wttr.in/' + lat + ',' + lon + '?format=j1';
@@ -1985,7 +2071,9 @@ body {
 		<div class="menu_title">Источник (по умолчанию)</div>
 		<div class="menu_item menu_src" data-src="default">По умолчанию</div>
 		<div class="menu_item menu_src" data-src="server">Локальный сервер</div>
+		<div class="menu_item menu_src" data-src="owm">OpenWeatherMap</div>
 		<div class="menu_item menu_src" data-src="wttr">wttr.in</div>
+		<div class="menu_item menu_src" data-src="yandex" style="display:none">Яндекс (прямой)</div>
 		<div class="menu_title">Цвет</div>
 		<div class="menu_item menu_color" data-color="#ffffff">Белый</div>
 		<div class="menu_item menu_color" data-color="#00FF00">Зелёный</div>

@@ -99,11 +99,13 @@ for (let id = 500; id < 600; id++) OWM[id] = 'ovc_ra';
 for (let id = 600; id < 700; id++) OWM[id] = 'ovc_sn';
 for (let id = 700; id < 800; id++) OWM[id] = 'ovc';
 OWM[800] = 'skc'; OWM[801] = 'bkn'; OWM[802] = 'bkn'; OWM[803] = 'ovc'; OWM[804] = 'ovc';
+let vocFailOwm = 0;
 for (const k of Object.keys(OWM)) {
     const b = OWM[k];
     const emit = (b === 'skc' || b === 'bkn') ? [b + '_d', b + '_n'] : [b];
-    for (const ic of emit) if (!cssClasses.has(ic)) { vocFail++; console.log('  [FAIL] OWM id ' + k + ' -> нет CSS для "' + ic + '"'); }
+    for (const ic of emit) if (!cssClasses.has(ic)) { vocFailOwm++; console.log('  [FAIL] OWM id ' + k + ' -> нет CSS для "' + ic + '"'); }
 }
+check('OWM-вокабуляр покрыт CSS', vocFailOwm === 0, vocFailOwm + ' отсутствуют');
 console.log('OWM id-групп: ' + Object.keys(OWM).length);
 console.log('имён значков, порождаемых сервером: ' + emitted.size);
 let vocFail = 0;
