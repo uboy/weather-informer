@@ -9,5 +9,6 @@
   "pressure_min": 710,
   "pressure_max": 770,
   "enable_wttr_fallback": true,
-  "openweathermap_api_key": "ВАШ_КЛЮЧ_OPENWEATHERMAP"
+  "openweathermap_api_key": "ВАШ_КЛЮЧ_OPENWEATHERMAP",
+  "city_name": "Нижний Новгород"
 }

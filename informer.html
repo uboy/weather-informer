@@ -6,6 +6,8 @@
 var api = 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'; //API Яндекс погода (используется ТОЛЬКО при allow_direct_yandex=true в config.json)
 var lat = 56.317722; //Широта
 var lon = 43.999303; //Долгота
+var base_lat = lat; // Координаты из конфига (город из меню накладывается поверх)
+var base_lon = lon;
 
 var wind_max = 15; //Скорость ветра, максимум, м/с
 var pressure_min = 710; //Давление, минимум, мм рт ст
@@ -136,6 +138,30 @@ var pressure_max = 770; //Давление, максимум, мм рт ст
 .menu_color.menu_active::before {
 	content: "\25CF\00A0";
 	color: #9fd06a;
+}
+#city_search_input {
+	background: rgba(255, 255, 255, 0.10);
+	border: 0.15vw solid rgba(255, 255, 255, 0.25);
+	border-radius: 0.5vw;
+	color: var(--tc, #ffffff);
+	font-size: 2.6vw;
+	padding: 0.9vw 1.0vw;
+	margin: 0.4vw 0;
+	width: calc(100% - 2.0vw);
+	outline: none;
+}
+.city_result {
+	font-size: 2.4vw;
+	padding: 0.8vw 1.0vw;
+	border-radius: 0.5vw;
+	cursor: pointer;
+	color: #cccccc;
+	-webkit-user-select: none;
+	user-select: none;
+}
+.city_result:active {
+	background: rgba(255, 255, 255, 0.12);
+	color: var(--tc, #ffffff);
 }
 .menu_color.menu_active {
 	color: var(--tc, #ffffff);
@@ -322,6 +348,16 @@ function format_error_reason(xhr, status, err, source_name) {
 	}
 }
 
+function city_prefix() {
+	var n = current_city_name();
+	return n ? (n + " \u00b7 ") : "";
+}
+
+function current_city_name() {
+	var n = safe_get_item("city_name", "");
+	return n ? n : city_name_cfg;
+}
+
 function safe_get_item(key, fallback) {
 	try {
 		var val = localStorage.getItem(key);
@@ -362,7 +398,7 @@ function update_status_bar() {
 			msg += " • Обновлено: " + format_time(cacheTime, false, true) + " • Источник: " + cacheSource;
 		}
 		$("#status_bar")
-			.text(msg)
+			.text(city_prefix() + msg)
 			.addClass("visible")
 			.addClass("status_stale")
 			.addClass("status_error")
@@ -381,7 +417,7 @@ function update_status_bar() {
 				msg += " • Обновлено: " + format_time(cacheTime, false, true) + " • Источник: " + cacheSource;
 			}
 			$("#status_bar")
-				.text(msg)
+				.text(city_prefix() + msg)
 				.addClass("visible")
 				.addClass("status_warn")
 				.removeClass("status_stale")
@@ -392,7 +428,7 @@ function update_status_bar() {
 			var sourceStr = cacheTime > 0 ? cacheSource : "—";
 			var msg = "Обновлено: " + updateStr + " • Источник: " + sourceStr;
 			$("#status_bar")
-				.text(msg)
+				.text(city_prefix() + msg)
 				.addClass("visible")
 				.addClass("status_normal")
 				.removeClass("status_warn")
@@ -455,7 +491,7 @@ function init_menu() {
 	$("#menu_btn").on("click", function(e) {
 		e.stopPropagation();
 		if (menu.hasClass("menu_open")) menu.removeClass("menu_open");
-		else { render_src(); menu.addClass("menu_open"); }
+		else { render_src(); render_city(); menu.addClass("menu_open"); }
 	});
 	menu.on("click", function(e) { e.stopPropagation(); });
 	$("#menu_refresh").on("click", function(e) {
@@ -488,6 +524,97 @@ function init_menu() {
 		apply_text_color(c);
 		render_color();
 	});
+	function render_city() {
+		var n = current_city_name();
+		$("#city_current").text("Город: " + (n ? n : "не задан"));
+		if (safe_get_item("city_name", "")) $("#city_reset").show();
+		else $("#city_reset").hide();
+	}
+	function apply_city() {
+		render_city();
+		menu.removeClass("menu_open");
+		get_data();
+	}
+	function server_base() {
+		return (server_url || "").trim().replace(/\/weather\.json.*$/, "").replace(/\/$/, "");
+	}
+	$("#city_auto").on("click", function(e) {
+		e.stopPropagation();
+		if (!navigator.geolocation) {
+			$("#city_current").text("Геолокация недоступна");
+			return;
+		}
+		$("#city_current").text("Определяю местоположение\u2026");
+		navigator.geolocation.getCurrentPosition(function(pos) {
+			var gla = pos.coords.latitude, glo = pos.coords.longitude;
+			var base = server_base();
+			if (!base) { $("#city_current").text("Нет адреса сервера для определения города"); return; }
+			$.ajax({ url: base + "/reverse?lat=" + gla + "&lon=" + glo, dataType: "json", timeout: 15000 })
+				.done(function(r) {
+					if (r && r.name) {
+						safe_set_item("city_name", r.name);
+						safe_set_item("city_lat", gla);
+						safe_set_item("city_lon", glo);
+						apply_city();
+					} else {
+						$("#city_current").text("Не удалось определить город");
+					}
+				})
+				.fail(function() {
+					$("#city_current").text("Ошибка определения города");
+				});
+		}, function() {
+			$("#city_current").text("Геолокация отклонена или недоступна");
+		}, { timeout: 15000, maximumAge: 300000 });
+	});
+	function city_search() {
+		var q = $("#city_search_input").val().trim();
+		if (q.length < 2) return;
+		var base = server_base();
+		if (!base) { $("#city_results").html('<div class="city_result">Нет адреса сервера</div>'); return; }
+		$("#city_results").html('<div class="city_result">Поиск\u2026</div>');
+		$.ajax({ url: base + "/geocode?q=" + encodeURIComponent(q), dataType: "json", timeout: 15000 })
+			.done(function(list) {
+				var html = "";
+				(list || []).forEach(function(it) {
+					var nm = String(it.name || "").replace(/[<>&"']/g, "");
+					html += '<div class="city_result" data-lat="' + it.lat + '" data-lon="' + it.lon + '" data-name="' + nm + '">' + nm + '</div>';
+				});
+				$("#city_results").html(html || '<div class="city_result">Ничего не найдено</div>');
+			})
+			.fail(function() {
+				$("#city_results").html('<div class="city_result">Ошибка поиска</div>');
+			});
+	}
+	$("#city_search_input").on("click", function(e) { e.stopPropagation(); });
+	$("#city_search_btn").on("click", function(e) {
+		e.stopPropagation();
+		city_search();
+	});
+	$("#city_search_input").on("keydown", function(e) {
+		if (e.key === "Enter") { e.stopPropagation(); city_search(); }
+	});
+	$("#city_results").on("click", ".city_result", function(e) {
+		e.stopPropagation();
+		var t = $(this);
+		if (!t.attr("data-lat")) return;
+		safe_set_item("city_name", t.attr("data-name"));
+		safe_set_item("city_lat", t.attr("data-lat"));
+		safe_set_item("city_lon", t.attr("data-lon"));
+		$("#city_search_input").val("");
+		$("#city_results").empty();
+		apply_city();
+	});
+	$("#city_reset").on("click", function(e) {
+		e.stopPropagation();
+		try {
+			localStorage.removeItem("city_name");
+			localStorage.removeItem("city_lat");
+			localStorage.removeItem("city_lon");
+		} catch (err) {}
+		apply_city();
+	});
+	render_city();
 	$("#menu_close").on("click", function(e) {
 		e.stopPropagation();
 		menu.removeClass("menu_open");
@@ -495,6 +622,7 @@ function init_menu() {
 }
 
 var server_url = ""; // Локальный сервер кэширования (если задан)
+var city_name_cfg = ""; // Город из config.json (для статус-бара)
 var owm_key = ""; // Ключ OpenWeatherMap для клиентского фолбэка
 
 function apply_text_color(c) {
@@ -512,7 +640,10 @@ function load_config(callback) {
 			if (cfg.api) api = cfg.api;
 			if (cfg.lat !== undefined) lat = cfg.lat;
 			if (cfg.lon !== undefined) lon = cfg.lon;
+			base_lat = lat;
+			base_lon = lon;
 			if (cfg.server_url !== undefined) server_url = cfg.server_url;
+			if (cfg.city_name !== undefined) city_name_cfg = String(cfg.city_name);
 			if (cfg.openweathermap_api_key !== undefined) owm_key = cfg.openweathermap_api_key;
 			var storedColor = safe_get_item("weather_text_color", "");
 			apply_text_color(storedColor || cfg.text_color || "");
@@ -1014,7 +1145,26 @@ function get_data() {
 		localStorage.setItem("weather_last_attempt_time", String(now));
 	} catch(e) {}
 
+	// Город из настроек меню: переопределяем координаты для всех источников
+	try {
+		var _cLat = parseFloat(localStorage.getItem("city_lat"));
+		var _cLon = parseFloat(localStorage.getItem("city_lon"));
+		if (isFinite(_cLat) && isFinite(_cLon) && (_cLat !== 0 || _cLon !== 0)) {
+			lat = _cLat;
+			lon = _cLon;
+		} else {
+			lat = base_lat;
+			lon = base_lon;
+		}
+	} catch (e) {
+		lat = base_lat;
+		lon = base_lon;
+	}
+
 	var server = (server_url && server_url.trim() !== "") ? server_url.trim() : '';
+	if (server) {
+		server += (server.indexOf("?") === -1 ? "?" : "&") + "lat=" + lat + "&lon=" + lon;
+	}
 
 	// Выбор источника из меню (localStorage weather_source_pref): default = обычная цепочка
 	var source_pref = safe_get_item("weather_source_pref", "default");
@@ -2342,6 +2492,13 @@ body {
 		<div class="menu_item menu_src" data-src="7timer">7timer</div>
 		<div class="menu_item menu_src" data-src="wttr">wttr.in</div>
 		<div class="menu_item menu_src" data-src="yandex" style="display:none">Яндекс (прямой)</div>
+		<div class="menu_title">Город</div>
+		<div class="menu_item" id="city_current">Город: —</div>
+		<div class="menu_item" id="city_auto">Определить автоматически (GPS)</div>
+		<input type="text" id="city_search_input" placeholder="Поиск города…" autocomplete="off">
+		<div class="menu_item" id="city_search_btn">Найти город</div>
+		<div id="city_results"></div>
+		<div class="menu_item" id="city_reset" style="display:none">Сбросить город</div>
 		<div class="menu_title">Цвет</div>
 		<div class="menu_item menu_color" data-color="#ffffff">Белый</div>
 		<div class="menu_item menu_color" data-color="#00FF00">Зелёный</div>
