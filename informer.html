@@ -1320,95 +1320,57 @@ function get_data() {
 	}
 
 	function on_failure(xhr, status, err, is_fallback) {
-		if (!is_fallback && server && allow_direct_yandex && !only_server) {
-			console.log("Local server failed, trying direct Yandex API fallback (allowed by config)...");
-			var fallback_url = 'https://api.weather.yandex.ru/v2/forecast?lat=' + lat + '&lon=' + lon;
-			fetch_url(fallback_url, {'X-Yandex-Weather-Key': api}, true);
-			return;
+		// Фолбэк по приоритету: безлимитные источники сначала,
+		// прямой Яндекс — ПОСЛЕДНИМ (расходует общую квоту ключа 30/сутки)
+		if (only_server) { show_error(xhr, status, err); return; }
+
+		function fallback_success(d, srcName) {
+			current_weather_data = d;
+			try {
+				localStorage.setItem('weather_cache_data', JSON.stringify(d));
+				localStorage.setItem('weather_cache_time', String(Date.now()));
+				localStorage.setItem('weather_cache_source', srcName);
+				localStorage.removeItem('weather_last_attempt_error');
+			} catch (e) {}
+			render_weather(d);
+			update_status_bar();
 		}
 
-		if (owm_key && !only_server) {
-			console.log("Trying OpenWeatherMap client fallback...");
-			fetch_from_owm(function(owm_data) {
-				console.log("OpenWeatherMap fallback SUCCESS");
-				current_weather_data = owm_data;
-				try {
-					localStorage.setItem('weather_cache_data', JSON.stringify(owm_data));
-					localStorage.setItem('weather_cache_time', String(Date.now()));
-					localStorage.setItem('weather_cache_source', 'OpenWeatherMap');
-					localStorage.removeItem('weather_last_attempt_error');
-				} catch (e) {}
-				render_weather(owm_data);
-				update_status_bar();
-			}, function(owm_xhr, owm_status, owm_err) {
-				console.log("OpenWeatherMap fallback failed, trying wttr.in");
-				show_error(xhr, status, err);
-			});
-			return;
+		var chain = [];
+		if (owm_key) {
+			chain.push({ name: 'OpenWeatherMap', run: function(ok, fail) { fetch_from_owm(ok, fail); } });
+		}
+		chain.push({ name: 'Open-Meteo', run: function(ok, fail) { fetch_from_om_client(ok, fail); } });
+		chain.push({ name: '7timer', run: function(ok, fail) { fetch_from_7timer_client(ok, fail); } });
+		if (enable_wttr_fallback) {
+			chain.push({ name: 'wttr.in', run: function(ok, fail) { fetch_from_wttr(ok, fail); } });
+		}
+		if (allow_direct_yandex && api && api !== 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx') {
+			chain.push({ name: 'Яндекс.Погода', run: function(ok, fail) {
+				$.ajax({
+					url: 'https://api.weather.yandex.ru/v2/forecast?lat=' + lat + '&lon=' + lon,
+					headers: { 'X-Yandex-Weather-Key': api },
+					dataType: 'json',
+					timeout: 25 * 1000
+				}).done(function(d) { ok(d, 'Яндекс.Погода'); })
+				  .fail(function(x, st, e) { fail(x, st, e); });
+			}});
 		}
 
-		if (source_pref === "om") {
-			console.log("get_data: source pref = Open-Meteo (direct)");
-			fetch_from_om_client(function(d) {
-				current_weather_data = d;
-				try {
-					localStorage.setItem('weather_cache_data', JSON.stringify(d));
-					localStorage.setItem('weather_cache_time', String(Date.now()));
-					localStorage.setItem('weather_cache_source', 'Open-Meteo');
-					localStorage.removeItem('weather_last_attempt_error');
-				} catch (e) {}
-				render_weather(d);
-				update_status_bar();
-			}, function(ox, os, oe) {
-				show_error(ox, os, oe, "Open-Meteo");
+		var stepIdx = 0;
+		function tryNext() {
+			if (stepIdx >= chain.length) { show_error(xhr, status, err); return; }
+			var step = chain[stepIdx++];
+			console.log("Fallback: trying " + step.name + "...");
+			step.run(function(d) {
+				console.log("Fallback SUCCESS: " + step.name);
+				fallback_success(d, step.name);
+			}, function() {
+				console.log("Fallback failed: " + step.name + ", trying next...");
+				tryNext();
 			});
-			return;
 		}
-		if (source_pref === "7timer") {
-			console.log("get_data: source pref = 7timer (direct)");
-			fetch_from_7timer_client(function(d) {
-				current_weather_data = d;
-				try {
-					localStorage.setItem('weather_cache_data', JSON.stringify(d));
-					localStorage.setItem('weather_cache_time', String(Date.now()));
-					localStorage.setItem('weather_cache_source', '7timer');
-					localStorage.removeItem('weather_last_attempt_error');
-				} catch (e) {}
-				render_weather(d);
-				update_status_bar();
-			}, function(ox, os, oe) {
-				show_error(ox, os, oe, "7timer");
-			});
-			return;
-		}
-		if (source_pref === "yandex") {
-			if (!allow_direct_yandex) { show_error(null, "source_disabled", "прямой Яндекс отключён конфигом"); return; }
-			console.log("get_data: source pref = Yandex (direct)");
-			fetch_url('https://api.weather.yandex.ru/v2/forecast?lat=' + lat + '&lon=' + lon, {'X-Yandex-Weather-Key': api}, true);
-			return;
-		}
-
-		if (enable_wttr_fallback && !only_server) {
-			console.log("Yandex API unavailable/failed, trying wttr.in fallback...");
-			fetch_from_wttr(function(wt_data) {
-				console.log("wttr.in fallback SUCCESS");
-				current_weather_data = wt_data;
-				try {
-					localStorage.setItem('weather_cache_data', JSON.stringify(wt_data));
-					localStorage.setItem('weather_cache_time', String(Date.now()));
-					localStorage.setItem('weather_cache_source', 'wttr.in');
-					localStorage.removeItem('weather_last_attempt_error');
-				} catch (e) {}
-				render_weather(wt_data);
-				update_status_bar();
-			}, function(wt_xhr, wt_status, wt_err) {
-				console.log("wttr.in fallback also failed");
-				show_error(xhr, status, err);
-			});
-			return;
-		}
-
-		show_error(xhr, status, err);
+		tryNext();
 	}
 
 	fetch_url(primary_url, headers, false);
