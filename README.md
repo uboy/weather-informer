@@ -3,7 +3,8 @@
 Локальный кэширующий сервер погоды + веб-страница киоска для парка Android-планшетов.
 Сервер ходит в Яндекс.Погоду **раз в 90 минут** (квота бесплатного тарифа 30 запросов/сутки),
 кэширует результат и раздаёт неограниченному числу планшетов. При сбое Яндекса — автоматическая
-цепочка фолбэков: Open-Meteo → wttr.in → 7timer. Планшеты никогда не ходят в Яндекс напрямую.
+цепочка фолбэков: **OpenWeatherMap → Open-Meteo → wttr.in → 7timer** (и на планшете, если
+пропал сервер: OWM → wttr.in). Планшеты никогда не ходят в Яндекс напрямую.
 
 ## Архитектура
 
@@ -28,6 +29,7 @@ wttr.in (fallback) ──────┤      ├─ /weather.json — данн�
 | `config.example.json` | шаблон конфига сервера (реальный `config.json` в .gitignore!) |
 | `tablets/config.example.json` | шаблон конфига планшета |
 | `install/weather-informer.service` | systemd --user юнит |
+| Цвет текста киоска | меню киоска → «Цвет» (белый/зелёный/янтарный/голубой/розовый), либо `text_color` в config.json планшета. По умолчанию белый |
 | `install/install-service.sh` | установка сервиса (linger, автостарт) |
 | `deploy/informer-to-tablet.sh` | деплой страницы на один планшет |
 | `deploy/all-tablets.sh` | деплой на весь парк (список в `deploy/tablets.list`) |
@@ -71,6 +73,7 @@ stop adbd; start adbd
 | Источник | Ключ | Как получить |
 |---|---|---|
 | Яндекс.Погода | нужен | https://developer.tech.yandex.ru/services/ → «Погода» → бесплатный тариф (30 запросов/сутки). Ключ в заголовок `X-Yandex-Weather-Key` |
+| OpenWeatherMap | нужен (опционально, fallback) | https://home.openweathermap.org/api_keys (бесплатный тариф). Параметры `openweathermap_api_key` + `enable_openweathermap_fallback` в конфиге сервера и планшета |
 | Open-Meteo | не нужен | https://open-meteo.com/ (безлимитно, fallback) |
 | wttr.in | не нужен | https://wttr.in/:help |
 | 7timer | не нужен | http://www.7timer.info/ |
