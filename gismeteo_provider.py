@@ -28,6 +28,17 @@ from datetime import datetime, timedelta, timezone
 log = logging.getLogger("WeatherCache")
 
 
+def _moon_code():
+    """Фаза луны 0-7 (0 новолуние, 4 полнолуние); локальная копия — изоляция провайдера."""
+    ref = datetime(2000, 1, 6, 18, 14)
+    days = (datetime.now() - ref).total_seconds() / 86400.0
+    frac = (days % 29.530588853) / 29.530588853
+    return int(round(frac * 8)) % 8
+
+
+MOON_CODE = _moon_code()
+
+
 class GismeteoError(Exception):
     """Ошибки провайдера Gismeteo (сеть, HTTP, XML, город не найден)."""
 
@@ -328,7 +339,7 @@ class GismeteoProvider:
         forecasts = [{
             "sunrise": rise,
             "sunset": sett,
-            "moon_code": 9,
+            "moon_code": MOON_CODE,
             "hours": hours,
             "parts": parts,
         }, {"parts": next_night}]

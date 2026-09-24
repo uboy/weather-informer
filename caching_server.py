@@ -43,6 +43,16 @@ NOMINATIM = "https://nominatim.openstreetmap.org"
 GEO_HEADERS = {"User-Agent": "WeatherInformerLocal/1.0 (lan weather kiosk)"}
 
 
+def moon_phase_code(dt=None):
+    """Код фазы луны 0-7 (0 новолуние, 4 полнолуние) — семантика Яндекс.Погоды."""
+    if dt is None:
+        dt = datetime.now()
+    ref = datetime(2000, 1, 6, 18, 14)  # опорное новолуние
+    days = (dt - ref).total_seconds() / 86400.0
+    frac = (days % 29.530588853) / 29.530588853
+    return int(round(frac * 8)) % 8
+
+
 def loc_key(lat, lon):
     return f"{round(float(lat), 2)}:{round(float(lon), 2)}"
 
@@ -360,7 +370,7 @@ def fetch_from_openweathermap(lat, lon, api_key):
             {
                 "sunrise": sunrise,
                 "sunset": sunset,
-                "moon_code": 9,
+                "moon_code": moon_phase_code(),
                 "hours": hours_list,
                 "parts": parts
             },
@@ -496,7 +506,7 @@ def fetch_from_openmeteo(lat, lon, proxy=None):
             {
                 "sunrise": sunrise,
                 "sunset": sunset,
-                "moon_code": 9,
+                "moon_code": moon_phase_code(),
                 "hours": hours_list,
                 "parts": parts
             },
@@ -624,7 +634,7 @@ def fetch_from_wttr(lat, lon):
             {
                 "sunrise": sunrise,
                 "sunset": sunset,
-                "moon_code": 9,
+                "moon_code": moon_phase_code(),
                 "hours": hours_list,
                 "parts": parts
             },
@@ -677,14 +687,15 @@ def fetch_from_7timer(lat, lon):
 
     def b_part(b, fallback_icon, hour=12):
         if not b:
-            return {"temp_avg": 0, "icon": fallback_icon, "wind_speed": 2.0,
-                    "wind_angle": 180}
-        bft = int(b.get("wind10m", {}).get("speed", 2) or 2)
-        direction = (b.get("wind10m", {}).get("direction", "S") or "S")[:3]
+            return {"temp_avg": 0, "icon": fallback_icon, "wind_speed": None,
+                    "wind_angle": None}
+        w10 = b.get("wind10m", {}) or {}
+        bft = w10.get("speed")
+        direction = (w10.get("direction") or "")[:3]
         return {
             "temp_avg": int(b.get("temp2m", 0) or 0),
             "icon": _icon_with_suffix(b_icon(b), 6 <= hour < 18),
-            "wind_speed": _7TIMER_BFT_MS[min(12, bft)],
+            "wind_speed": (_7TIMER_BFT_MS[min(12, int(bft))] if bft is not None else None),
             "wind_angle": _7TIMER_DIR_DEG.get(direction)
         }
 
@@ -722,7 +733,7 @@ def fetch_from_7timer(lat, lon):
             {
                 "sunrise": None,
                 "sunset": None,
-                "moon_code": 9,
+                "moon_code": moon_phase_code(),
                 "hours": [{"hour": str(h), "temp": int(block_at(h).get("temp2m", temp) or temp)} for h in range(24)],
                 "parts": parts
             },

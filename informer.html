@@ -348,6 +348,14 @@ function format_error_reason(xhr, status, err, source_name) {
 	}
 }
 
+function moonPhaseCode() {
+	// 0 новолуние .. 4 полнолуние .. 7 (семантика Яндекс.Погоды)
+	var ref = Date.UTC(2000, 0, 6, 18, 14);
+	var days = (Date.now() - ref) / 86400000;
+	var frac = (days % 29.530588853) / 29.530588853;
+	return Math.round(frac * 8) % 8;
+}
+
 function city_prefix() {
 	var n = current_city_name();
 	return n ? (n + " \u00b7 ") : "";
@@ -747,7 +755,7 @@ var fetch_from_owm = function(on_success, on_error) {
 						pressure_mm: factB ? factB.pressure_mm : 750
 					},
 					forecasts: [{
-						sunrise: fH(sr), sunset: fH(ss), moon_code: 9,
+						sunrise: fH(sr), sunset: fH(ss), moon_code: moonPhaseCode(),
 						hours: blocks.filter(function(b) { return b.date === today; }).map(function(b) { return { hour: String(b.hour), temp: b.temp }; }),
 						parts: parts
 					}, { parts: parts }]
@@ -849,7 +857,7 @@ var fetch_from_om_client = function(on_success, on_error) {
 						humidity: (rh[hIdx] != null ? Math.round(rh[hIdx]) : null),
 						pressure_mm: (pr[hIdx] != null ? Math.round(pr[hIdx] * 0.750062) : null)
 					},
-					forecasts: [{ sunrise: sr, sunset: ss, moon_code: 9, hours: hours_list, parts: parts }, { parts: parts }]
+					forecasts: [{ sunrise: sr, sunset: ss, moon_code: moonPhaseCode(), hours: hours_list, parts: parts }, { parts: parts }]
 				};
 				on_success(converted);
 			} catch (ex) {
@@ -872,6 +880,7 @@ var fetch_from_7timer_client = function(on_success, on_error) {
 				var init = String(st.init || '000000000000');
 				var initH = parseInt(init.substring(8, 10), 10) || 0;
 				var BFT = [0.3, 1.6, 3.4, 5.5, 8, 10.8, 13.9, 17.2, 20.8, 24.5, 28.5, 32.7];
+				var DIR7 = { N: 0, NNE: 22, NE: 45, ENE: 67, E: 90, ESE: 112, SE: 135, SSE: 157, S: 180, SSW: 202, SW: 225, WSW: 247, W: 270, WNW: 292, NW: 315 };
 				function icon7(b, hour) {
 					var cc = parseInt(b.cloudcover, 10) || 0;
 					var prec = String(b.prec_type || 'none').toLowerCase();
@@ -885,26 +894,37 @@ var fetch_from_7timer_client = function(on_success, on_error) {
 					return base;
 				}
 				var b0 = ds[0] || {};
+				var w0 = b0.wind10m || {};
+				var bft0 = parseInt(w0.speed, 10);
+				var rhRaw = String(b0.rh2m || '').replace(/[^0-9]/g, '');
 				var fact = {
 					temp: Math.round(b0.temp2m || 0),
 					icon: icon7(b0, new Date().getHours()),
-					wind_speed: Math.round((BFT[Math.min(12, parseInt(b0.wind10m, 10) || 0)] || 0) * 10) / 10,
-					wind_angle: null,
-					humidity: null,
+					wind_speed: (isNaN(bft0) ? null : BFT[Math.min(12, bft0)]),
+					wind_angle: (DIR7[w0.direction] != null ? DIR7[w0.direction] : null),
+					humidity: (rhRaw ? parseInt(rhRaw, 10) : null),
 					pressure_mm: null
 				};
-				var byName = { morning: [], day: [], evening: [], night: [] };
 				var hours_list = [];
+				var byRange = { morning: [], day: [], evening: [], night: [] };
 				for (var i = 0; i < ds.length; i++) {
-					var hh = (initH + (ds[i].timepoint || 0) * 3) % 24;
+					var hh = (initH + (ds[i].timepoint || 0)) % 24;
 					var icon = icon7(ds[i], hh);
+					var w = ds[i].wind10m || {};
+					var bf = parseInt(w.speed, 10);
 					hours_list.push({ hour: String(hh), temp: Math.round(ds[i].temp2m || 0) });
-					if (hh >= 6 && hh < 12) byName.morning.push(icon);
-					else if (hh >= 12 && hh < 18) byName.day.push(icon);
-					else if (hh >= 18) byName.evening.push(icon);
-					else byName.night.push(icon);
+					var slot = (hh >= 6 && hh < 12) ? byRange.morning : (hh >= 12 && hh < 18) ? byRange.day : (hh >= 18) ? byRange.evening : byRange.night;
+					slot.push({
+						temp_avg: Math.round(ds[i].temp2m || 0),
+						icon: icon,
+						wind_speed: (isNaN(bf) ? null : BFT[Math.min(12, bf)]),
+						wind_angle: (DIR7[w.direction] != null ? DIR7[w.direction] : null)
+					});
 				}
-				function part(name, fb) { return byName[name].length ? byName[name][0] : fb; }
+				function part(name, fb) {
+					var arr = byRange[name];
+					return arr.length ? arr[0] : { temp_avg: null, icon: fb, wind_speed: null, wind_angle: null };
+				}
 				var parts = {
 					morning: part('morning', 'bkn_d'),
 					day: part('day', 'bkn_d'),
@@ -913,7 +933,7 @@ var fetch_from_7timer_client = function(on_success, on_error) {
 				};
 				var converted = {
 					fact: fact,
-					forecasts: [{ sunrise: null, sunset: null, moon_code: 9, hours: hours_list, parts: parts }, { parts: parts }]
+					forecasts: [{ sunrise: null, sunset: null, moon_code: moonPhaseCode(), hours: hours_list, parts: parts }, { parts: parts }]
 				};
 				on_success(converted);
 			} catch (ex) {
@@ -1023,7 +1043,7 @@ function fetch_from_wttr(on_success, on_error) {
 						date: day.date || "",
 						sunrise: dSunrise,
 						sunset: dSunset,
-						moon_code: 9,
+						moon_code: moonPhaseCode(),
 						hours: dayHours,
 						parts: dParts
 					});
