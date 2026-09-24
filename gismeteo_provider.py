@@ -314,7 +314,7 @@ class GismeteoProvider:
             "temp": self._i(fvals.get("t"), cur["temperature"] if cur["temperature"] is not None else 0),
             "icon": self._icon(fvals, fact_hour),
             "wind_speed": self._f(fvals.get("ws"), cur["wind_speed"] or 0),
-            "wind_angle": self.WD_DEG[self._i(fvals.get("wd"), 0) % 8] if fvals.get("wd") is not None else (cur["wind_direction"] or 180),
+            "wind_angle": (self.WD_DEG[self._i(fvals.get("wd"), 0) % 8] if fvals.get("wd") is not None else cur["wind_direction"]),
             "humidity": self._i(fvals.get("hum"), cur["humidity"] or 50),
             "pressure_mm": self._i(fvals.get("p"), cur["pressure_mm"] or 748),
             "condition": fvals.get("descr", cur["condition"]),
@@ -482,7 +482,7 @@ class GismeteoProvider:
         """Восход/закат «ЧЧ:ММ» из fact-атрибутов risem/setm (минуты от полуночи)."""
         def fmt(mins):
             if mins is None:
-                return "06:00"
+                return None
             mins = int(mins) % (24 * 60)
             return f"{mins // 60:02d}:{mins % 60:02d}"
         fact = parsed.get("fact") or {}

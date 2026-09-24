@@ -151,7 +151,7 @@ def normalize_weather_data(data):
             elif "pressure_pa" in fact:
                 fact["pressure_mm"] = round(fact["pressure_pa"] * 0.750062)
             else:
-                fact["pressure_mm"] = 748
+                fact["pressure_mm"] = None
     return data
 
 
@@ -294,7 +294,7 @@ def fetch_from_openweathermap(lat, lon, api_key):
     sys = cur.get("sys", {})
     temp = round(main.get("temp", 0))
     wind_speed = round(wind.get("speed", 0), 1)
-    wind_angle = int(wind.get("deg", 180) or 180)
+    wind_angle = int(wind["deg"]) if wind.get("deg") is not None else None
     humidity = int(main.get("humidity", 50) or 50)
     pressure_mm = round(int(main.get("pressure", 1013) or 1013) * 0.750062)
     fact_icon = _owm_icon(w0)
@@ -317,7 +317,7 @@ def fetch_from_openweathermap(lat, lon, api_key):
             "temp": round(it.get("main", {}).get("temp", 0)),
             "humidity": int(it.get("main", {}).get("humidity", 50) or 50),
             "wind_speed": round(it.get("wind", {}).get("speed", 0), 1),
-            "wind_angle": int(it.get("wind", {}).get("deg", 180) or 180),
+            "wind_angle": (int(it["wind"]["deg"]) if it.get("wind", {}).get("deg") is not None else None),
             "icon": _owm_icon((it.get("weather") or [{}])[0])
         })
     today = blocks[0]["date"] if blocks else ""
@@ -455,27 +455,32 @@ def fetch_from_openmeteo(lat, lon, proxy=None):
     max_t = round(daily.get("temperature_2m_max", [temp])[0])
     min_t = round(daily.get("temperature_2m_min", [temp])[0])
 
-    def part_wind(h0, h1, fallback=2.0):
-        """Средний ветер по часам [h0, h1) из hourly; fallback если данных нет"""
+    def part_wind(h0, h1):
+        """Средний ветер по часам [h0, h1) из hourly; None если данных нет"""
         vals = hourly.get("windspeed_10m", []) or []
         dirs = hourly.get("winddirection_10m", []) or []
         picked = []
         for i, tstr in enumerate(times):
             try:
-                if h0 <= int(tstr[11:13]) < h1 and i < len(vals):
-                    picked.append((vals[i], dirs[i] if i < len(dirs) else 180))
+                if h0 <= int(tstr[11:13]) < h1 and i < len(vals) and vals[i] is not None:
+                    picked.append((vals[i], dirs[i] if i < len(dirs) and dirs[i] is not None else None))
             except (ValueError, IndexError):
                 continue
         if not picked:
-            return fallback, 180
+            return None, None
+        avg_dir = [d for _, d in picked if d is not None]
         return round(sum(v for v, _ in picked) / len(picked) / 3.6, 1), \
-            round(sum(d for _, d in picked) / len(picked))
+            (round(sum(avg_dir) / len(avg_dir)) if avg_dir else None)
+
+    def _pw(h0, h1):
+        w, a = part_wind(h0, h1)
+        return {"wind_speed": w, "wind_angle": a}
 
     parts = {
-        "morning": {"temp_avg": round(temps[8] if len(temps) > 8 else temp), "icon": part_icon(9), "wind_speed": part_wind(6, 12)[0], "wind_angle": part_wind(6, 12)[1]},
-        "day": {"temp_avg": max_t, "icon": part_icon(13), "wind_speed": part_wind(12, 18)[0], "wind_angle": part_wind(12, 18)[1]},
-        "evening": {"temp_avg": round(temps[20] if len(temps) > 20 else temp), "icon": part_icon(19), "wind_speed": part_wind(18, 24)[0], "wind_angle": part_wind(18, 24)[1]},
-        "night": {"temp_avg": min_t, "icon": part_icon(2), "wind_speed": part_wind(0, 6)[0], "wind_angle": part_wind(0, 6)[1]}
+        "morning": dict({"temp_avg": round(temps[8] if len(temps) > 8 else temp), "icon": part_icon(9)}, **_pw(6, 12)),
+        "day": dict({"temp_avg": max_t, "icon": part_icon(13)}, **_pw(12, 18)),
+        "evening": dict({"temp_avg": round(temps[20] if len(temps) > 20 else temp), "icon": part_icon(19)}, **_pw(18, 24)),
+        "night": dict({"temp_avg": min_t, "icon": part_icon(2)}, **_pw(0, 6))
     }
 
     return {
@@ -580,8 +585,8 @@ def fetch_from_wttr(lat, lon):
     icon = _icon_with_suffix(_wwo_icon(cc.get("weatherCode", "116")), 8 <= hour_now < 20)
 
     astro = (today.get("astronomy") or [{}])[0]
-    sunrise = _fmt12to24(astro.get("sunrise", "06:00 AM"))
-    sunset = _fmt12to24(astro.get("sunset", "19:00 PM"))
+    sunrise = _fmt12to24(astro["sunrise"]) if astro.get("sunrise") else None
+    sunset = _fmt12to24(astro["sunset"]) if astro.get("sunset") else None
 
     hours_list = []
     for h in range(24):
@@ -596,7 +601,7 @@ def fetch_from_wttr(lat, lon):
             "temp_avg": int(b.get("tempC", temp) or temp),
             "icon": _icon_with_suffix(_wwo_icon(b.get("weatherCode", "116")), 8 <= hh < 20),
             "wind_speed": round(int(b.get("windspeedKmph", 5) or 5) / 3.6, 1),
-            "wind_angle": int(b.get("winddirDegree", 180) or 180)
+            "wind_angle": (int(b["winddirDegree"]) if b.get("winddirDegree") is not None else None)
         }
 
     parts = {
@@ -680,15 +685,17 @@ def fetch_from_7timer(lat, lon):
             "temp_avg": int(b.get("temp2m", 0) or 0),
             "icon": _icon_with_suffix(b_icon(b), 6 <= hour < 18),
             "wind_speed": _7TIMER_BFT_MS[min(12, bft)],
-            "wind_angle": _7TIMER_DIR_DEG.get(direction, 180)
+            "wind_angle": _7TIMER_DIR_DEG.get(direction)
         }
 
     b0 = block_at(datetime.now().hour)
     temp = int(b0.get("temp2m", 0) or 0)
-    rh = b0.get("rh2m", 50)
+    rh = b0.get("rh2m")
     if isinstance(rh, str):
         digits = "".join(ch for ch in rh if ch.isdigit())
-        rh = int(digits) if digits else 50
+        rh = int(digits) if digits else None
+    if rh is None:
+        rh = None
     hour_now = datetime.now().hour
     suf = "_d" if 8 <= hour_now < 20 else "_n"
 
@@ -708,13 +715,13 @@ def fetch_from_7timer(lat, lon):
             "icon": b_fact_icon(b0),
             "wind_speed": b_part(b0, "bkn_d")["wind_speed"],
             "wind_angle": b_part(b0, "bkn_d")["wind_angle"],
-            "humidity": int(rh),
-            "pressure_mm": 748
+            "humidity": (int(rh) if rh is not None else None),
+            "pressure_mm": None
         },
         "forecasts": [
             {
-                "sunrise": "06:00",
-                "sunset": "19:00",
+                "sunrise": None,
+                "sunset": None,
                 "moon_code": 9,
                 "hours": [{"hour": str(h), "temp": int(block_at(h).get("temp2m", temp) or temp)} for h in range(24)],
                 "parts": parts
