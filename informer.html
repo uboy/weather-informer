@@ -259,6 +259,23 @@ var value = {};
 var lastcall = 0;
 var current_weather_data = null;
 
+function icon_daynight(icon, sunrise, sunset) {
+	// Дневной/ночной вариант значка (_d/_n) по фактическому времени суток
+	try {
+		if (!icon) return icon;
+		if (!/(_d|_n)$/.test(icon)) return icon;
+		var now = new Date(), m = now.getHours() * 60 + now.getMinutes();
+		var sr = null, ss = null;
+		if (sunrise) { var a = String(sunrise).split(":"); sr = (+a[0]) * 60 + (+a[1]); }
+		if (sunset) { var b = String(sunset).split(":"); ss = (+b[0]) * 60 + (+b[1]); }
+		if (sr === null || ss === null || isNaN(sr) || isNaN(ss)) {
+			sr = 8 * 60; ss = 20 * 60;
+		}
+		var night = (m < sr || m >= ss);
+		return icon.slice(0, -2) + (night ? "_n" : "_d");
+	} catch (e) { return icon; }
+}
+
 function format_time(ts, with_sec, with_year) {
 	if (!ts) return "—";
 	var d = new Date(Number(ts));
@@ -886,8 +903,8 @@ function render_weather(data) {
 	}
 
 	if (isOfflineHours && hourForecast) {
-		if (hourForecast.hasOwnProperty('icon')) result.icon = hourForecast.icon;
-		else if (data.fact.hasOwnProperty('icon')) result.icon = data.fact.icon;
+		if (hourForecast.hasOwnProperty('icon')) result.icon = icon_daynight(hourForecast.icon, (data.forecasts && data.forecasts[0]) ? data.forecasts[0].sunrise : null, (data.forecasts && data.forecasts[0]) ? data.forecasts[0].sunset : null);
+		else if (data.fact.hasOwnProperty('icon')) result.icon = icon_daynight(data.fact.icon, (data.forecasts && data.forecasts[0]) ? data.forecasts[0].sunrise : null, (data.forecasts && data.forecasts[0]) ? data.forecasts[0].sunset : null);
 
 		if (hourForecast.hasOwnProperty('temp')) result.temperature = (hourForecast.temp > 0 ? '+' : '') + hourForecast.temp;
 		else if (data.fact.hasOwnProperty('temp')) result.temperature = (data.fact.temp > 0 ? '+' : '') + data.fact.temp;
@@ -925,7 +942,7 @@ function render_weather(data) {
 		}
 	} else {
 		// Свежий факт
-		if (data.fact.hasOwnProperty('icon')) result.icon = data.fact.icon;
+		if (data.fact.hasOwnProperty('icon')) result.icon = icon_daynight(data.fact.icon, (data.forecasts && data.forecasts[0]) ? data.forecasts[0].sunrise : null, (data.forecasts && data.forecasts[0]) ? data.forecasts[0].sunset : null);
 		if (data.fact.hasOwnProperty('temp')) result.temperature = (data.fact.temp > 0 ? '+' : '') + data.fact.temp;
 		if (data.fact.hasOwnProperty('wind_speed')) {
 			result.wind = data.fact.wind_speed;
