@@ -429,7 +429,7 @@ def fetch_from_openmeteo(lat, lon, proxy=None):
 
     def _hm(v):
         a = str(v).split(":")
-        return (+a[0]) * 60 + (+a[1])
+        return int(a[0]) * 60 + int(a[1])
 
     sr_m, ss_m = _hm(sunrise), _hm(sunset)
     times = hourly.get("time", [])
@@ -455,11 +455,27 @@ def fetch_from_openmeteo(lat, lon, proxy=None):
     max_t = round(daily.get("temperature_2m_max", [temp])[0])
     min_t = round(daily.get("temperature_2m_min", [temp])[0])
 
+    def part_wind(h0, h1, fallback=2.0):
+        """Средний ветер по часам [h0, h1) из hourly; fallback если данных нет"""
+        vals = hourly.get("windspeed_10m", []) or []
+        dirs = hourly.get("winddirection_10m", []) or []
+        picked = []
+        for i, tstr in enumerate(times):
+            try:
+                if h0 <= int(tstr[11:13]) < h1 and i < len(vals):
+                    picked.append((vals[i], dirs[i] if i < len(dirs) else 180))
+            except (ValueError, IndexError):
+                continue
+        if not picked:
+            return fallback, 180
+        return round(sum(v for v, _ in picked) / len(picked) / 3.6, 1), \
+            round(sum(d for _, d in picked) / len(picked))
+
     parts = {
-        "morning": {"temp_avg": round(temps[8] if len(temps) > 8 else temp), "icon": part_icon(9), "wind_speed": 2.5, "wind_angle": 180},
-        "day": {"temp_avg": max_t, "icon": part_icon(13), "wind_speed": 3.0, "wind_angle": 180},
-        "evening": {"temp_avg": round(temps[20] if len(temps) > 20 else temp), "icon": part_icon(19), "wind_speed": 2.0, "wind_angle": 170},
-        "night": {"temp_avg": min_t, "icon": part_icon(2), "wind_speed": 1.5, "wind_angle": 160}
+        "morning": {"temp_avg": round(temps[8] if len(temps) > 8 else temp), "icon": part_icon(9), "wind_speed": part_wind(6, 12)[0], "wind_angle": part_wind(6, 12)[1]},
+        "day": {"temp_avg": max_t, "icon": part_icon(13), "wind_speed": part_wind(12, 18)[0], "wind_angle": part_wind(12, 18)[1]},
+        "evening": {"temp_avg": round(temps[20] if len(temps) > 20 else temp), "icon": part_icon(19), "wind_speed": part_wind(18, 24)[0], "wind_angle": part_wind(18, 24)[1]},
+        "night": {"temp_avg": min_t, "icon": part_icon(2), "wind_speed": part_wind(0, 6)[0], "wind_angle": part_wind(0, 6)[1]}
     }
 
     return {
@@ -730,7 +746,7 @@ def get_weather_for(lat, lon, force=False, sources=None):
         # другой поток уже обновляет эту точку — отдаём что есть (может быть None)
         return entry["data"] if entry else None
     try:
-        return _fetch_weather_locked(force, lat, lon, sources)
+        return _fetch_weather_locked(force, lat, lon, sources, key)
     finally:
         lock.release()
 
@@ -753,9 +769,10 @@ def _store_location_result(key, data, note=None):
         save_disk_cache(data)
 
 
-def _fetch_weather_locked(force, lat, lon, sources=None):
+def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
     global last_error_message
-    key = loc_key(lat, lon)
+    if key is None:
+        key = loc_key(lat, lon)
     interval = load_config().get("cache_interval_minutes", 90) * 60
     now = time.time()
     entry = LOCATION_CACHE.get(key)

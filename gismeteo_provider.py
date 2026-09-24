@@ -31,6 +31,10 @@ log = logging.getLogger("WeatherCache")
 class GismeteoError(Exception):
     """Ошибки провайдера Gismeteo (сеть, HTTP, XML, город не найден)."""
 
+    def __init__(self, message, status=None):
+        super().__init__(message)
+        self.status = status
+
 
 class GismeteoProvider:
     # Резервные хосты: при неудаче первого — автоматический переход на второй
@@ -155,8 +159,13 @@ class GismeteoProvider:
             for attempt in range(1, self.RETRIES + 1):
                 try:
                     return self._http_get(url, self.TIMEOUT)
-                except GismeteoError:
-                    raise  # 403/429/некорректный ответ — повторять бессмысленно
+                except GismeteoError as e:
+                    if e.status == 403:
+                        # блокировка конкретного домена — пробуем второй хост
+                        self.log.warning("Gismeteo: %s вернул 403, пробую другой хост", host)
+                        last_exc = e
+                        break
+                    raise  # 429/некорректный ответ — другой хост тот же бэкенд, повтор бессмыслен
                 except (urllib.error.URLError, TimeoutError, OSError) as e:
                     last_exc = e
                     self.log.warning("Gismeteo: попытка %d/%d %s не удалась: %s",
@@ -176,7 +185,7 @@ class GismeteoProvider:
                 return resp.read()
         except urllib.error.HTTPError as e:
             if e.code in (403, 429):
-                raise GismeteoError(f"Gismeteo HTTP {e.code}: доступ ограничен")
+                raise GismeteoError(f"Gismeteo HTTP {e.code}: доступ ограничен", status=e.code)
             if e.code >= 500:
                 raise OSError(f"Gismeteo HTTP {e.code}")
             raise GismeteoError(f"Gismeteo HTTP {e.code}")
@@ -260,7 +269,10 @@ class GismeteoProvider:
         tz = timedelta(minutes=parsed["tzone_min"])
         now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
 
-        # Горизонт: ближайшие FORECAST_HOURS часов от текущего момента (UTC)
+        # Горизонт: от начала текущих ЛОКАЛЬНЫХ суток города до now+48ч.
+        # Прошедшие часы сегодняшнего дня нужны для parts (night/morning/day)
+        local_now = now_utc + tz
+        today_start_utc = local_now.replace(hour=0, minute=0, second=0, microsecond=0) - tz
         horizon = now_utc + timedelta(hours=self.FORECAST_HOURS)
         raw_points = []
         for p in parsed["points"]:
@@ -268,8 +280,8 @@ class GismeteoProvider:
                 dt_utc = parse_valid_dt(p["valid"])
             except (KeyError, ValueError):
                 continue
-            if dt_utc < now_utc - timedelta(hours=6) or dt_utc > horizon:
-                continue  # прошедшее (немного, для fact-контекста) и дальше 48ч — отсекаем
+            if dt_utc < today_start_utc or dt_utc > horizon:
+                continue  # чужие сутки и горизонт >48ч — отсекаем
             raw_points.append({
                 "_dt_utc": dt_utc,
                 "_dt_local": dt_utc + tz,

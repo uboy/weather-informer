@@ -26,9 +26,9 @@ NOW_UTC = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
 
 
 def _pts():
-    """Точки с 3-часовым шагом от -3ч до +51ч от текущего момента UTC."""
+    """Точки с 3-часовым шагом: от 00:00 UTC сегодня до now+54ч (как в реальном XML)."""
     out = []
-    t = NOW_UTC - timedelta(hours=3)
+    t = NOW_UTC.replace(hour=0, minute=0, second=0, microsecond=0)
     end = NOW_UTC + timedelta(hours=54)
     while t <= end:
         h = t.hour
@@ -150,19 +150,23 @@ class GismeteoTests(unittest.TestCase):
         self.assertEqual(data["fact"]["temp"], 18)
 
     def test_6_forecast_48h_filter(self):
-        """Точки дальше 48ч отсекаются, прошедшие (до -6ч) не попадают в raw."""
-        p = make_provider("/tmp/opencode")
+        """Дальше 48ч — отсекается; прошедшие часы СЕГОДНЯ (для parts) — остаются."""
+        p = make_provider()
         with FakeHttp(p, default_handler):
             data = p.get_weather(latitude=56.3269, longitude=44.0059)
         pts = data["gismeteo_points"]
         self.assertGreater(len(pts), 8)
         now = datetime.utcnow()
+        today_start_utc = (now + timedelta(minutes=180)).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(minutes=180)
         for pt in pts:
             dt = datetime.strptime(pt["valid_utc"], "%Y-%m-%dT%H:%M:%S")
             self.assertLessEqual(dt, now + timedelta(hours=48, minutes=1))
-            self.assertGreaterEqual(dt, now - timedelta(hours=6))
+            self.assertGreaterEqual(dt, today_start_utc)
             self.assertFalse(pt["interpolated"])
             self.assertEqual(pt["source"], "gismeteo")
+        # вечером части «днём/утром» не заглушки: содержат реальные дневные температуры
+        parts = data["forecasts"][0]["parts"]
+        self.assertNotEqual(parts["day"]["temp_avg"], 0)
 
     def test_7_timezone(self):
         """tzone учитывается: локальное время точки = UTC + tzone (мин)."""
