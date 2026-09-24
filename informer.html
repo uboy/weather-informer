@@ -470,6 +470,8 @@ function init_menu() {
 			localStorage.setItem("weather_source_pref", String($(this).attr("data-src")));
 		} catch (err) {}
 		render_src();
+		menu.removeClass("menu_open");
+		get_data();
 	});
 	function render_color() {
 		var pref = safe_get_item("weather_text_color", "#ffffff");
@@ -1008,8 +1010,67 @@ function get_data() {
 
 	// Выбор источника из меню (localStorage weather_source_pref): default = обычная цепочка
 	var source_pref = safe_get_item("weather_source_pref", "default");
-	if (source_pref !== "server" && source_pref !== "wttr") source_pref = "default";
+	if (source_pref !== "server" && source_pref !== "wttr" && source_pref !== "owm" && source_pref !== "om" && source_pref !== "7timer" && source_pref !== "yandex") source_pref = "default";
 	var only_server = (source_pref === "server");
+
+	if (source_pref === "owm") {
+		console.log("get_data: source pref = OpenWeatherMap (direct)");
+		if (!owm_key) { show_error(null, "no_owm_key", "нет ключа OpenWeatherMap"); return; }
+		fetch_from_owm(function(d) {
+			current_weather_data = d;
+			try {
+				localStorage.setItem('weather_cache_data', JSON.stringify(d));
+				localStorage.setItem('weather_cache_time', String(Date.now()));
+				localStorage.setItem('weather_cache_source', 'OpenWeatherMap');
+				localStorage.removeItem('weather_last_attempt_error');
+			} catch (e) {}
+			render_weather(d);
+			update_status_bar();
+		}, function(ox, os, oe) {
+			show_error(ox, os, oe, "OpenWeatherMap");
+		});
+		return;
+	}
+	if (source_pref === "om") {
+		console.log("get_data: source pref = Open-Meteo (direct)");
+		fetch_from_om_client(function(d) {
+			current_weather_data = d;
+			try {
+				localStorage.setItem('weather_cache_data', JSON.stringify(d));
+				localStorage.setItem('weather_cache_time', String(Date.now()));
+				localStorage.setItem('weather_cache_source', 'Open-Meteo');
+				localStorage.removeItem('weather_last_attempt_error');
+			} catch (e) {}
+			render_weather(d);
+			update_status_bar();
+		}, function(ox, os, oe) {
+			show_error(ox, os, oe, "Open-Meteo");
+		});
+		return;
+	}
+	if (source_pref === "7timer") {
+		console.log("get_data: source pref = 7timer (direct)");
+		fetch_from_7timer_client(function(d) {
+			current_weather_data = d;
+			try {
+				localStorage.setItem('weather_cache_data', JSON.stringify(d));
+				localStorage.setItem('weather_cache_time', String(Date.now()));
+				localStorage.setItem('weather_cache_source', '7timer');
+				localStorage.removeItem('weather_last_attempt_error');
+			} catch (e) {}
+			render_weather(d);
+			update_status_bar();
+		}, function(ox, os, oe) {
+			show_error(ox, os, oe, "7timer");
+		});
+		return;
+	}
+	if (source_pref === "yandex") {
+		if (!allow_direct_yandex) { show_error(null, "source_disabled", "прямой Яндекс отключён конфигом"); return; }
+		console.log("get_data: source pref = Yandex (direct)");
+		fetch_url('https://api.weather.yandex.ru/v2/forecast?lat=' + lat + '&lon=' + lon, {'X-Yandex-Weather-Key': api}, true);
+		return;
+	}
 
 	if (source_pref === "wttr") {
 		console.log("get_data: source pref = wttr.in (direct)");
