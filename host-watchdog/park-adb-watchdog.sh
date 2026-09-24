@@ -14,14 +14,8 @@ for t in $TABLETS; do
         st=$(adb -s "$t" get-state 2>/dev/null)
     fi
     if [ "$st" = "device" ]; then
-        # автосброс ключгарда (после загрузки планшета киоск за ключгардом).
-        # Флаги зависят от ROM: isStatusBarKeyguard (Digma/.42), keyguardshown, isKeyguardShowing.
-        kg=$(adb -s "$t" shell "dumpsys window policy 2>/dev/null" | grep -icE "isStatusBarKeyguard=true|keyguardshown=true|isKeyguardShowing=true")
-        if [ "${kg:-0}" -gt 0 ]; then
-            # Digma-ключгард на swipe не реагирует: wake + MENU + dismiss
-            adb -s "$t" shell "input keyevent 224; input keyevent 82; wm dismiss-keyguard" > /dev/null 2>&1
-            echo "$(date -Is) $t: keyguard dismissed"
-        fi
+        # Ключгард НЕ трогаем с хоста: на планшетах стоит локальный сторож
+        # (.42: /data/adb/service.d/kg_watch.sh) — dismiss должен идти с самого устройства
     else
         echo "$(date -Is) $t: недоступен (state=$st)"
     fi
