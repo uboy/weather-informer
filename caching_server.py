@@ -205,25 +205,27 @@ def fetch_from_openmeteo(lat, lon, proxy=None):
     pressure_hpa = hourly.get("surface_pressure", [1013])[h_idx]
     pressure_mm = round(pressure_hpa * 0.750062)
 
+    def _om_icon(wcode, is_day):
+        suf = "_d" if is_day else "_n"
+        if wcode == 0:
+            return "skc" + suf
+        if wcode in [1, 2]:
+            return "bkn" + suf
+        if wcode == 3:
+            return "ovc"
+        if wcode in [45, 48]:
+            return "ovc"
+        if wcode in [51, 53, 55, 61, 63, 65, 80, 81, 82]:
+            return "ovc_ra"
+        if wcode in [71, 73, 75, 85, 86]:
+            return "ovc_sn"
+        if wcode in [95, 96, 99]:
+            return "ovc_ts"
+        return "bkn" + suf
+
     wcode = cw.get("weathercode", 0)
     is_day = cw.get("is_day", 1)
-    suf = "_d" if is_day else "_n"
-    if wcode == 0:
-        icon = "skc" + suf
-    elif wcode in [1, 2]:
-        icon = "bkn" + suf
-    elif wcode == 3:
-        icon = "ovc"
-    elif wcode in [45, 48]:
-        icon = "ovc"
-    elif wcode in [51, 53, 55, 61, 63, 65, 80, 81, 82]:
-        icon = "ovc_ra"
-    elif wcode in [71, 73, 75, 85, 86]:
-        icon = "ovc_sn"
-    elif wcode in [95, 96, 99]:
-        icon = "ovc_ts"
-    else:
-        icon = "bkn" + suf
+    icon = _om_icon(wcode, is_day)
 
     sunrise = "06:00"
     sunset = "19:00"
@@ -231,6 +233,26 @@ def fetch_from_openmeteo(lat, lon, proxy=None):
         sunrise = daily["sunrise"][0].split("T")[-1][:5]
     if daily.get("sunset"):
         sunset = daily["sunset"][0].split("T")[-1][:5]
+
+    def _hm(v):
+        a = str(v).split(":")
+        return (+a[0]) * 60 + (+a[1])
+
+    sr_m, ss_m = _hm(sunrise), _hm(sunset)
+    times = hourly.get("time", [])
+    wcodes = hourly.get("weathercode", [])
+
+    def part_icon(h):
+        """Значок части суток из фактического погодного кода этого часа"""
+        wc = 0
+        for i, tstr in enumerate(times):
+            try:
+                if int(tstr[11:13]) == h and i < len(wcodes):
+                    wc = wcodes[i]
+                    break
+            except (ValueError, IndexError):
+                pass
+        return _om_icon(wc, 1 if sr_m <= h * 60 < ss_m else 0)
 
     hours_list = []
     temps = hourly.get("temperature_2m", [temp] * 24)
@@ -241,10 +263,10 @@ def fetch_from_openmeteo(lat, lon, proxy=None):
     min_t = round(daily.get("temperature_2m_min", [temp])[0])
 
     parts = {
-        "morning": {"temp_avg": round(temps[8] if len(temps) > 8 else temp), "icon": "bkn_d", "wind_speed": 2.5, "wind_angle": 180},
-        "day": {"temp_avg": max_t, "icon": "bkn_d", "wind_speed": 3.0, "wind_angle": 180},
-        "evening": {"temp_avg": round(temps[20] if len(temps) > 20 else temp), "icon": "bkn_n", "wind_speed": 2.0, "wind_angle": 170},
-        "night": {"temp_avg": min_t, "icon": "skc_n", "wind_speed": 1.5, "wind_angle": 160}
+        "morning": {"temp_avg": round(temps[8] if len(temps) > 8 else temp), "icon": part_icon(9), "wind_speed": 2.5, "wind_angle": 180},
+        "day": {"temp_avg": max_t, "icon": part_icon(13), "wind_speed": 3.0, "wind_angle": 180},
+        "evening": {"temp_avg": round(temps[20] if len(temps) > 20 else temp), "icon": part_icon(19), "wind_speed": 2.0, "wind_angle": 170},
+        "night": {"temp_avg": min_t, "icon": part_icon(2), "wind_speed": 1.5, "wind_angle": 160}
     }
 
     return {
