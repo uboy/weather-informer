@@ -215,13 +215,13 @@ def fetch_from_openmeteo(lat, lon, proxy=None):
     elif wcode == 3:
         icon = "ovc"
     elif wcode in [45, 48]:
-        icon = "fg"
+        icon = "ovc"
     elif wcode in [51, 53, 55, 61, 63, 65, 80, 81, 82]:
-        icon = "ra"
+        icon = "ovc_ra"
     elif wcode in [71, 73, 75, 85, 86]:
-        icon = "sn"
+        icon = "ovc_sn"
     elif wcode in [95, 96, 99]:
-        icon = "ts"
+        icon = "ovc_ts"
     else:
         icon = "bkn" + suf
 
@@ -286,6 +286,16 @@ def fetch_url_via(url, proxy, timeout, headers=None):
         return resp.read().decode("utf-8")
 
 
+_ICON_MAP = {"ra": "ovc_ra", "sn": "ovc_sn", "ts": "ovc_ts", "fg": "ovc"}
+
+
+def _icon_with_suffix(base, is_day):
+    """skc/bkn получают суффикс _d/_n; конечные классы (ovc_ra и пр.) — как есть"""
+    if base in ("skc", "bkn"):
+        return base + ("_d" if is_day else "_n")
+    return base
+
+
 def _wwo_icon(code):
     """WWO weatherCode -> имя иконки информера (без суффикса _d/_n)"""
     try:
@@ -295,15 +305,15 @@ def _wwo_icon(code):
     if c == 113:
         return "skc"
     if c in (200, 386, 389):
-        return "ts"
+        return "ovc_ts"
     if c in (179, 182, 185, 227, 230, 320, 323, 325, 326, 328, 329, 331, 332,
              334, 335, 338, 350, 362, 365, 367, 368, 371, 374, 377):
-        return "sn"
+        return "ovc_sn"
     if c in (176, 263, 266, 281, 284, 293, 296, 299, 302, 305, 308, 353, 356,
              359):
-        return "ra"
+        return "ovc_ra"
     if c in (143, 248, 260):
-        return "fg"
+        return "ovc"
     if c in (119, 122):
         return "ovc"
     if c == 116:
@@ -339,7 +349,7 @@ def fetch_from_wttr(lat, lon):
 
     hour_now = datetime.now().hour
     suf = "_d" if 8 <= hour_now < 20 else "_n"
-    icon = _wwo_icon(cc.get("weatherCode", "116")) + suf
+    icon = _icon_with_suffix(_wwo_icon(cc.get("weatherCode", "116")), 8 <= hour_now < 20)
 
     astro = (today.get("astronomy") or [{}])[0]
     sunrise = _fmt12to24(astro.get("sunrise", "06:00 AM"))
@@ -356,7 +366,7 @@ def fetch_from_wttr(lat, lon):
         s2 = "_d" if 8 <= hh < 20 else "_n"
         return {
             "temp_avg": int(b.get("tempC", temp) or temp),
-            "icon": _wwo_icon(b.get("weatherCode", "116")) + s2,
+            "icon": _icon_with_suffix(_wwo_icon(b.get("weatherCode", "116")), 8 <= hh < 20),
             "wind_speed": round(int(b.get("windspeedKmph", 5) or 5) / 3.6, 1),
             "wind_angle": int(b.get("winddirDegree", 180) or 180)
         }
@@ -423,16 +433,16 @@ def fetch_from_7timer(lat, lon):
         cc_pct = int(b.get("cloudcover", 50) or 0)
         prec = (b.get("prec_type", "none") or "none").lower()
         if prec in ("rain", "frzr"):
-            return "ra"
+            return "ovc_ra"
         if prec in ("snow", "icep"):
-            return "sn"
+            return "ovc_sn"
         if cc_pct < 15:
             return "skc"
         if cc_pct < 70:
             return "bkn"
         return "ovc"
 
-    def b_part(b, fallback_icon):
+    def b_part(b, fallback_icon, hour=12):
         if not b:
             return {"temp_avg": 0, "icon": fallback_icon, "wind_speed": 2.0,
                     "wind_angle": 180}
@@ -440,7 +450,7 @@ def fetch_from_7timer(lat, lon):
         direction = (b.get("wind10m", {}).get("direction", "S") or "S")[:3]
         return {
             "temp_avg": int(b.get("temp2m", 0) or 0),
-            "icon": b_icon(b),
+            "icon": _icon_with_suffix(b_icon(b), 6 <= hour < 18),
             "wind_speed": _7TIMER_BFT_MS[min(12, bft)],
             "wind_angle": _7TIMER_DIR_DEG.get(direction, 180)
         }
@@ -455,14 +465,13 @@ def fetch_from_7timer(lat, lon):
     suf = "_d" if 8 <= hour_now < 20 else "_n"
 
     def b_fact_icon(b):
-        i = b_icon(b)
-        return i + suf
+        return _icon_with_suffix(b_icon(b), 8 <= hour_now < 20)
 
     parts = {
-        "morning": b_part(block_at(9), "bkn_d"),
-        "day": b_part(block_at(13), "bkn_d"),
-        "evening": b_part(block_at(18), "bkn_n"),
-        "night": b_part(block_at(1), "skc_n")
+        "morning": b_part(block_at(9), "bkn_d", 9),
+        "day": b_part(block_at(13), "bkn_d", 13),
+        "evening": b_part(block_at(18), "bkn_n", 18),
+        "night": b_part(block_at(1), "skc_n", 1)
     }
 
     return {
