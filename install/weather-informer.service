@@ -1,0 +1,16 @@
+[Unit]
+Description=WeatherInformer Local Caching Server
+After=network.target
+# защита от рестарт-лупа при ошибках конфигурации
+StartLimitIntervalSec=120
+StartLimitBurst=4
+
+[Service]
+Type=simple
+WorkingDirectory=/home/dmazur/services/weather-informer
+ExecStart=/usr/bin/python3 /home/dmazur/services/weather-informer/caching_server.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

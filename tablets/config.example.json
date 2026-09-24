@@ -1,0 +1,12 @@
+{
+  "server_url": "http://IP_СЕРВЕРА:8085/weather.json",
+  "api": "тот_же_ключ_что_и_на_сервере",
+  "allow_direct_yandex": false,
+  "lat": 56.317722,
+  "lon": 43.999303,
+  "timeout": 3600,
+  "wind_max": 15,
+  "pressure_min": 710,
+  "pressure_max": 770,
+  "enable_wttr_fallback": true
+}

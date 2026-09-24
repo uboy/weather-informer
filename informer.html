@@ -1,0 +1,1934 @@
+<!--Weather informer v1, 2025, Alexey N (meczengo@gmail.com)-->
+
+<html><head>
+<script>
+
+var api = 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'; //API Яндекс погода (используется ТОЛЬКО при allow_direct_yandex=true в config.json)
+var lat = 56.317722; //Широта
+var lon = 43.999303; //Долгота
+
+var wind_max = 15; //Скорость ветра, максимум, м/с
+var pressure_min = 710; //Давление, минимум, мм рт ст
+var pressure_max = 770; //Давление, максимум, мм рт ст
+
+</script>
+<style>
+.spacer {padding-bottom: 9vw;}
+
+#status_bar {
+	position: fixed;
+	bottom: 0;
+	left: 0;
+	right: 0;
+	width: 100%;
+	background: rgba(14, 14, 14, 0.90);
+	color: #999999;
+	font-size: 2.0vw;
+	line-height: 1.35;
+	padding: 0.35vh 1.5vw;
+	box-sizing: border-box;
+	text-align: center;
+	z-index: 99999;
+	display: block !important;
+	border-top: 1px solid rgba(255, 255, 255, 0.10);
+	font-family: sans-serif;
+	letter-spacing: 0.02vw;
+}
+#status_bar.visible {
+	display: block !important;
+}
+#status_bar.status_normal {
+	background: rgba(14, 14, 14, 0.90);
+	color: #999999;
+	border-top: 1px solid rgba(255, 255, 255, 0.10);
+}
+#status_bar.status_warn {
+	background: rgba(38, 26, 10, 0.94);
+	color: #ffd080;
+	border-top: 1px solid rgba(255, 180, 50, 0.40);
+}
+#status_bar.status_error, #status_bar.status_stale {
+	background: rgba(35, 15, 15, 0.94);
+	color: #ffb0b0;
+	border-top: 1px solid rgba(255, 90, 90, 0.40);
+}
+#weather_body.stale_hidden {
+	display: none !important;
+}
+
+#menu_btn {
+	position: fixed;
+	right: 1.0vw;
+	top: 1.0vw;
+	width: 4.6vw;
+	height: 4.6vw;
+	line-height: 4.6vw;
+	text-align: center;
+	font-size: 2.6vw;
+	color: rgba(255, 255, 255, 0.45);
+	background: rgba(14, 14, 14, 0.55);
+	border: 1px solid rgba(255, 255, 255, 0.18);
+	border-radius: 0.8vw;
+	z-index: 99990;
+	cursor: pointer;
+	user-select: none;
+	-webkit-user-select: none;
+	font-family: sans-serif;
+}
+#menu_btn:active {
+	color: #ffffff;
+	background: rgba(60, 60, 60, 0.85);
+}
+#weather_menu {
+	position: fixed;
+	right: 1.0vw;
+	top: 6.4vw;
+	width: 34vw;
+	background: rgba(14, 14, 14, 0.96);
+	border: 1px solid rgba(255, 255, 255, 0.22);
+	border-radius: 0.8vw;
+	padding: 1.4vw 1.6vw;
+	box-sizing: border-box;
+	z-index: 99995;
+	display: none;
+	color: #bbbbbb;
+	font-family: sans-serif;
+	box-shadow: 0 0 2.2vw rgba(0, 0, 0, 0.8);
+}
+#weather_menu.menu_open {
+	display: block;
+}
+.menu_title {
+	font-size: 2.2vw;
+	color: #777777;
+	padding: 0.6vw 0.4vw 0.9vw 0.4vw;
+	letter-spacing: 0.05vw;
+}
+.menu_item {
+	font-size: 2.8vw;
+	padding: 1.1vw 1.0vw;
+	border-radius: 0.5vw;
+	cursor: pointer;
+	-webkit-user-select: none;
+	user-select: none;
+}
+.menu_item:active {
+	background: rgba(255, 255, 255, 0.12);
+	color: #ffffff;
+}
+.menu_src::before {
+	content: "\25CB\00A0";
+	color: #777777;
+}
+.menu_src.menu_active::before {
+	content: "\25CF\00A0";
+	color: #9fd06a;
+}
+.menu_src.menu_active {
+	color: #ffffff;
+}
+.menu_close {
+	font-size: 2.4vw;
+	color: #888888;
+	padding: 1.0vw 1.0vw 0.2vw 1.0vw;
+	text-align: center;
+	cursor: pointer;
+}
+
+</style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, minimum-scale=0.1">
+</head>
+<body>
+	<div id="wrapper">
+		<div id="datetime" class="spacer">
+			<div id="time" class="sector_time sector_hours visible"><span id="hours" class="value"></span><span class="colon">:</span><span id="minutes" class="value"></span></div>
+			<div id="date" class="value sector_date"></div>
+		</div>
+		<div id="weather_body">
+			<div id="now" class="spacer">
+				<div id="now_hero">
+					<div id="icon" class="value sector_icon" data-type="class"></div>
+					<div id="temperature_block">
+						<div id="temperature" class="value sector_temperature"></div>
+						<div id="temperature_sub">
+							<div class="sector_min">
+								<span id="min" class="value"></span>
+								<span id="min_date" class="value"></span>
+							</div>
+							<div class="sector_max">
+								<span id="max" class="value"></span>
+								<span id="max_date" class="value"></span>
+							</div>
+						</div>
+					</div>
+				</div>
+				<div id="wind_humidity_pressure">
+					<div class="sector_wind">
+						<span id="wind_icon" class="value wind_icon sector_wind_icon" data-type="style"></span>
+						<span><span id="wind" class="value"></span> м/с</span>
+					</div>
+					<div class="wind_humidity_pressure_bar wind_pressure_bar sector_wind_progress">
+						<div id="wind_progress" class="value wind_humidity_progress" data-type="style"></div>
+					</div>
+					<div class="sector_humidity">
+						<span id="humidity_icon" class="humidity_icon"></span>
+						<span><span id="humidity" class="value"></span> %</span>
+					</div>
+					<div class="wind_humidity_pressure_bar humidity_bar sector_humidity_progress">
+						<div id="humidity_progress" class="value wind_humidity_progress" data-type="style"></div>
+					</div>
+					<div class="sector_pressure">
+						<span id="presure_icon" class="presure_icon"></span>
+						<span><span id="pressure" class="value"></span> мм рс</span>
+					</div>
+					<div class="wind_humidity_pressure_bar pressure_bar sector_pressure_progress">
+						<div id="pressure_progress" class="value" data-type="style"></div>
+					</div>
+				</div>
+			</div>
+			<div id="weather_right">
+				<div id="forecast" class="spacer">
+					<div class="forecast_part">
+						<div id="forecast_title_0" class="value forecast_title sector_forecast_title_0"></div>
+						<div class="forecast_temperature_wind">
+							<div id="forecast_icon_0" class="value forecast_icon sector_forecast_icon_0" data-type="class"></div>
+							<div>
+								<div id="forecast_temperature_0" class="value sector_forecast_temperature_0"></div>
+								<div class="forecast_wind_block sector_forecast_wind_0">
+									<span id="forecast_wind_icon_0" class="value wind_icon sector_forecast_wind_icon_0" data-type="style"></span>
+									<span>
+										<span id="forecast_wind_0" class="value forecast_wind"></span> м/с
+									</span>
+								</div>
+							</div>
+						</div>
+					</div>
+					<div class="forecast_part">
+						<div id="forecast_title_1" class="value forecast_title sector_forecast_title_1"></div>
+						<div class="forecast_temperature_wind">
+							<div id="forecast_icon_1" class="value forecast_icon sector_forecast_icon_1" data-type="class"></div>
+							<div>
+								<div id="forecast_temperature_1" class="value sector_forecast_temperature_1"></div>
+								<div class="forecast_wind_block sector_forecast_wind_1">
+									<span id="forecast_wind_icon_1" class="value wind_icon sector_forecast_wind_icon_1" data-type="style"></span>
+									<span>
+										<span id="forecast_wind_1" class="value forecast_wind"></span> м/с
+									</span>
+								</div>
+							</div>
+						</div>
+					</div>
+				</div>
+				<div id="riseset">
+					<div class="riseset_block sector_rise">
+						<div class="rise"></div>
+						<div><span id="rise" class="value"></span></div>
+					</div>
+					<div id="duration_block" class="sector_duration_hour">
+						<div id="duration">
+							<span id="duration_hour" class="value"></span> ч <span id="duration_minute" class="value"></span> мин
+						</div>
+						<div id="duration_bar">
+							<div id="duration_time" class="value" data-type="style"></div>
+							<div id="duration_progress" class="value" data-type="style"></div>
+						</div>
+						<div id="duration_left" class="value"></div>
+					</div>
+					<div class="riseset_block sector_set">
+						<div class="set"></div>
+						<div><span id="set" class="value"></span></div>
+					</div>
+					<div id="moon" class="value sector_moon" data-type="class"></div>
+				</div>
+			</div>
+		</div>
+	</div>
+<script src="https://code.jquery.com/jquery-3.7.1.min.js" integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo=" crossorigin="anonymous"></script>
+<script>
+var day = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
+var period = {morning: 'утром', day: 'днём', evening: 'вечером', night: 'ночью', day_day: 'день', day_night: 'ночь'};
+
+var timeout = 60 * 60; // API call interval, sec
+var max_cache_age_hours = 48; // Max cache age before hiding weather, hours
+var max_cache_age_ms = 48 * 60 * 60 * 1000;
+var expire = 60 * 60 * 48; // Data expire for sectors, sec
+
+var value = {};
+var lastcall = 0;
+var current_weather_data = null;
+
+function format_time(ts, with_sec, with_year) {
+	if (!ts) return "—";
+	var d = new Date(Number(ts));
+	if (isNaN(d.getTime())) return "—";
+	var datePart = pad(d.getDate()) + "." + pad(d.getMonth() + 1);
+	if (with_year) datePart += "." + d.getFullYear();
+	var res = datePart + " " + pad(d.getHours()) + ":" + pad(d.getMinutes());
+	if (with_sec) res += ":" + pad(d.getSeconds());
+	return res;
+}
+
+function format_error_reason(xhr, status, err, source_name) {
+	if (status === "no_server_url" || status === "source_disabled") {
+		return err || "источник отключён";
+	}
+	if (!source_name) source_name = "сервер";
+	if (xhr && xhr.status === 403) {
+		if (source_name === "сервер") return "исчерпан суточный лимит запросов Яндекс.Погоды (ошибка 403)";
+		return "ошибка источника " + source_name + " (код 403)";
+	} else if (xhr && xhr.status === 429) {
+		if (source_name === "сервер") return "превышен лимит частоты запросов к Яндекс.Погоде (ошибка 429)";
+		return "превышен лимит частоты запросов " + source_name + " (ошибка 429)";
+	} else if (!xhr || xhr.status === 0 || status === "timeout") {
+		return "нет связи с " + source_name + " (таймаут или сеть)";
+	} else if (xhr && xhr.status >= 500) {
+		return "сбой на сервере " + (source_name === "сервер" ? "Яндекса" : source_name) + " (код " + xhr.status + ")";
+	} else if (xhr && xhr.status) {
+		return "ошибка API (код " + xhr.status + ")";
+	} else {
+		return "ошибка сети (" + (status || err || "неизвестно") + ")";
+	}
+}
+
+function safe_get_item(key, fallback) {
+	try {
+		var val = localStorage.getItem(key);
+		return val !== null ? val : (fallback || "");
+	} catch (e) {
+		return fallback || "";
+	}
+}
+
+function safe_set_item(key, val) {
+	try {
+		localStorage.setItem(key, String(val));
+	} catch (e) {}
+}
+
+function update_status_bar() {
+	var cacheTime = parseInt(safe_get_item("weather_cache_time", "0"), 10);
+	var cacheSource = safe_get_item("weather_cache_source", "Яндекс.Погода");
+	var lastAttemptTime = parseInt(safe_get_item("weather_last_attempt_time", "0"), 10);
+	var lastError = safe_get_item("weather_last_attempt_error", "");
+	var now = Date.now();
+
+	var isStale = (cacheTime === 0) || (now - cacheTime > max_cache_age_ms);
+
+	if (isStale) {
+		$("#weather_body").addClass("stale_hidden");
+		$("#wrapper").addClass("weather_stale");
+
+		var ageDays = Math.round(max_cache_age_hours / 24);
+		var msg = "⚠️ Погода не обновлялась более " + (ageDays >= 1 ? (ageDays + " суток") : (max_cache_age_hours + " ч")) + " (данные устарели и скрыты)";
+		if (lastAttemptTime > 0) {
+			msg += " • Последняя попытка: " + format_time(lastAttemptTime, true);
+		}
+		if (lastError) {
+			msg += " — " + lastError;
+		}
+		if (cacheTime > 0) {
+			msg += " • Обновлено: " + format_time(cacheTime, false, true) + " • Источник: " + cacheSource;
+		}
+		$("#status_bar")
+			.text(msg)
+			.addClass("visible")
+			.addClass("status_stale")
+			.addClass("status_error")
+			.removeClass("status_warn")
+			.removeClass("status_normal");
+	} else {
+		$("#weather_body").removeClass("stale_hidden");
+		$("#wrapper").removeClass("weather_stale");
+
+		if (lastError) {
+			var msg = "⚠️ Погода не обновилась: " + lastError;
+			if (lastAttemptTime > 0) {
+				msg += " • Последняя попытка: " + format_time(lastAttemptTime, true);
+			}
+			if (cacheTime > 0) {
+				msg += " • Обновлено: " + format_time(cacheTime, false, true) + " • Источник: " + cacheSource;
+			}
+			$("#status_bar")
+				.text(msg)
+				.addClass("visible")
+				.addClass("status_warn")
+				.removeClass("status_stale")
+				.removeClass("status_error")
+				.removeClass("status_normal");
+		} else {
+			var updateStr = cacheTime > 0 ? format_time(cacheTime, false, true) : "—";
+			var sourceStr = cacheTime > 0 ? cacheSource : "—";
+			var msg = "Обновлено: " + updateStr + " • Источник: " + sourceStr;
+			$("#status_bar")
+				.text(msg)
+				.addClass("visible")
+				.addClass("status_normal")
+				.removeClass("status_warn")
+				.removeClass("status_stale")
+				.removeClass("status_error");
+		}
+	}
+}
+
+function update_viewport_metrics() {
+	var winW = window.innerWidth;
+	var winH = window.innerHeight;
+	var screenH = window.screen.height;
+	var hasTopBar = (screenH > winH) && (screenH - winH >= 16);
+
+	if (hasTopBar) {
+		document.documentElement.classList.add("has_system_bar");
+	} else {
+		document.documentElement.classList.remove("has_system_bar");
+	}
+
+	var ratio = winW / winH;
+	if (ratio <= 1.68 || winH >= 680) {
+		document.documentElement.classList.add("screen_tall");
+		document.documentElement.classList.remove("screen_wide");
+	} else {
+		document.documentElement.classList.add("screen_wide");
+		document.documentElement.classList.remove("screen_tall");
+	}
+}
+
+function show_error(xhr, status, err, source_name) {
+	var reason = format_error_reason(xhr, status, err, source_name);
+	try {
+		localStorage.setItem("weather_last_attempt_error", reason);
+	} catch(e) {}
+	update_status_bar();
+}
+
+function hide_error() {
+	try {
+		localStorage.removeItem("weather_last_attempt_error");
+	} catch(e) {}
+	update_status_bar();
+}
+
+function init_menu() {
+	var menu = $("#weather_menu");
+	function render_src() {
+		var pref = safe_get_item("weather_source_pref", "default");
+		if (pref !== "server" && pref !== "wttr") pref = "default";
+		$(".menu_src").each(function() {
+			if ($(this).attr("data-src") === pref) $(this).addClass("menu_active");
+			else $(this).removeClass("menu_active");
+		});
+	}
+	$("#menu_btn").on("click", function(e) {
+		e.stopPropagation();
+		if (menu.hasClass("menu_open")) menu.removeClass("menu_open");
+		else { render_src(); menu.addClass("menu_open"); }
+	});
+	menu.on("click", function(e) { e.stopPropagation(); });
+	$("#menu_refresh").on("click", function(e) {
+		e.stopPropagation();
+		menu.removeClass("menu_open");
+		console.log("Menu: forced weather refresh");
+		get_data();
+	});
+	$(".menu_src").on("click", function(e) {
+		e.stopPropagation();
+		try {
+			localStorage.setItem("weather_source_pref", String($(this).attr("data-src")));
+		} catch (err) {}
+		render_src();
+		menu.removeClass("menu_open");
+	});
+	$("#menu_close").on("click", function(e) {
+		e.stopPropagation();
+		menu.removeClass("menu_open");
+	});
+}
+
+var server_url = ""; // Локальный сервер кэширования (если задан)
+var allow_direct_yandex = false; // Прямой доступ планшета к Яндекс API: только явным разрешением в config.json (иначе расход квоты ключа)
+var enable_wttr_fallback = true; // Резервный источник wttr.in
+
+function load_config(callback) {
+	$.getJSON("config.json")
+		.done(function(cfg) {
+			if (cfg.api) api = cfg.api;
+			if (cfg.lat !== undefined) lat = cfg.lat;
+			if (cfg.lon !== undefined) lon = cfg.lon;
+			if (cfg.server_url !== undefined) server_url = cfg.server_url;
+			if (cfg.timeout !== undefined) timeout = cfg.timeout;
+			if (cfg.update_interval_sec !== undefined) timeout = cfg.update_interval_sec;
+			if (cfg.max_cache_age_hours !== undefined) {
+				max_cache_age_hours = Number(cfg.max_cache_age_hours);
+				max_cache_age_ms = max_cache_age_hours * 60 * 60 * 1000;
+				expire = max_cache_age_hours * 60 * 60;
+			}
+			if (cfg.enable_wttr_fallback !== undefined) {
+				enable_wttr_fallback = Boolean(cfg.enable_wttr_fallback);
+			}
+			if (cfg.allow_direct_yandex !== undefined) {
+				allow_direct_yandex = Boolean(cfg.allow_direct_yandex);
+			}
+			if (cfg.wind_max !== undefined) wind_max = cfg.wind_max;
+			if (cfg.pressure_min !== undefined) pressure_min = cfg.pressure_min;
+			if (cfg.pressure_max !== undefined) pressure_max = cfg.pressure_max;
+			console.log("Loaded external config.json successfully:", cfg);
+		})
+		.fail(function() {
+			console.log("config.json not found or parse error, using default settings");
+		})
+		.always(function() {
+			if (callback) callback();
+		});
+}
+
+function fetch_from_wttr(on_success, on_error) {
+	var wt_url = 'https://wttr.in/' + lat + ',' + lon + '?format=j1';
+
+	console.log("wttr.in fallback request:", wt_url);
+
+	$.ajax({
+		url: wt_url,
+		dataType: 'json',
+		timeout: 20 * 1000,
+		success: function(wt) {
+			try {
+				var cc = (wt.current_condition && wt.current_condition[0]) ? wt.current_condition[0] : {};
+				var days = wt.weather || [];
+				var today = days[0] || {};
+				var hourly = today.hourly || [];
+
+				var get_wttr_icon = function(code, isDay) {
+					var s = isDay ? "_d" : "_n";
+					var c = parseInt(code, 10) || 116;
+					if (c === 113) return "skc" + s;
+					if (c === 200 || c === 386 || c === 389) return "ts" + s;
+					if (c === 179 || c === 182 || c === 185 || c === 227 || c === 230 || c === 320 || c === 323 || c === 325 || c === 326 || c === 328 || c === 329 || c === 331 || c === 332 || c === 334 || c === 335 || c === 338 || c === 350 || (c >= 362 && c <= 371) || c === 374 || c === 377) return "sn" + s;
+					if (c === 176 || c === 263 || c === 266 || c === 281 || c === 284 || c === 293 || c === 296 || c === 299 || c === 302 || c === 305 || c === 308 || c === 353 || c === 356 || c === 359) return "ra" + s;
+					if (c === 143 || c === 248 || c === 260) return "fg" + s;
+					if (c === 119 || c === 122) return "ovc" + s;
+					return "bkn" + s;
+				};
+
+				var fmt12 = function(s) {
+					if (!s) return "";
+					var p = String(s).split(" ");
+					var hm = p[0] ? p[0].split(":") : ["6", "00"];
+					var h = parseInt(hm[0], 10) || 0;
+					if (p[1] === "PM" && h < 12) h += 12;
+					if (p[1] === "AM" && h === 12) h = 0;
+					return (h < 10 ? "0" : "") + h + ":" + hm[1];
+				};
+
+				var iv = function(x, fb) {
+					var n = parseInt(x, 10);
+					return isNaN(n) ? fb : n;
+				};
+
+				var temp = Math.round(iv(cc.temp_C, 0));
+				var wind_speed = Math.round((iv(cc.windspeedKmph, 0) / 3.6) * 10) / 10;
+				var wind_angle = Math.round(iv(cc.winddirDegree, 0));
+				var humidity = Math.round(iv(cc.humidity, 50));
+				var pressure_mm = Math.round((iv(cc.pressure, 1013)) * 0.750062);
+
+				var hourNow = new Date().getHours();
+				var icon = get_wttr_icon(cc.weatherCode, (hourNow >= 8 && hourNow < 20));
+
+				var daysCount = Math.min(days.length, 3);
+				var forecasts_list = [];
+				for (var d = 0; d < daysCount; d++) {
+					var day = days[d];
+					var dayHourly = day.hourly || [];
+					var astro = (day.astronomy && day.astronomy[0]) ? day.astronomy[0] : {};
+					var dSunrise = fmt12(astro.sunrise) || "06:00";
+					var dSunset = fmt12(astro.sunset) || "19:00";
+
+					var dayHours = [];
+					for (var h = 0; h < 24; h++) {
+						var b = dayHourly[Math.min(dayHourly.length - 1, Math.floor(h / 3))] || {};
+						var hh = Math.floor(h / 3) * 3;
+						var isDayH = (hh >= 6 && hh < 21) ? 1 : 0;
+						dayHours.push({
+							hour: String(h),
+							temp: Math.round(iv(b.tempC, temp)),
+							icon: get_wttr_icon(b.weatherCode, isDayH),
+							wind_speed: Math.round((iv(b.windspeedKmph, 0) / 3.6) * 10) / 10,
+							wind_angle: Math.round(iv(b.winddirDegree, 0)),
+							humidity: Math.round(iv(b.humidity, 50)),
+							pressure_mm: Math.round(iv(b.pressure, 1013) * 0.750062)
+						});
+					}
+
+					var max_t = Math.round(iv(day.maxtempC, dayHours[13].temp));
+					var min_t = Math.round(iv(day.mintempC, dayHours[1].temp));
+					var m_t = Math.round(iv((dayHourly[3] || {}).tempC, max_t));
+					var e_t = Math.round(iv((dayHourly[6] || {}).tempC, max_t));
+
+					var dParts = {
+						morning: {temp_avg: m_t, icon: dayHours[9].icon, wind_speed: dayHours[9].wind_speed, wind_angle: dayHours[9].wind_angle},
+						day: {temp_avg: max_t, icon: dayHours[13].icon, wind_speed: dayHours[13].wind_speed, wind_angle: dayHours[13].wind_angle},
+						evening: {temp_avg: e_t, icon: dayHours[18].icon, wind_speed: dayHours[18].wind_speed, wind_angle: dayHours[18].wind_angle},
+						night: {temp_avg: min_t, icon: dayHours[1].icon, wind_speed: dayHours[1].wind_speed, wind_angle: dayHours[1].wind_angle}
+					};
+
+					forecasts_list.push({
+						date: day.date || "",
+						sunrise: dSunrise,
+						sunset: dSunset,
+						moon_code: 9,
+						hours: dayHours,
+						parts: dParts
+					});
+				}
+
+				var converted = {
+					fact: {
+						temp: temp,
+						icon: icon,
+						wind_speed: wind_speed,
+						wind_angle: wind_angle,
+						humidity: humidity,
+						pressure_mm: pressure_mm
+					},
+					forecasts: forecasts_list
+				};
+
+				on_success(converted);
+			} catch(ex) {
+				console.error("wttr.in parse error:", ex);
+				on_error(null, "parse_error", ex ? ex.message : "parse error");
+			}
+		},
+		error: function(xhr, status, err) {
+			console.log("wttr.in request failed:", status, err);
+			on_error(xhr, status, err);
+		}
+	});
+}
+
+window.onload = function() {
+	update_viewport_metrics();
+	$(window).on('resize orientationchange', update_viewport_metrics);
+	setTimeout(function() { $(window).trigger('resize'); }, 500);
+	setTimeout(function() { $(window).trigger('resize'); }, 2000);
+	date = new Date();
+	now = Date.now();
+	$('.value').each(function() {
+		value[$(this).attr('id')] = {'visible': 0, 'data': null, 'type': this.hasAttribute('data-type') ? $(this).attr('data-type') : 'value'};
+	});
+	$('body').click(function(){fullscreen()});
+	init_menu();
+
+	// 1. Попытка восстановить погоду из localStorage
+	var restored = false;
+	try {
+		var cached = localStorage.getItem("weather_cache_data");
+		if (cached) {
+			var parsed = JSON.parse(cached);
+			if (parsed.hasOwnProperty("fact") && parsed.hasOwnProperty("forecasts")) {
+				current_weather_data = parsed;
+				restored = true;
+				console.log("Restored weather from localStorage cache");
+			}
+		}
+	} catch (e) {
+		console.error("Error reading localStorage:", e);
+	}
+
+	function finishInit() {
+		load_config(function() {
+			if (current_weather_data) {
+				render_weather(current_weather_data);
+			}
+			update_status_bar();
+			run();
+		});
+	}
+
+	// 2. Если в localStorage пусто, проверяем резервный weather_cache.json
+	if (!restored) {
+		$.getJSON("weather_cache.json")
+			.done(function(cachedJson) {
+				if (cachedJson && cachedJson.fact && cachedJson.forecasts) {
+					current_weather_data = cachedJson;
+					try {
+						localStorage.setItem("weather_cache_data", JSON.stringify(cachedJson));
+						if (!localStorage.getItem("weather_cache_time")) {
+							localStorage.setItem("weather_cache_time", String(Date.now()));
+						}
+						if (!localStorage.getItem("weather_cache_source")) {
+							localStorage.setItem("weather_cache_source", "Яндекс.Погода");
+						}
+					} catch(e) {}
+					console.log("Restored weather from weather_cache.json");
+				}
+			})
+			.always(function() {
+				finishInit();
+			});
+	} else {
+		finishInit();
+	}
+}
+
+// Мигание двоеточий без CSS-анимации: 1 перерисовка в секунду вместо
+// непрерывного invalidate (на software-rendered webview экономит ~40% CPU)
+setInterval(function() {
+	var colons = document.querySelectorAll('.colon');
+	for (var i = 0; i < colons.length; i++) {
+		colons[i].style.visibility = (colons[i].style.visibility === 'hidden') ? 'visible' : 'hidden';
+	}
+}, 1000);
+
+function run() {
+	date = new Date();
+	now = Date.now();
+	var data = {
+		hours: String(pad(date.getHours())),
+		minutes: String(pad(date.getMinutes())),
+		date: day[date.getDay()] + ', ' + String(pad(date.getDate())) + '.' + String(pad(date.getMonth() + 1)) + '.' + String(date.getFullYear()).slice(-2)
+	};
+	
+	var storedLastCall = parseInt(safe_get_item("weather_last_call", "0"), 10);
+	if (storedLastCall > lastcall) lastcall = storedLastCall;
+
+	if (lastcall < now - timeout * 1000 && api != 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx') {
+		get_data();
+	}
+
+	// Динамически пересчитываем прогноз и проверяем актуальность кэша каждую минуту
+	if (current_weather_data) {
+		render_weather(current_weather_data);
+	} else {
+		update_status_bar();
+	}
+
+	update(data);
+	
+	interval = 60 * 1000;
+	timer = Math.ceil(now / interval) * interval + 1000 - now;
+	setTimeout(function(){run()}, timer);
+}
+
+function get_data() {
+	now = Date.now();
+	lastcall = now;
+	try {
+		localStorage.setItem("weather_last_call", String(now));
+		localStorage.setItem("weather_last_attempt_time", String(now));
+	} catch(e) {}
+
+	var server = (server_url && server_url.trim() !== "") ? server_url.trim() : '';
+
+	// Выбор источника из меню (localStorage weather_source_pref): default = обычная цепочка
+	var source_pref = safe_get_item("weather_source_pref", "default");
+	if (source_pref !== "server" && source_pref !== "wttr") source_pref = "default";
+	var only_server = (source_pref === "server");
+
+	if (source_pref === "wttr") {
+		console.log("get_data: source pref = wttr.in (direct)");
+		if (!enable_wttr_fallback) {
+			show_error(null, "source_disabled", "источник wttr.in отключён конфигом");
+			return;
+		}
+		fetch_from_wttr(function(wt_data) {
+			current_weather_data = wt_data;
+			try {
+				localStorage.setItem('weather_cache_data', JSON.stringify(wt_data));
+				localStorage.setItem('weather_cache_time', String(Date.now()));
+				localStorage.setItem('weather_cache_source', 'wttr.in');
+				localStorage.removeItem('weather_last_attempt_error');
+			} catch (e) {}
+			render_weather(wt_data);
+			update_status_bar();
+		}, function(wt_xhr, wt_status, wt_err) {
+			show_error(wt_xhr, wt_status, wt_err, "wttr.in");
+		});
+		return;
+	}
+
+	if (only_server && !server) {
+		console.log("get_data: source pref = Local server, but server_url is not set");
+		show_error(null, "no_server_url", "источник «Локальный сервер»: server_url не задан");
+		return;
+	}
+
+	var primary_url, headers, is_direct_yandex;
+	if (server) {
+		primary_url = server;
+		headers = {};
+		is_direct_yandex = false;
+	} else if (allow_direct_yandex) {
+		primary_url = 'https://api.weather.yandex.ru/v2/forecast?lat=' + lat + '&lon=' + lon;
+		headers = {'X-Yandex-Weather-Key': api};
+		is_direct_yandex = true;
+	} else {
+		console.log("server_url is not set and allow_direct_yandex=false, going to wttr.in fallback");
+		on_failure(null, "no_server_url", "server_url не задан, прямой Яндекс запрещен конфигом", false);
+		return;
+	}
+
+	console.log("get_data CALLED, target: " + primary_url);
+
+	function fetch_url(url, req_headers, is_fallback) {
+		$.ajax({
+			url: url,
+			headers: req_headers,
+			dataType: 'json',
+			timeout: 25 * 1000,
+			success: function(result) {
+				console.log("get_data SUCCESS from " + url + ":", JSON.stringify(result).substring(0, 100));
+				if (result.hasOwnProperty('fact') && result.hasOwnProperty('forecasts')) {
+					current_weather_data = result;
+					var sourceName = is_direct_yandex ? 'Яндекс.Погода' : 'Локальный сервер';
+					try {
+						localStorage.setItem('weather_cache_data', JSON.stringify(result));
+						localStorage.setItem('weather_cache_time', String(Date.now()));
+						localStorage.setItem('weather_cache_source', sourceName);
+						localStorage.removeItem('weather_last_attempt_error');
+					} catch (e) {
+						console.error("Failed to write localStorage cache:", e);
+					}
+					render_weather(result);
+					update_status_bar();
+				} else {
+					on_failure(null, "format", "неверный формат данных", is_fallback);
+				}
+			},
+			error: function(xhr, status, err) {
+				console.log("get_data ERROR from " + url + ":", status, err, xhr ? xhr.status : 0);
+				on_failure(xhr, status, err, is_fallback);
+			}
+		});
+	}
+
+	function on_failure(xhr, status, err, is_fallback) {
+		if (!is_fallback && server && allow_direct_yandex && !only_server) {
+			console.log("Local server failed, trying direct Yandex API fallback (allowed by config)...");
+			var fallback_url = 'https://api.weather.yandex.ru/v2/forecast?lat=' + lat + '&lon=' + lon;
+			fetch_url(fallback_url, {'X-Yandex-Weather-Key': api}, true);
+			return;
+		}
+
+		if (enable_wttr_fallback && !only_server) {
+			console.log("Yandex API unavailable/failed, trying wttr.in fallback...");
+			fetch_from_wttr(function(wt_data) {
+				console.log("wttr.in fallback SUCCESS");
+				current_weather_data = wt_data;
+				try {
+					localStorage.setItem('weather_cache_data', JSON.stringify(wt_data));
+					localStorage.setItem('weather_cache_time', String(Date.now()));
+					localStorage.setItem('weather_cache_source', 'wttr.in');
+					localStorage.removeItem('weather_last_attempt_error');
+				} catch (e) {}
+				render_weather(wt_data);
+				update_status_bar();
+			}, function(wt_xhr, wt_status, wt_err) {
+				console.log("wttr.in fallback also failed");
+				show_error(xhr, status, err);
+			});
+			return;
+		}
+
+		show_error(xhr, status, err);
+	}
+
+	fetch_url(primary_url, headers, false);
+}
+
+function parse(data) {
+	render_weather(data);
+}
+
+function render_weather(data) {
+	if (!data || !data.fact) return;
+
+	var cacheTime = parseInt(safe_get_item("weather_cache_time", "0"), 10);
+	var nowMs = Date.now();
+	if (cacheTime > 0 && (nowMs - cacheTime > max_cache_age_ms)) {
+		update_status_bar();
+		return;
+	}
+
+	date = new Date();
+	now = Date.now();
+	var curHour = date.getHours();
+	var result = {};
+
+	// 1. Определение активного дня прогноза по календарной дате устройства
+	var activeForecastIdx = 0;
+	if (data.forecasts && data.forecasts.length > 0) {
+		var padZero = function(n) { return (n < 10 ? '0' : '') + n; };
+		var todayDateStr = date.getFullYear() + '-' + padZero(date.getMonth() + 1) + '-' + padZero(date.getDate());
+		for (var fi = 0; fi < data.forecasts.length; fi++) {
+			if (data.forecasts[fi].date === todayDateStr) {
+				activeForecastIdx = fi;
+				break;
+			}
+		}
+	}
+	var fToday = (data.forecasts && data.forecasts[activeForecastIdx]) ? data.forecasts[activeForecastIdx] : (data.forecasts ? data.forecasts[0] : null);
+	var fTomorrow = (data.forecasts && data.forecasts[activeForecastIdx + 1]) ? data.forecasts[activeForecastIdx + 1] : fToday;
+
+	// 2. Почасовая подстановка для текущего часа при автономной работе (>1ч без свежей сети)
+	var isOfflineHours = (cacheTime > 0 && (nowMs - cacheTime > 3600 * 1000));
+	var hourForecast = null;
+	if (fToday && fToday.hours && fToday.hours.length > 0) {
+		for (var hi = 0; hi < fToday.hours.length; hi++) {
+			if (parseInt(fToday.hours[hi].hour, 10) === curHour) {
+				hourForecast = fToday.hours[hi];
+				break;
+			}
+		}
+		if (!hourForecast && fToday.hours[curHour]) {
+			hourForecast = fToday.hours[curHour];
+		}
+	}
+
+	if (isOfflineHours && hourForecast) {
+		if (hourForecast.hasOwnProperty('icon')) result.icon = hourForecast.icon;
+		else if (data.fact.hasOwnProperty('icon')) result.icon = data.fact.icon;
+
+		if (hourForecast.hasOwnProperty('temp')) result.temperature = (hourForecast.temp > 0 ? '+' : '') + hourForecast.temp;
+		else if (data.fact.hasOwnProperty('temp')) result.temperature = (data.fact.temp > 0 ? '+' : '') + data.fact.temp;
+
+		if (hourForecast.hasOwnProperty('wind_speed')) {
+			result.wind = hourForecast.wind_speed;
+			result.wind_progress = 'width: ' + (100 - Math.round(hourForecast.wind_speed / wind_max * 100)) + '%';
+			if (hourForecast.hasOwnProperty('wind_angle')) result.wind_icon = 'transform: rotate(' + (hourForecast.wind_angle - 180) + 'deg)';
+		} else if (data.fact.hasOwnProperty('wind_speed')) {
+			result.wind = data.fact.wind_speed;
+			result.wind_progress = 'width: ' + (100 - Math.round(data.fact.wind_speed / wind_max * 100)) + '%';
+			if (data.fact.hasOwnProperty('wind_angle')) result.wind_icon = 'transform: rotate(' + (data.fact.wind_angle - 180) + 'deg)';
+		}
+
+		if (hourForecast.hasOwnProperty('humidity')) {
+			result.humidity = hourForecast.humidity;
+			result.humidity_progress = 'width: ' + (100 - hourForecast.humidity) + '%';
+		} else if (data.fact.hasOwnProperty('humidity')) {
+			result.humidity = data.fact.humidity;
+			result.humidity_progress = 'width: ' + (100 - data.fact.humidity) + '%';
+		}
+
+		if (hourForecast.hasOwnProperty('pressure_mm')) {
+			result.pressure = hourForecast.pressure_mm;
+		} else if (data.fact.hasOwnProperty('pressure_mm')) {
+			result.pressure = data.fact.pressure_mm;
+		} else if (data.hasOwnProperty('info') && data.info.hasOwnProperty('def_pressure_mm')) {
+			result.pressure = data.info.def_pressure_mm;
+		}
+		if (result.pressure !== undefined) {
+			if (result.pressure < pressure_min) result.pressure_progress = 0;
+			else if (result.pressure > pressure_max) result.pressure_progress = 100;
+			else result.pressure_progress = Math.round((result.pressure - pressure_min) / (pressure_max - pressure_min) * 100);
+			result.pressure_progress = 'width: ' + (100 - result.pressure_progress) + '%';
+		}
+	} else {
+		// Свежий факт
+		if (data.fact.hasOwnProperty('icon')) result.icon = data.fact.icon;
+		if (data.fact.hasOwnProperty('temp')) result.temperature = (data.fact.temp > 0 ? '+' : '') + data.fact.temp;
+		if (data.fact.hasOwnProperty('wind_speed')) {
+			result.wind = data.fact.wind_speed;
+			result.wind_progress = 'width: ' + (100 - Math.round(data.fact.wind_speed / wind_max * 100)) + '%';
+			if (data.fact.hasOwnProperty('wind_angle')) result.wind_icon = 'transform: rotate(' + (data.fact.wind_angle - 180) + 'deg)';
+		}
+		if (data.fact.hasOwnProperty('humidity')) {
+			result.humidity = data.fact.humidity;
+			result.humidity_progress = 'width: ' + (100 - data.fact.humidity) + '%';
+		}
+		if (data.fact.hasOwnProperty('pressure_mm')) {
+			result.pressure = data.fact.pressure_mm;
+		} else if (data.hasOwnProperty('info') && data.info.hasOwnProperty('def_pressure_mm')) {
+			result.pressure = data.info.def_pressure_mm;
+		}
+		if (result.pressure !== undefined) {
+			if (result.pressure < pressure_min) result.pressure_progress = 0;
+			else if (result.pressure > pressure_max) result.pressure_progress = 100;
+			else result.pressure_progress = Math.round((result.pressure - pressure_min) / (pressure_max - pressure_min) * 100);
+			result.pressure_progress = 'width: ' + (100 - result.pressure_progress) + '%';
+		}
+	}
+
+	// 3. Min и Max по часам активного дня
+	if (fToday && fToday.hasOwnProperty('hours') && fToday.hours.length > 0) {
+		var min = 0, max = 0;
+		for (var id = 0; id < fToday.hours.length; id++) {
+			if (fToday.hours[id].hasOwnProperty('temp')) {
+				if (fToday.hours[id].temp < fToday.hours[min].temp) min = id;
+				if (fToday.hours[id].temp > fToday.hours[max].temp) max = id;
+			}
+		}
+		result.min = (fToday.hours[min].temp > 0 ? '+' : '') + fToday.hours[min].temp;
+		var minH = (fToday.hours[min].hour !== undefined) ? parseInt(fToday.hours[min].hour, 10) : min;
+		result.min_date = String(pad(minH)) + ':00';
+		result.max = (fToday.hours[max].temp > 0 ? '+' : '') + fToday.hours[max].temp;
+		var maxH = (fToday.hours[max].hour !== undefined) ? parseInt(fToday.hours[max].hour, 10) : max;
+		result.max_date = String(pad(maxH)) + ':00';
+	}
+
+	// 4. Прогнозные слоты («Днём», «Вечером», «Ночью», «Утром»)
+	var partsConfig = [];
+	if (curHour >= 6 && curHour <= 11) {
+		partsConfig = [
+			{obj: fToday, period: 'day'},
+			{obj: fToday, period: 'evening'}
+		];
+	} else if (curHour >= 12 && curHour <= 17) {
+		partsConfig = [
+			{obj: fToday, period: 'evening'},
+			{obj: fTomorrow, period: 'night'}
+		];
+	} else if (curHour >= 18 && curHour <= 22) {
+		partsConfig = [
+			{obj: fTomorrow, period: 'night'},
+			{obj: fTomorrow, period: 'morning'}
+		];
+	} else {
+		partsConfig = [
+			{obj: fToday, period: 'morning'},
+			{obj: fToday, period: 'day'}
+		];
+	}
+
+	for (var pid = 0; pid < partsConfig.length; pid++) {
+		var fObj = partsConfig[pid].obj;
+		var targetPeriod = partsConfig[pid].period;
+		if (fObj && fObj.hasOwnProperty('parts') && fObj.parts.hasOwnProperty(targetPeriod)) { 
+			result['forecast_title_' + pid] = period[targetPeriod];
+			if (fObj.parts[targetPeriod].hasOwnProperty('icon')) {
+				result['forecast_icon_' + pid] = fObj.parts[targetPeriod].icon;
+			}
+			if (fObj.parts[targetPeriod].hasOwnProperty('temp_avg')) {
+				var t = fObj.parts[targetPeriod].temp_avg;
+				result['forecast_temperature_' + pid] = (t > 0 ? '+' : '') + t;
+			}
+			if (fObj.parts[targetPeriod].hasOwnProperty('wind_speed')) {
+				result['forecast_wind_' + pid] = fObj.parts[targetPeriod].wind_speed;
+			}
+			if (fObj.parts[targetPeriod].hasOwnProperty('wind_angle')) {
+				result['forecast_wind_icon_' + pid] = 'transform: rotate(' + (fObj.parts[targetPeriod].wind_angle - 180) + 'deg)';
+			}
+		}
+	}
+
+	// 5. Астрономия (Луна, Восход, Закат)
+	if (fToday && fToday.hasOwnProperty('moon_code')) result.moon = 'moon_' + fToday.moon_code;
+	else if (data.forecasts && data.forecasts[0] && data.forecasts[0].hasOwnProperty('moon_code')) result.moon = 'moon_' + data.forecasts[0].moon_code;
+
+	if (fToday && fToday.hasOwnProperty('sunrise') && fToday.hasOwnProperty('sunset')) {
+		result.rise = fToday.sunrise;
+		result.set = fToday.sunset;
+		riseset(result.rise, result.set);
+	} else if (data.forecasts && data.forecasts[0] && data.forecasts[0].hasOwnProperty('sunrise')) {
+		result.rise = data.forecasts[0].sunrise;
+		result.set = data.forecasts[0].sunset;
+		riseset(result.rise, result.set);
+	}
+
+	update(result);
+	update_status_bar();
+}
+
+function riseset(rise, set) {
+	if (!rise || !set) return;
+	var result = {};
+	rise = rise.split(':');
+	set =  set.split(':');
+	rise = Number(rise[0]) * 60 + Number(rise[1]);
+	set = Number(set[0]) * 60 + Number(set[1]);
+	duration = set - rise;
+	current = date.getHours() * 60 + date.getMinutes();
+	hour = Math.floor(duration / 60);
+	result.duration_hour = String(pad(hour));
+	result.duration_minute = String(pad(duration - hour * 60));
+	result.duration_time = 'width: ' + Math.round((duration / (60 * 24) * 100)) + '%; left: ' + Math.round(rise / (60 * 24) * 100) + '%';
+	result.duration_progress = 'width: ' + Math.round(current / (60 * 24) * 100) + '%';
+	if (current > rise && current < set) {
+		minutes = set - current;
+		result.duration_left = period.day_day;
+	} else {
+		minutes = 60 * 24 - current + rise;
+		result.duration_left = period.day_night;
+	}
+	hours = Math.floor(minutes / 60);
+	result.duration_left += ' ' + String(pad(hours)) + ':' + String(pad(minutes - hours * 60));
+	update(result);
+}
+
+function update(result) {
+	for (var id in value) {
+		if (result.hasOwnProperty(id)) {
+			result[id] = String(result[id]).replace(/[\'\"\\<>]/g, '');
+			if (result[id] !== value[id].data) {
+				switch (value[id].type) {
+					case 'value':
+						$('#' + id).html(result[id]);
+					break;
+					case 'class':
+						$('#' + id).removeClass(value[id].data).addClass(result[id]);
+					break;
+					case 'style':
+						$('#' + id).attr('style', result[id]);
+					break;
+				}
+				value[id].data = result[id];
+			}
+			value[id].update = now;
+			if (value[id].visible == 0) {
+				value[id].visible = 1;
+				$('.sector_' + id).addClass('visible');
+			}
+		}
+		if (value[id].update < (now - expire * 1000)) {
+			if (value[id].visible == 1) {
+				value[id].visible = 0;
+				$('.sector_' + id).removeClass('visible');
+			}
+		}
+	}
+}
+
+function pad(n) {
+	return n < 10 ? '0' + n : n;
+}
+
+function fullscreen() {
+	var e = document.documentElement;
+	if (e.requestFullscreen && !document.fullscreenElement) e.requestFullscreen();
+	else if (e.webkitRequestFullscreen && !document.webkitFullscreenElement) e.webkitRequestFullscreen();
+}
+
+</script>
+<style>
+html {
+	height: 100%;
+	background: #000;
+}
+body {
+	margin: 0;
+	font-size: 3vw;
+	user-select: none;
+}
+[class*="sector_"] {
+	opacity: 0;
+}
+.visible {
+	opacity: 1;
+}
+#wrapper {
+	width: 100%;
+	height: 100%;
+	transition: opacity 1s ease-in-out;
+	display: block;
+	position: absolute;
+	width: 100%;
+	font-family: Verdana, Arial, Sans-serif;
+	text-align: center;
+	color: #fff;
+}
+#weather_body, #weather_right, #now_hero {
+	display: block;
+	width: 100%;
+	position: static;
+}
+@-webkit-keyframes blink {
+	0%, 49% { opacity: 1; }
+	50%, 100% { opacity: 0; }
+}
+@keyframes blink {
+	0%, 49% { opacity: 1; }
+	50%, 100% { opacity: 0; }
+}
+.colon {
+	display: inline-block;
+}
+#datetime {
+	position: relative;
+	height: 53vw;
+	overflow: hidden;
+	margin-bottom: 4vw;
+}
+#time {
+	position: absolute;
+	top: 0vw;
+	font-size: 26vw;
+	left: 50%;
+	transform: translate(-50%, 0);
+	letter-spacing: -1vw;
+}
+#date {
+	position: absolute;
+	top: 32vw;
+	width: 100%;
+	font-size: 17vw;
+	left: 50%;
+	transform: translate(-50%, 0);
+	white-space: nowrap;
+}
+#now {
+	position: relative;
+	height: 33vw;
+}
+#temperature_block {
+	position: absolute;
+	top: -8vw;
+	left: 0;
+	width: 35%;
+}
+#temperature::after, #feels::after, #forecast_temperature_0::after, #forecast_temperature_1::after, #temperature_alt::after, #min::after, #max::after {
+	content: "\00B0";
+}
+#temperature {
+	font-size: 21vw;
+}
+#temperature_sub {
+	display: flex;
+}
+#temperature_sub div {
+	width: 50%;
+	font-size: 5vw;
+}
+#minmax_first {
+	text-align: left;
+}
+#minmax_second {
+	text-align: right;
+}
+#temperature_alt {
+	font-size: 5vw;
+	text-align: left;
+}
+#temperature_sub span {
+	display: block;
+	padding-bottom: 2vw;
+}
+#icon {
+	position: absolute;
+	top: -2vw;
+	width: 35vw;
+	height: 35vw;
+	left: 53%;
+	transform: translate(-50%, 0);
+	background-repeat: no-repeat;
+}
+
+#wind_humidity_pressure {
+	position: absolute;
+	right: 0;
+	top: -4vw;
+	width: 28%;
+}
+#wind_humidity_pressure div {
+	display: flex;
+	align-items: center;
+	white-space: nowrap;
+    overflow: hidden;
+}
+#wind, #humidity, #pressure  {
+	font-size: 6vw;
+	padding-left: 1vw;
+}
+#wind_humidity_pressure .wind_icon, #wind_humidity_pressure .humidity_icon, #wind_humidity_pressure .presure_icon {
+	min-height: 6vw;
+    min-width: 6vw;
+	background-size: 6vw 6vw;
+}
+#forecast {
+	display: flex;
+}
+
+#forecast .wind_icon {
+	background-repeat: no-repeat;
+	height: 5vw;
+    width: 5vw;
+}
+.wind_humidity_pressure_bar {
+	position: relative;
+	height: 2vw;
+	background: linear-gradient(to right, #fff, #ff0000);
+	border-radius: 2vw;
+	margin: 1vw 0 3vw;
+	width: 100%;
+}
+.wind_bar {
+	background: linear-gradient(to right, #fff, #ff0000);
+}
+.pressure_bar {
+	background: #006bff;
+}
+.humidity_bar {
+	background: linear-gradient(to right, #fff, #006bff);
+}
+.wind_humidity_progress, #pressure_progress {
+	position: absolute;
+	right: 0;
+	height: 2vw;
+	border-radius: 2vw;
+	border-radius: 0 2vw 2vw 0;
+}
+.wind_humidity_progress {
+	background-color: #444;
+}
+#pressure_progress {
+	background: #ff0000;
+}
+.forecast_part {
+	width: 50%;
+	padding-left: 5vw;
+}
+.forecast_icon {
+    width: 45%;
+	background-size: 18vw 18vw;
+	background-repeat: no-repeat;
+}
+.forecast_temperature_wind {
+	display: flex;
+	font-size: 10vw;
+}
+.forecast_desc {
+	display: flex;
+}
+.forecast_title {
+	font-size: 6vw;
+	padding-bottom: 1vw;
+}
+.forecast_title {
+	text-transform: capitalize;
+}
+.forecast_temperature {
+	text-align: left;
+	font-size: 7vw;
+}
+.forecast_wind_block {
+	display: flex;
+	font-size: 3vw;
+	align-items: center;
+}
+.forecast_wind {
+	font-size: 5vw;
+	padding-left: 1vw;
+}
+#riseset {
+	position: relative;
+	display: flex;
+	align-items: center;
+    justify-content: center;
+	padding-bottom: 2.65vw;
+}
+.riseset_block {
+	width: 20%;
+}
+.riseset_block span {
+	font-size: 5vw;
+}
+.rise, .set {
+	background-position: center;
+	background-size: 10vw;
+	height: 10vw;
+	background-repeat: no-repeat;
+	padding-bottom: 2vw;
+}
+#duration_block {
+	width: 40%;
+}
+#duration {
+	font-size: 5vw;
+}
+#duration_bar {
+	position: relative;
+	width: 100%;
+	height: 2vw;
+	background-color: #727272;
+	border-radius: 1vw;
+	margin: 2vw 0;
+}
+#duration_time {
+	position: absolute;
+	left: 10%;
+	width: 80%;
+	height: 100%;
+	background-color: #ffd76c;
+	border-radius: 1vw;
+}
+#duration_progress {
+	width: 30%;
+	height: 100%;
+	background-color: #000;
+	opacity: 0.4;
+	border-radius: 1vw 0 0 1vw;
+}
+#duration_left {
+	font-size: 4vw;
+}
+#moon {
+	width: 15vw;
+    height: 15vw;
+	background-repeat: no-repeat;
+}
+.wind_icon {
+	transition: transform 1s ease-in-out;
+	background-image: url("data:image/svg+xml,%3Csvg enable-background='new 0 0 11 11' preserveAspectRatio='xMinYMid' viewBox='0 0 11 11' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M5.5 1L9 10 5.5 7.796 2 10z' fill='%23fff'%3E%3C/path%3E%3C/svg%3E");
+}
+.humidity_icon {
+	background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg viewBox=%220 0 24 24%22 fill=%22none%22 xmlns=%22http://www.w3.org/2000/svg%22%3E %3Cg%3E %3Cpath fill-rule=%22evenodd%22 clip-rule=%22evenodd%22 d=%22M17.5487 8.0001C16.7829 6.74175 15.1271 4.67011 12.5637 1.75476C12.2645 1.41448 11.7342 1.41518 11.4359 1.75625C8.88065 4.67783 7.22597 6.74805 6.45489 7.99571C3.91532 12.1049 3.72409 15.9389 6.56528 18.751C9.63862 21.793 14.3621 21.792 17.4355 18.7512C20.2743 15.9425 20.0858 12.169 17.5487 8.0001ZM7.73087 8.78429C8.39019 7.71747 9.8183 5.91206 12.0019 3.39071C14.1889 5.90415 15.6153 7.70851 16.2673 8.77991C18.4829 12.4205 18.6344 15.4548 16.3805 17.6849C13.8915 20.1475 10.1092 20.1483 7.62047 17.685C5.36463 15.4522 5.51867 12.3638 7.73087 8.78429Z%22 fill=%22white%22/%3E %3Cpath d=%22M12.7366 17.2967C14.3588 16.7579 15.4749 15.2362 15.4749 13.5C15.4749 13.0858 15.1391 12.75 14.7249 12.75C14.3107 12.75 13.9749 13.0858 13.9749 13.5C13.9749 14.5852 13.277 15.5366 12.2638 15.8732C11.8707 16.0038 11.6579 16.4283 11.7884 16.8214C11.919 17.2145 12.3436 17.4273 12.7366 17.2967Z%22 fill=%22white%22/%3E %3C/g%3E %3C/svg%3E");
+}
+.presure_icon {
+	background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg viewBox=%220 0 24 24%22 fill=%22none%22 xmlns=%22http://www.w3.org/2000/svg%22%3E %3Cg%3E %3Cpath d=%22M14.1314 2.22778C14.5361 2.31569 14.793 2.71509 14.7051 3.11986C14.6172 3.52464 14.2178 3.78152 13.813 3.69362C13.2222 3.56532 12.6156 3.5 12 3.5C7.30558 3.5 3.5 7.30558 3.5 12C3.5 16.6944 7.30558 20.5 12 20.5C16.6944 20.5 20.5 16.6944 20.5 12C20.5 11.4103 20.4401 10.8289 20.3222 10.2616C20.238 9.85608 20.4985 9.45902 20.904 9.37478C21.3096 9.29054 21.7067 9.55101 21.7909 9.95657C21.9295 10.624 22 11.3077 22 12C22 17.5228 17.5228 22 12 22C6.47715 22 2 17.5228 2 12C2 6.47715 6.47715 2 12 2C12.7228 2 13.4361 2.07681 14.1314 2.22778Z%22 fill=%22white%22/%3E %3Cpath fill-rule=%22evenodd%22 clip-rule=%22evenodd%22 d=%22M13.348 10.6533C13.6409 10.9461 14.1158 10.946 14.4086 10.6531L18.0304 7.03025C18.3233 6.73732 18.3232 6.26244 18.0303 5.96959C17.7373 5.67674 17.2624 5.67681 16.9696 5.96975L13.3478 9.59259C13.055 9.88553 13.055 10.3604 13.348 10.6533ZM8.21961 15.7803C8.51248 16.0732 8.98735 16.0732 9.28028 15.7804L10.5308 14.5301C10.8237 14.2373 10.8238 13.7624 10.5309 13.4695C10.238 13.1766 9.76315 13.1765 9.47023 13.4694L8.21972 14.7196C7.9268 15.0125 7.92675 15.4874 8.21961 15.7803Z%22 fill=%22white%22/%3E %3Cpath fill-rule=%22evenodd%22 clip-rule=%22evenodd%22 d=%22M14.75 5.75C14.75 5.33579 15.0858 5 15.5 5H18.25C18.6642 5 19 5.33579 19 5.75C19 6.16421 18.6642 6.5 18.25 6.5H15.5C15.0858 6.5 14.75 6.16421 14.75 5.75Z%22 fill=%22white%22/%3E %3Cpath fill-rule=%22evenodd%22 clip-rule=%22evenodd%22 d=%22M17.5 5.75C17.5 5.33579 17.8358 5 18.25 5C18.6642 5 19 5.33579 19 5.75V8.5C19 8.91421 18.6642 9.25 18.25 9.25C17.8358 9.25 17.5 8.91421 17.5 8.5V5.75Z%22 fill=%22white%22/%3E %3Cpath fill-rule=%22evenodd%22 clip-rule=%22evenodd%22 d=%22M9 12C9 13.6569 10.3431 15 12 15C13.6569 15 15 13.6569 15 12C15 10.3431 13.6569 9 12 9C10.3431 9 9 10.3431 9 12ZM13.5 12C13.5 12.8284 12.8284 13.5 12 13.5C11.1716 13.5 10.5 12.8284 10.5 12C10.5 11.1716 11.1716 10.5 12 10.5C12.8284 10.5 13.5 11.1716 13.5 12Z%22 fill=%22white%22/%3E %3C/g%3E %3C/svg%3E");
+}
+.rise {
+	background-image: url("data:image/svg+xml,%3Csvg width='30' height='31' xmlns='http://www.w3.org/2000/svg'%3E%3Cg%3E%3Ctitle%3Ebackground%3C/title%3E%3Crect fill='none' id='canvas_background' height='33' width='32' y='-1' x='-1'/%3E%3C/g%3E%3Cg%3E%3Ctitle%3ELayer 1%3C/title%3E%3Cpath id='svg_1' fill='%23FFB70A' d='m7.772117,28.570962a7.143,7.143 0 0 1 14.286,0l-14.286,0z' clip-rule='evenodd' fill-rule='evenodd'/%3E%3Cpath id='svg_2' fill='%23FFB70A' d='m21.628117,15.146962l-1.678,4.052c-0.547,1.32 -2.527,0.5 -1.98,-0.82l1.679,-4.052c0.546,-1.32 2.526,-0.5 1.98,0.82l-0.001,0zm7.525,8.684l-4.052,1.679c-1.32,0.546 -2.14,-1.433 -0.82,-1.98l4.052,-1.679c1.32,-0.546 2.14,1.433 0.82,1.98zm-24.43,1.68l-4.053,-1.678c-1.32,-0.547 -0.5,-2.527 0.82,-1.98l4.052,1.678c1.32,0.547 0.5,2.527 -0.82,1.98l0.001,0zm5.447,-11.184l1.678,4.052c0.547,1.32 -1.433,2.14 -1.98,0.82l-1.678,-4.052c-0.547,-1.32 1.433,-2.14 1.98,-0.82zm3.674,-11.827l0,5.714a1.071,1.071 0 0 0 2.142,0l0,-5.714a1.071,1.071 0 1 0 -2.142,0z'/%3E%3Cpath id='svg_3' fill='%23FFB70A' d='m16.300117,3.971962a1.071,1.071 0 0 0 1.515,-1.515l-2.142,-2.143a1.072,1.072 0 0 0 -1.516,0l-2.142,2.143a1.071,1.071 0 0 0 1.515,1.515l1.385,-1.385l1.385,1.385z'/%3E%3Cpath id='svg_4' fill='%23FFD76C' d='m1.344117,29.570962a1,1 0 0 1 1,-1l25.141,0a1,1 0 0 1 1,1l0,0.143a1,1 0 0 1 -1,1l-25.14,0a1,1 0 0 1 -1,-1l0,-0.143l-0.001,0z' clip-rule='evenodd' fill-rule='evenodd'/%3E%3C/g%3E%3C/svg%3E");
+}
+.set {
+	background-image: url("data:image/svg+xml,%3Csvg width='30' height='31' xmlns='http://www.w3.org/2000/svg'%3E%3Cg%3E%3Ctitle%3Ebackground%3C/title%3E%3Crect fill='none' id='canvas_background' height='33' width='32' y='-1' x='-1'/%3E%3C/g%3E%3Cg%3E%3Ctitle%3ELayer 1%3C/title%3E%3Cpath id='svg_5' fill='%23FFB70A' d='m21.628115,15.342l-1.678,4.001c-0.547,1.304 -2.527,0.494 -1.98,-0.81l1.679,-4c0.546,-1.304 2.526,-0.494 1.979,0.809zm7.525,8.576l-4.053,1.658c-1.319,0.54 -2.14,-1.415 -0.82,-1.955l4.053,-1.658c1.319,-0.54 2.139,1.415 0.82,1.955zm-24.431,1.658l-4.052,-1.657c-1.32,-0.54 -0.5,-2.495 0.82,-1.955l4.052,1.657c1.32,0.54 0.5,2.495 -0.82,1.955zm5.446,-11.044l1.679,4.002c0.547,1.303 -1.433,2.113 -1.98,0.81l-1.678,-4.002c-0.547,-1.303 1.433,-2.113 1.979,-0.81z'/%3E%3Cpath id='svg_6' fill='%23FFB70A' d='m7.772115,28.598c0,-3.895 3.198,-7.053 7.143,-7.053s7.143,3.158 7.143,7.053l-14.286,0z' clip-rule='evenodd' fill-rule='evenodd'/%3E%3Cpath id='svg_7' fill='%23FFD76C' d='m1.344115,29.598a1,1 0 0 1 1,-1l25.142,0a1,1 0 0 1 1,1l0,0.116a1,1 0 0 1 -1,1l-25.142,0a1,1 0 0 1 -1,-1l0,-0.116z' clip-rule='evenodd' fill-rule='evenodd'/%3E%3Cpath id='svg_8' fill='%23FFB70A' d='m13.844115,1.058l0,5.643c0,0.584 0.479,1.058 1.071,1.058s1.071,-0.474 1.071,-1.058l0,-5.643c0,-0.584 -0.479,-1.058 -1.071,-1.058s-1.071,0.474 -1.071,1.058z'/%3E%3Cpath id='svg_9' fill='%23FFB70A' d='m13.530115,5.247a1.082,1.082 0 0 0 -1.516,0a1.05,1.05 0 0 0 0,1.496l2.143,2.116a1.082,1.082 0 0 0 1.516,0l2.142,-2.116a1.048,1.048 0 0 0 0,-1.496a1.08,1.08 0 0 0 -1.515,0l-1.385,1.368l-1.385,-1.368z'/%3E%3C/g%3E%3C/svg%3E");
+}
+.bkn_\+ra_d {
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='a' x1='100%25' x2='29.895%25' y1='0%25' y2='69.202%25'%3E%3Cstop offset='0%25' stop-color='%23FFB301'/%3E%3Cstop offset='100%25' stop-color='%23FFC533'/%3E%3C/linearGradient%3E%3ClinearGradient id='b' x1='50%25' x2='50%25' y1='0%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%239FC7FF'/%3E%3Cstop offset='100%25' stop-color='%239BC1F5'/%3E%3C/linearGradient%3E%3CradialGradient id='c' cx='55.585%25' cy='10.083%25' r='58.215%25' fx='55.585%25' fy='10.083%25' gradientTransform='matrix(0 -1 .719 0 .483 .657)'%3E%3Cstop offset='0%25' stop-color='%23486DA8' stop-opacity='.4'/%3E%3Cstop offset='100%25' stop-color='%23486DA8' stop-opacity='0'/%3E%3C/radialGradient%3E%3C/defs%3E%3Cg fill='none'%3E%3Ccircle cx='16' cy='8' r='4' fill='url(%23a)'/%3E%3Cpath fill='%23FFB300' fill-rule='nonzero' d='M15.48.73l.26 1.477c.174.985-1.304 1.245-1.477.26l-.26-1.477c-.174-.985 1.304-1.245 1.477-.26zm2.257 12.803l.26 1.477c.174.985-1.304 1.245-1.477.26l-.26-1.477c-.174-.985 1.304-1.245 1.477-.26zm3.036-11.041l-.86 1.229c-.574.819-1.802-.041-1.229-.86l.86-1.229c.574-.819 1.802.041 1.229.86zm-7.456 10.649l-.86 1.229c-.574.819-1.802-.041-1.229-.86l.86-1.229c.574-.819 1.802.041 1.229.86zm-2.825-9.913l1.229.86c.819.574-.041 1.802-.86 1.229l-1.229-.86c-.819-.574.041-1.802.86-1.229zm10.649 7.456l1.229.86c.819.574-.041 1.802-.86 1.229l-1.229-.86c-.819-.574.041-1.802.86-1.229zm2.13-3.204l-1.477.26c-.985.174-1.245-1.304-.26-1.477l1.477-.26c.985-.174 1.245 1.304.26 1.477zm-12.803 2.257l-1.477.26c-.985.174-1.245-1.304-.26-1.477l1.477-.26c.985-.174 1.245 1.304.26 1.477z'/%3E%3Cpath fill='%2366AFEB' fill-rule='nonzero' d='M4.56 18.452l-1.5 3.506c-.163.381.014.822.395.985.381.163.822-.014.985-.395l1.5-3.506c.163-.381-.014-.822-.395-.985-.381-.163-.822.014-.985.395zm4 0l-1.5 3.506c-.163.381.014.822.395.985.381.163.822-.014.985-.395l1.5-3.506c.163-.381-.014-.822-.395-.985-.381-.163-.822.014-.985.395zm4 0l-1.5 3.506c-.163.381.014.822.395.985.381.163.822-.014.985-.395l1.5-3.506c.163-.381-.014-.822-.395-.985-.381-.163-.822.014-.985.395zm4 0l-1.5 3.506c-.163.381.014.822.395.985.381.163.822-.014.985-.395l1.5-3.506c.163-.381-.014-.822-.395-.985-.381-.163-.822.014-.985.395z'/%3E%3Cpath fill='url(%23b)' d='M6 17c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182.563-1.842 2.277-3.182 4.304-3.182 2.485 0 4.5 2.015 4.5 4.5 0 .235-.018.465-.053.69.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11z'/%3E%3Cpath fill='url(%23c)' d='M7 10.5c0 2.485 2.015 4.5 4.5 4.5 2.251 0 4.115-1.652 4.447-3.81.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182-.128.417-.196.859-.196 1.318z'/%3E%3C/g%3E%3C/svg%3E");
+}
+.bkn_\+ra_n {
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='a' x1='50%25' x2='50%25' y1='0%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%23FFBE1D'/%3E%3Cstop offset='100%25' stop-color='%23FFB300'/%3E%3C/linearGradient%3E%3CradialGradient id='b' cx='88.2%25' cy='11.315%25' fx='88.2%25' fy='11.315%25'%3E%3Cstop offset='0%25' stop-color='%239699C7'/%3E%3Cstop offset='100%25' stop-color='%239499C9' stop-opacity='0'/%3E%3C/radialGradient%3E%3ClinearGradient id='c' x1='50%25' x2='50%25' y1='0%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%239FC7FF'/%3E%3Cstop offset='100%25' stop-color='%239BC1F5'/%3E%3C/linearGradient%3E%3CradialGradient id='d' cx='55.585%25' cy='10.083%25' r='58.215%25' fx='55.585%25' fy='10.083%25' gradientTransform='matrix(0 -1 .719 0 .483 .657)'%3E%3Cstop offset='0%25' stop-color='%23486DA8' stop-opacity='.4'/%3E%3Cstop offset='100%25' stop-color='%23486DA8' stop-opacity='0'/%3E%3C/radialGradient%3E%3C/defs%3E%3Cg fill='none'%3E%3Cpath fill='url(%23a)' d='M7.508 1.367c1.684.711 2.867 2.378 2.867 4.321 0 2.589-2.099 4.688-4.688 4.688-1.943 0-3.61-1.182-4.321-2.867.56.236 1.175.367 1.821.367 2.589 0 4.688-2.099 4.688-4.688 0-.646-.131-1.261-.367-1.821z'/%3E%3Ccircle cx='8' cy='12' r='4' fill='url(%23b)' opacity='.2'/%3E%3Cpath fill='%2366AFEB' fill-rule='nonzero' d='M5.56 17.452l-1.5 3.506c-.163.381.014.822.395.985.381.163.822-.014.985-.395l1.5-3.506c.163-.381-.014-.822-.395-.985-.381-.163-.822.014-.985.395zm4 0l-1.5 3.506c-.163.381.014.822.395.985.381.163.822-.014.985-.395l1.5-3.506c.163-.381-.014-.822-.395-.985-.381-.163-.822.014-.985.395zm4 0l-1.5 3.506c-.163.381.014.822.395.985.381.163.822-.014.985-.395l1.5-3.506c.163-.381-.014-.822-.395-.985-.381-.163-.822.014-.985.395zm4 0l-1.5 3.506c-.163.381.014.822.395.985.381.163.822-.014.985-.395l1.5-3.506c.163-.381-.014-.822-.395-.985-.381-.163-.822.014-.985.395z'/%3E%3Cpath fill='url(%23c)' d='M8 16c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182.563-1.842 2.277-3.182 4.304-3.182 2.485 0 4.5 2.015 4.5 4.5 0 .235-.018.465-.053.69.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11z'/%3E%3Cpath fill='url(%23d)' d='M9 9.5c0 2.485 2.015 4.5 4.5 4.5 2.251 0 4.115-1.652 4.447-3.81.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182-.128.417-.196.859-.196 1.318z'/%3E%3C/g%3E%3C/svg%3E");
+}
+.bkn_\+sn_d {
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='a' x1='100%25' x2='29.895%25' y1='0%25' y2='69.202%25'%3E%3Cstop offset='0%25' stop-color='%23FFB301'/%3E%3Cstop offset='100%25' stop-color='%23FFC533'/%3E%3C/linearGradient%3E%3ClinearGradient id='b' x1='50%25' x2='50%25' y1='0%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%239FC7FF'/%3E%3Cstop offset='100%25' stop-color='%239BC1F5'/%3E%3C/linearGradient%3E%3CradialGradient id='c' cx='55.585%25' cy='10.083%25' r='58.215%25' fx='55.585%25' fy='10.083%25' gradientTransform='matrix(0 -1 .719 0 .483 .657)'%3E%3Cstop offset='0%25' stop-color='%23486DA8' stop-opacity='.4'/%3E%3Cstop offset='100%25' stop-color='%23486DA8' stop-opacity='0'/%3E%3C/radialGradient%3E%3C/defs%3E%3Cg fill='none'%3E%3Ccircle cx='16' cy='8' r='4' fill='url(%23a)'/%3E%3Cpath fill='%23FFB300' fill-rule='nonzero' d='M15.48.73l.26 1.477c.174.985-1.304 1.245-1.477.26l-.26-1.477c-.174-.985 1.304-1.245 1.477-.26zm5.293 1.761l-.86 1.229c-.574.819-1.802-.041-1.229-.86l.86-1.229c.574-.819 1.802.041 1.229.86zm-10.281.736l1.229.86c.819.574-.041 1.802-.86 1.229l-1.229-.86c-.819-.574.041-1.802.86-1.229zm10.649 7.456l1.229.86c.819.574-.041 1.802-.86 1.229l-1.229-.86c-.819-.574.041-1.802.86-1.229zm2.13-3.204l-1.477.26c-.985.174-1.245-1.304-.26-1.477l1.477-.26c.985-.174 1.245 1.304.26 1.477z'/%3E%3Cpath fill='%2367C8E2' fill-rule='nonzero' d='M12.125 20.417l.682-.394c.722-.417 1.347.666.625 1.083l-.682.394.682.394c.722.417.097 1.499-.625 1.083l-.682-.394v.787c0 .345-.28.625-.625.625s-.625-.28-.625-.625v-.787l-.682.394c-.722.417-1.347-.666-.625-1.083l.682-.394-.682-.394c-.722-.417-.097-1.499.625-1.083l.682.394v-.787c0-.345.28-.625.625-.625s.625.28.625.625v.787zm6-1l.682-.394c.722-.417 1.347.666.625 1.083l-.682.394.682.394c.722.417.097 1.499-.625 1.083l-.682-.394v.787c0 .345-.28.625-.625.625s-.625-.28-.625-.625v-.787l-.682.394c-.722.417-1.347-.666-.625-1.083l.682-.394-.682-.394c-.722-.417-.097-1.499.625-1.083l.682.394v-.787c0-.345.28-.625.625-.625s.625.28.625.625v.787zm-12 0l.682-.394c.722-.417 1.347.666.625 1.083l-.682.394.682.394c.722.417.097 1.499-.625 1.083l-.682-.394v.787c0 .345-.28.625-.625.625s-.625-.28-.625-.625v-.787l-.682.394c-.722.417-1.347-.666-.625-1.083l.682-.394-.682-.394c-.722-.417-.097-1.499.625-1.083l.682.394v-.787c0-.345.28-.625.625-.625s.625.28.625.625v.787z'/%3E%3Cpath fill='url(%23b)' d='M6 17c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182.563-1.842 2.277-3.182 4.304-3.182 2.485 0 4.5 2.015 4.5 4.5 0 .235-.018.465-.053.69.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11z'/%3E%3Cpath fill='url(%23c)' d='M7 10.5c0 2.485 2.015 4.5 4.5 4.5 2.251 0 4.115-1.652 4.447-3.81.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182-.128.417-.196.859-.196 1.318z'/%3E%3C/g%3E%3C/svg%3E");
+}
+.bkn_\+sn_n {
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='a' x1='50%25' x2='50%25' y1='0%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%23FFBE1D'/%3E%3Cstop offset='100%25' stop-color='%23FFB300'/%3E%3C/linearGradient%3E%3ClinearGradient id='b' x1='50%25' x2='50%25' y1='0%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%239FC7FF'/%3E%3Cstop offset='100%25' stop-color='%239BC1F5'/%3E%3C/linearGradient%3E%3CradialGradient id='c' cx='55.585%25' cy='10.083%25' r='58.215%25' fx='55.585%25' fy='10.083%25' gradientTransform='matrix(0 -1 .719 0 .483 .657)'%3E%3Cstop offset='0%25' stop-color='%23486DA8' stop-opacity='.4'/%3E%3Cstop offset='100%25' stop-color='%23486DA8' stop-opacity='0'/%3E%3C/radialGradient%3E%3C/defs%3E%3Cg fill='none'%3E%3Cpath fill='url(%23a)' d='M7.508 1.367c1.684.711 2.867 2.378 2.867 4.321 0 2.589-2.099 4.688-4.688 4.688-1.943 0-3.61-1.182-4.321-2.867.56.236 1.175.367 1.821.367 2.589 0 4.688-2.099 4.688-4.688 0-.646-.131-1.261-.367-1.821z'/%3E%3Cpath fill='%2367C8E2' fill-rule='nonzero' d='M13.125 19.417l.682-.394c.722-.417 1.347.666.625 1.083l-.682.394.682.394c.722.417.097 1.499-.625 1.083l-.682-.394v.787c0 .345-.28.625-.625.625s-.625-.28-.625-.625v-.787l-.682.394c-.722.417-1.347-.666-.625-1.083l.682-.394-.682-.394c-.722-.417-.097-1.499.625-1.083l.682.394v-.787c0-.345.28-.625.625-.625s.625.28.625.625v.787zm6-1l.682-.394c.722-.417 1.347.666.625 1.083l-.682.394.682.394c.722.417.097 1.499-.625 1.083l-.682-.394v.787c0 .345-.28.625-.625.625s-.625-.28-.625-.625v-.787l-.682.394c-.722.417-1.347-.666-.625-1.083l.682-.394-.682-.394c-.722-.417-.097-1.499.625-1.083l.682.394v-.787c0-.345.28-.625.625-.625s.625.28.625.625v.787zm-12 0l.682-.394c.722-.417 1.347.666.625 1.083l-.682.394.682.394c.722.417.097 1.499-.625 1.083l-.682-.394v.787c0 .345-.28.625-.625.625s-.625-.28-.625-.625v-.787l-.682.394c-.722.417-1.347-.666-.625-1.083l.682-.394-.682-.394c-.722-.417-.097-1.499.625-1.083l.682.394v-.787c0-.345.28-.625.625-.625s.625.28.625.625v.787z'/%3E%3Cpath fill='url(%23b)' d='M8 16c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182.563-1.842 2.277-3.182 4.304-3.182 2.485 0 4.5 2.015 4.5 4.5 0 .235-.018.465-.053.69.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11z'/%3E%3Cpath fill='url(%23c)' d='M9 9.5c0 2.485 2.015 4.5 4.5 4.5 2.251 0 4.115-1.652 4.447-3.81.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182-.128.417-.196.859-.196 1.318z'/%3E%3C/g%3E%3C/svg%3E");
+}
+.bkn_-ra_d {
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='a' x1='100%25' x2='29.895%25' y1='0%25' y2='69.202%25'%3E%3Cstop offset='0%25' stop-color='%23FFB301'/%3E%3Cstop offset='100%25' stop-color='%23FFC533'/%3E%3C/linearGradient%3E%3ClinearGradient id='b' x1='50%25' x2='50%25' y1='0%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%239FC7FF'/%3E%3Cstop offset='100%25' stop-color='%239BC1F5'/%3E%3C/linearGradient%3E%3CradialGradient id='c' cx='55.585%25' cy='10.083%25' r='58.215%25' fx='55.585%25' fy='10.083%25' gradientTransform='matrix(0 -1 .719 0 .483 .657)'%3E%3Cstop offset='0%25' stop-color='%23486DA8' stop-opacity='.4'/%3E%3Cstop offset='100%25' stop-color='%23486DA8' stop-opacity='0'/%3E%3C/radialGradient%3E%3C/defs%3E%3Cg fill='none'%3E%3Ccircle cx='16' cy='8' r='4' fill='url(%23a)'/%3E%3Cpath fill='%23FFB300' fill-rule='nonzero' d='M15.48.73l.26 1.477c.174.985-1.304 1.245-1.477.26l-.26-1.477c-.174-.985 1.304-1.245 1.477-.26zm5.293 1.761l-.86 1.229c-.574.819-1.802-.041-1.229-.86l.86-1.229c.574-.819 1.802.041 1.229.86zm-10.281.736l1.229.86c.819.574-.041 1.802-.86 1.229l-1.229-.86c-.819-.574.041-1.802.86-1.229zm10.649 7.456l1.229.86c.819.574-.041 1.802-.86 1.229l-1.229-.86c-.819-.574.041-1.802.86-1.229zm2.13-3.204l-1.477.26c-.985.174-1.245-1.304-.26-1.477l1.477-.26c.985-.174 1.245 1.304.26 1.477z'/%3E%3Cpath fill='%2366AFEB' fill-rule='nonzero' d='M7.109 19.463l-1.05 2.499c-.16.382.019.822.401.982.382.16.822-.019.982-.401l1.05-2.499c.16-.382-.019-.822-.401-.982-.382-.16-.822.019-.982.401zm5-1l-1.05 2.499c-.16.382.019.822.401.982.382.16.822-.019.982-.401l1.05-2.499c.16-.382-.019-.822-.401-.982-.382-.16-.822.019-.982.401z'/%3E%3Cpath fill='url(%23b)' d='M6 17c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182.563-1.842 2.277-3.182 4.304-3.182 2.485 0 4.5 2.015 4.5 4.5 0 .235-.018.465-.053.69.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11z'/%3E%3Cpath fill='url(%23c)' d='M7 10.5c0 2.485 2.015 4.5 4.5 4.5 2.251 0 4.115-1.652 4.447-3.81.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182-.128.417-.196.859-.196 1.318z'/%3E%3C/g%3E%3C/svg%3E");
+}
+.bkn_-ra_n {
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='a' x1='50%25' x2='50%25' y1='0%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%23FFBE1D'/%3E%3Cstop offset='100%25' stop-color='%23FFB300'/%3E%3C/linearGradient%3E%3ClinearGradient id='b' x1='50%25' x2='50%25' y1='0%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%239FC7FF'/%3E%3Cstop offset='100%25' stop-color='%239BC1F5'/%3E%3C/linearGradient%3E%3CradialGradient id='c' cx='55.585%25' cy='10.083%25' r='58.215%25' fx='55.585%25' fy='10.083%25' gradientTransform='matrix(0 -1 .719 0 .483 .657)'%3E%3Cstop offset='0%25' stop-color='%23486DA8' stop-opacity='.4'/%3E%3Cstop offset='100%25' stop-color='%23486DA8' stop-opacity='0'/%3E%3C/radialGradient%3E%3C/defs%3E%3Cg fill='none'%3E%3Cpath fill='url(%23a)' d='M7.508 1.367c1.684.711 2.867 2.378 2.867 4.321 0 2.589-2.099 4.688-4.688 4.688-1.943 0-3.61-1.182-4.321-2.867.56.236 1.175.367 1.821.367 2.589 0 4.688-2.099 4.688-4.688 0-.646-.131-1.261-.367-1.821z'/%3E%3Cpath fill='%2366AFEB' fill-rule='nonzero' d='M9.109 18.463l-1.05 2.499c-.16.382.019.822.401.982.382.16.822-.019.982-.401l1.05-2.499c.16-.382-.019-.822-.401-.982-.382-.16-.822.019-.982.401zm5-1l-1.05 2.499c-.16.382.019.822.401.982.382.16.822-.019.982-.401l1.05-2.499c.16-.382-.019-.822-.401-.982-.382-.16-.822.019-.982.401z'/%3E%3Cpath fill='url(%23b)' d='M8 16c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182.563-1.842 2.277-3.182 4.304-3.182 2.485 0 4.5 2.015 4.5 4.5 0 .235-.018.465-.053.69.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11z'/%3E%3Cpath fill='url(%23c)' d='M9 9.5c0 2.485 2.015 4.5 4.5 4.5 2.251 0 4.115-1.652 4.447-3.81.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182-.128.417-.196.859-.196 1.318z'/%3E%3C/g%3E%3C/svg%3E");
+}
+.bkn_-sn_d {
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='a' x1='100%25' x2='29.895%25' y1='0%25' y2='69.202%25'%3E%3Cstop offset='0%25' stop-color='%23FFB301'/%3E%3Cstop offset='100%25' stop-color='%23FFC533'/%3E%3C/linearGradient%3E%3ClinearGradient id='b' x1='50%25' x2='50%25' y1='0%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%239FC7FF'/%3E%3Cstop offset='100%25' stop-color='%239BC1F5'/%3E%3C/linearGradient%3E%3CradialGradient id='c' cx='55.585%25' cy='10.083%25' r='58.215%25' fx='55.585%25' fy='10.083%25' gradientTransform='matrix(0 -1 .719 0 .483 .657)'%3E%3Cstop offset='0%25' stop-color='%23486DA8' stop-opacity='.4'/%3E%3Cstop offset='100%25' stop-color='%23486DA8' stop-opacity='0'/%3E%3C/radialGradient%3E%3C/defs%3E%3Cg fill='none'%3E%3Ccircle cx='16' cy='8' r='4' fill='url(%23a)'/%3E%3Cpath fill='%23FFB300' fill-rule='nonzero' d='M15.48.73l.26 1.477c.174.985-1.304 1.245-1.477.26l-.26-1.477c-.174-.985 1.304-1.245 1.477-.26zm5.293 1.761l-.86 1.229c-.574.819-1.802-.041-1.229-.86l.86-1.229c.574-.819 1.802.041 1.229.86zm-10.281.736l1.229.86c.819.574-.041 1.802-.86 1.229l-1.229-.86c-.819-.574.041-1.802.86-1.229zm10.649 7.456l1.229.86c.819.574-.041 1.802-.86 1.229l-1.229-.86c-.819-.574.041-1.802.86-1.229zm2.13-3.204l-1.477.26c-.985.174-1.245-1.304-.26-1.477l1.477-.26c.985-.174 1.245 1.304.26 1.477z'/%3E%3Cpath fill='%2367C8E2' fill-rule='nonzero' d='M12.125 19.417l.682-.394c.722-.417 1.347.666.625 1.083l-.682.394.682.394c.722.417.097 1.499-.625 1.083l-.682-.394v.787c0 .345-.28.625-.625.625s-.625-.28-.625-.625v-.787l-.682.394c-.722.417-1.347-.666-.625-1.083l.682-.394-.682-.394c-.722-.417-.097-1.499.625-1.083l.682.394v-.787c0-.345.28-.625.625-.625s.625.28.625.625v.787z'/%3E%3Cpath fill='url(%23b)' d='M6 17c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182.563-1.842 2.277-3.182 4.304-3.182 2.485 0 4.5 2.015 4.5 4.5 0 .235-.018.465-.053.69.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11z'/%3E%3Cpath fill='url(%23c)' d='M7 10.5c0 2.485 2.015 4.5 4.5 4.5 2.251 0 4.115-1.652 4.447-3.81.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182-.128.417-.196.859-.196 1.318z'/%3E%3C/g%3E%3C/svg%3E");
+}
+.bkn_-sn_n {
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='a' x1='50%25' x2='50%25' y1='0%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%23FFBE1D'/%3E%3Cstop offset='100%25' stop-color='%23FFB300'/%3E%3C/linearGradient%3E%3ClinearGradient id='b' x1='50%25' x2='50%25' y1='0%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%239FC7FF'/%3E%3Cstop offset='100%25' stop-color='%239BC1F5'/%3E%3C/linearGradient%3E%3CradialGradient id='c' cx='55.585%25' cy='10.083%25' r='58.215%25' fx='55.585%25' fy='10.083%25' gradientTransform='matrix(0 -1 .719 0 .483 .657)'%3E%3Cstop offset='0%25' stop-color='%23486DA8' stop-opacity='.4'/%3E%3Cstop offset='100%25' stop-color='%23486DA8' stop-opacity='0'/%3E%3C/radialGradient%3E%3C/defs%3E%3Cg fill='none'%3E%3Cpath fill='url(%23a)' d='M7.508 1.367c1.684.711 2.867 2.378 2.867 4.321 0 2.589-2.099 4.688-4.688 4.688-1.943 0-3.61-1.182-4.321-2.867.56.236 1.175.367 1.821.367 2.589 0 4.688-2.099 4.688-4.688 0-.646-.131-1.261-.367-1.821z'/%3E%3Cpath fill='%2367C8E2' fill-rule='nonzero' d='M13.125 18.417l.682-.394c.722-.417 1.347.666.625 1.083l-.682.394.682.394c.722.417.097 1.499-.625 1.083l-.682-.394v.787c0 .345-.28.625-.625.625s-.625-.28-.625-.625v-.787l-.682.394c-.722.417-1.347-.666-.625-1.083l.682-.394-.682-.394c-.722-.417-.097-1.499.625-1.083l.682.394v-.787c0-.345.28-.625.625-.625s.625.28.625.625v.787z'/%3E%3Cpath fill='url(%23b)' d='M8 16c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182.563-1.842 2.277-3.182 4.304-3.182 2.485 0 4.5 2.015 4.5 4.5 0 .235-.018.465-.053.69.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11z'/%3E%3Cpath fill='url(%23c)' d='M9 9.5c0 2.485 2.015 4.5 4.5 4.5 2.251 0 4.115-1.652 4.447-3.81.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182-.128.417-.196.859-.196 1.318z'/%3E%3C/g%3E%3C/svg%3E");
+}
+.bkn_d {
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='a' x1='100%25' x2='29.895%25' y1='0%25' y2='69.202%25'%3E%3Cstop offset='0%25' stop-color='%23FFB301'/%3E%3Cstop offset='100%25' stop-color='%23FFC533'/%3E%3C/linearGradient%3E%3ClinearGradient id='b' x1='50%25' x2='50%25' y1='0%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%239FC7FF'/%3E%3Cstop offset='100%25' stop-color='%239BC1F5'/%3E%3C/linearGradient%3E%3CradialGradient id='c' cx='55.585%25' cy='10.083%25' r='58.215%25' fx='55.585%25' fy='10.083%25' gradientTransform='matrix(0 -1 .719 0 .483 .657)'%3E%3Cstop offset='0%25' stop-color='%23486DA8' stop-opacity='.4'/%3E%3Cstop offset='100%25' stop-color='%23486DA8' stop-opacity='0'/%3E%3C/radialGradient%3E%3C/defs%3E%3Cg fill='none'%3E%3Ccircle cx='16' cy='10' r='4' fill='url(%23a)'/%3E%3Cpath fill='%23FFB300' fill-rule='nonzero' d='M15.48 2.73l.26 1.477c.174.985-1.304 1.245-1.477.26l-.26-1.477c-.174-.985 1.304-1.245 1.477-.26zm5.293 1.761l-.86 1.229c-.574.819-1.802-.041-1.229-.86l.86-1.229c.574-.819 1.802.041 1.229.86zm-10.281.736l1.229.86c.819.574-.041 1.802-.86 1.229l-1.229-.86c-.819-.574.041-1.802.86-1.229zm10.649 7.456l1.229.86c.819.574-.041 1.802-.86 1.229l-1.229-.86c-.819-.574.041-1.802.86-1.229zm2.13-3.204l-1.477.26c-.985.174-1.245-1.304-.26-1.477l1.477-.26c.985-.174 1.245 1.304.26 1.477z'/%3E%3Cpath fill='url(%23b)' d='M6 19c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182.563-1.842 2.277-3.182 4.304-3.182 2.485 0 4.5 2.015 4.5 4.5 0 .235-.018.465-.053.69.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11z'/%3E%3Cpath fill='url(%23c)' d='M7 12.5c0 2.485 2.015 4.5 4.5 4.5 2.251 0 4.115-1.652 4.447-3.81.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182-.128.417-.196.859-.196 1.318z'/%3E%3C/g%3E%3C/svg%3E");
+}
+.bkn_n {
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='a' x1='50%25' x2='75.446%25' y1='50%25' y2='75.581%25'%3E%3Cstop offset='0%25' stop-color='%23FFB301'/%3E%3Cstop offset='100%25' stop-color='%23FFC533'/%3E%3C/linearGradient%3E%3ClinearGradient id='b' x1='50%25' x2='50%25' y1='0%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%239FC7FF'/%3E%3Cstop offset='100%25' stop-color='%239BC1F5'/%3E%3C/linearGradient%3E%3CradialGradient id='c' cx='55.585%25' cy='10.083%25' r='58.215%25' fx='55.585%25' fy='10.083%25' gradientTransform='matrix(0 -1 .719 0 .483 .657)'%3E%3Cstop offset='0%25' stop-color='%23486DA8' stop-opacity='.4'/%3E%3Cstop offset='100%25' stop-color='%23486DA8' stop-opacity='0'/%3E%3C/radialGradient%3E%3C/defs%3E%3Cg fill='none'%3E%3Cpath fill='url(%23a)' d='M7.508 3.367c1.684.711 2.867 2.378 2.867 4.321 0 2.589-2.099 4.688-4.688 4.688-1.943 0-3.61-1.182-4.321-2.867.56.236 1.175.367 1.821.367 2.589 0 4.688-2.099 4.688-4.688 0-.646-.131-1.261-.367-1.821z'/%3E%3Cpath fill='url(%23b)' d='M8 18c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182.563-1.842 2.277-3.182 4.304-3.182 2.485 0 4.5 2.015 4.5 4.5 0 .235-.018.465-.053.69.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11z'/%3E%3Cpath fill='url(%23c)' d='M9 11.5c0 2.485 2.015 4.5 4.5 4.5 2.251 0 4.115-1.652 4.447-3.81.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182-.128.417-.196.859-.196 1.318z'/%3E%3C/g%3E%3C/svg%3E");
+}
+.bkn_ra_d {
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='a' x1='100%25' x2='29.895%25' y1='0%25' y2='69.202%25'%3E%3Cstop offset='0%25' stop-color='%23FFB301'/%3E%3Cstop offset='100%25' stop-color='%23FFC533'/%3E%3C/linearGradient%3E%3ClinearGradient id='b' x1='50%25' x2='50%25' y1='0%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%239FC7FF'/%3E%3Cstop offset='100%25' stop-color='%239BC1F5'/%3E%3C/linearGradient%3E%3CradialGradient id='c' cx='55.585%25' cy='10.083%25' r='58.215%25' fx='55.585%25' fy='10.083%25' gradientTransform='matrix(0 -1 .719 0 .483 .657)'%3E%3Cstop offset='0%25' stop-color='%23486DA8' stop-opacity='.4'/%3E%3Cstop offset='100%25' stop-color='%23486DA8' stop-opacity='0'/%3E%3C/radialGradient%3E%3C/defs%3E%3Cg fill='none'%3E%3Ccircle cx='16' cy='8' r='4' fill='url(%23a)'/%3E%3Cpath fill='%23FFB300' fill-rule='nonzero' d='M15.48.73l.26 1.477c.174.985-1.304 1.245-1.477.26l-.26-1.477c-.174-.985 1.304-1.245 1.477-.26zm5.293 1.761l-.86 1.229c-.574.819-1.802-.041-1.229-.86l.86-1.229c.574-.819 1.802.041 1.229.86zm-10.281.736l1.229.86c.819.574-.041 1.802-.86 1.229l-1.229-.86c-.819-.574.041-1.802.86-1.229zm10.649 7.456l1.229.86c.819.574-.041 1.802-.86 1.229l-1.229-.86c-.819-.574.041-1.802.86-1.229zm2.13-3.204l-1.477.26c-.985.174-1.245-1.304-.26-1.477l1.477-.26c.985-.174 1.245 1.304.26 1.477z'/%3E%3Cpath fill='%2366AFEB' fill-rule='nonzero' d='M6.109 19.463l-1.05 2.499c-.16.382.019.822.401.982.382.16.822-.019.982-.401l1.05-2.499c.16-.382-.019-.822-.401-.982-.382-.16-.822.019-.982.401zm8 0l-1.05 2.499c-.16.382.019.822.401.982.382.16.822-.019.982-.401l1.05-2.499c.16-.382-.019-.822-.401-.982-.382-.16-.822.019-.982.401zm-4-1l-1.05 2.499c-.16.382.019.822.401.982.382.16.822-.019.982-.401l1.05-2.499c.16-.382-.019-.822-.401-.982-.382-.16-.822.019-.982.401z'/%3E%3Cpath fill='url(%23b)' d='M6 17c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182.563-1.842 2.277-3.182 4.304-3.182 2.485 0 4.5 2.015 4.5 4.5 0 .235-.018.465-.053.69.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11z'/%3E%3Cpath fill='url(%23c)' d='M7 10.5c0 2.485 2.015 4.5 4.5 4.5 2.251 0 4.115-1.652 4.447-3.81.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182-.128.417-.196.859-.196 1.318z'/%3E%3C/g%3E%3C/svg%3E");
+}
+.bkn_ra_n {
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='a' x1='50%25' x2='50%25' y1='0%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%23FFBE1D'/%3E%3Cstop offset='100%25' stop-color='%23FFB300'/%3E%3C/linearGradient%3E%3ClinearGradient id='b' x1='50%25' x2='50%25' y1='0%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%239FC7FF'/%3E%3Cstop offset='100%25' stop-color='%239BC1F5'/%3E%3C/linearGradient%3E%3CradialGradient id='c' cx='55.585%25' cy='10.083%25' r='58.215%25' fx='55.585%25' fy='10.083%25' gradientTransform='matrix(0 -1 .719 0 .483 .657)'%3E%3Cstop offset='0%25' stop-color='%23486DA8' stop-opacity='.4'/%3E%3Cstop offset='100%25' stop-color='%23486DA8' stop-opacity='0'/%3E%3C/radialGradient%3E%3C/defs%3E%3Cg fill='none'%3E%3Cpath fill='url(%23a)' d='M7.508 1.367c1.684.711 2.867 2.378 2.867 4.321 0 2.589-2.099 4.688-4.688 4.688-1.943 0-3.61-1.182-4.321-2.867.56.236 1.175.367 1.821.367 2.589 0 4.688-2.099 4.688-4.688 0-.646-.131-1.261-.367-1.821z'/%3E%3Cpath fill='%2366AFEB' fill-rule='nonzero' d='M8.109 18.463l-1.05 2.499c-.16.382.019.822.401.982.382.16.822-.019.982-.401l1.05-2.499c.16-.382-.019-.822-.401-.982-.382-.16-.822.019-.982.401zm8 0l-1.05 2.499c-.16.382.019.822.401.982.382.16.822-.019.982-.401l1.05-2.499c.16-.382-.019-.822-.401-.982-.382-.16-.822.019-.982.401zm-4-1l-1.05 2.499c-.16.382.019.822.401.982.382.16.822-.019.982-.401l1.05-2.499c.16-.382-.019-.822-.401-.982-.382-.16-.822.019-.982.401z'/%3E%3Cpath fill='url(%23b)' d='M8 16c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182.563-1.842 2.277-3.182 4.304-3.182 2.485 0 4.5 2.015 4.5 4.5 0 .235-.018.465-.053.69.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11z'/%3E%3Cpath fill='url(%23c)' d='M9 9.5c0 2.485 2.015 4.5 4.5 4.5 2.251 0 4.115-1.652 4.447-3.81.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182-.128.417-.196.859-.196 1.318z'/%3E%3C/g%3E%3C/svg%3E");
+}
+.bkn_sn_d {
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='a' x1='100%25' x2='29.895%25' y1='0%25' y2='69.202%25'%3E%3Cstop offset='0%25' stop-color='%23FFB301'/%3E%3Cstop offset='100%25' stop-color='%23FFC533'/%3E%3C/linearGradient%3E%3ClinearGradient id='b' x1='50%25' x2='50%25' y1='0%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%239FC7FF'/%3E%3Cstop offset='100%25' stop-color='%239BC1F5'/%3E%3C/linearGradient%3E%3CradialGradient id='c' cx='55.585%25' cy='10.083%25' r='58.215%25' fx='55.585%25' fy='10.083%25' gradientTransform='matrix(0 -1 .719 0 .483 .657)'%3E%3Cstop offset='0%25' stop-color='%23486DA8' stop-opacity='.4'/%3E%3Cstop offset='100%25' stop-color='%23486DA8' stop-opacity='0'/%3E%3C/radialGradient%3E%3C/defs%3E%3Cg fill='none'%3E%3Ccircle cx='16' cy='8' r='4' fill='url(%23a)'/%3E%3Cpath fill='%23FFB300' fill-rule='nonzero' d='M14.002.99c-.072-.408.2-.797.608-.869.408-.072.797.2.869.608l.26 1.477c.072.408-.2.797-.608.869-.408.072-.797-.2-.869-.608l-.26-1.477zm6.77 1.501l-.86 1.229c-.574.819-1.802-.041-1.229-.86l.86-1.229c.574-.819 1.802.041 1.229.86zm-10.281.736l1.229.86c.819.574-.041 1.802-.86 1.229l-1.229-.86c-.819-.574.041-1.802.86-1.229zm10.649 7.456l1.229.86c.819.574-.041 1.802-.86 1.229l-1.229-.86c-.819-.574.041-1.802.86-1.229zm2.13-3.204l-1.477.26c-.985.174-1.245-1.304-.26-1.477l1.477-.26c.985-.174 1.245 1.304.26 1.477z'/%3E%3Cpath fill='%2367C8E2' fill-rule='nonzero' d='M16.125 20.417l.682-.394c.722-.417 1.347.666.625 1.083l-.682.394.682.394c.722.417.097 1.499-.625 1.083l-.682-.394v.787c0 .345-.28.625-.625.625s-.625-.28-.625-.625v-.787l-.682.394c-.722.417-1.347-.666-.625-1.083l.682-.394-.682-.394c-.722-.417-.097-1.499.625-1.083l.682.394v-.787c0-.345.28-.625.625-.625s.625.28.625.625v.787zm-7-1l.682-.394c.722-.417 1.347.666.625 1.083l-.682.394.682.394c.722.417.097 1.499-.625 1.083l-.682-.394v.787c0 .345-.28.625-.625.625s-.625-.28-.625-.625v-.787l-.682.394c-.722.417-1.347-.666-.625-1.083l.682-.394-.682-.394c-.722-.417-.097-1.499.625-1.083l.682.394v-.787c0-.345.28-.625.625-.625s.625.28.625.625v.787z'/%3E%3Cpath fill='url(%23b)' d='M6 17c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182.563-1.842 2.277-3.182 4.304-3.182 2.485 0 4.5 2.015 4.5 4.5 0 .235-.018.465-.053.69.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11z'/%3E%3Cpath fill='url(%23c)' d='M7 10.5c0 2.485 2.015 4.5 4.5 4.5 2.251 0 4.115-1.652 4.447-3.81.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182-.128.417-.196.859-.196 1.318z'/%3E%3C/g%3E%3C/svg%3E");
+}
+.bkn_sn_n {
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='a' x1='50%25' x2='50%25' y1='0%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%23FFBE1D'/%3E%3Cstop offset='100%25' stop-color='%23FFB300'/%3E%3C/linearGradient%3E%3ClinearGradient id='b' x1='50%25' x2='50%25' y1='0%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%239FC7FF'/%3E%3Cstop offset='100%25' stop-color='%239BC1F5'/%3E%3C/linearGradient%3E%3CradialGradient id='c' cx='55.585%25' cy='10.083%25' r='58.215%25' fx='55.585%25' fy='10.083%25' gradientTransform='matrix(0 -1 .719 0 .483 .657)'%3E%3Cstop offset='0%25' stop-color='%23486DA8' stop-opacity='.4'/%3E%3Cstop offset='100%25' stop-color='%23486DA8' stop-opacity='0'/%3E%3C/radialGradient%3E%3C/defs%3E%3Cg fill='none'%3E%3Cpath fill='url(%23a)' d='M7.508 1.367c1.684.711 2.867 2.378 2.867 4.321 0 2.589-2.099 4.688-4.688 4.688-1.943 0-3.61-1.182-4.321-2.867.56.236 1.175.367 1.821.367 2.589 0 4.688-2.099 4.688-4.688 0-.646-.131-1.261-.367-1.821z'/%3E%3Cpath fill='%2367C8E2' fill-rule='nonzero' d='M17.125 19.417l.682-.394c.722-.417 1.347.666.625 1.083l-.682.394.682.394c.722.417.097 1.499-.625 1.083l-.682-.394v.787c0 .345-.28.625-.625.625s-.625-.28-.625-.625v-.787l-.682.394c-.722.417-1.347-.666-.625-1.083l.682-.394-.682-.394c-.722-.417-.097-1.499.625-1.083l.682.394v-.787c0-.345.28-.625.625-.625s.625.28.625.625v.787zm-7-1l.682-.394c.722-.417 1.347.666.625 1.083l-.682.394.682.394c.722.417.097 1.499-.625 1.083l-.682-.394v.787c0 .345-.28.625-.625.625s-.625-.28-.625-.625v-.787l-.682.394c-.722.417-1.347-.666-.625-1.083l.682-.394-.682-.394c-.722-.417-.097-1.499.625-1.083l.682.394v-.787c0-.345.28-.625.625-.625s.625.28.625.625v.787z'/%3E%3Cpath fill='url(%23b)' d='M8 16c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182.563-1.842 2.277-3.182 4.304-3.182 2.485 0 4.5 2.015 4.5 4.5 0 .235-.018.465-.053.69.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11z'/%3E%3Cpath fill='url(%23c)' d='M9 9.5c0 2.485 2.015 4.5 4.5 4.5 2.251 0 4.115-1.652 4.447-3.81.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182-.128.417-.196.859-.196 1.318z'/%3E%3C/g%3E%3C/svg%3E");
+}
+.ovc {
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='a' x1='50%25' x2='50%25' y1='0%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%239FC7FF'/%3E%3Cstop offset='100%25' stop-color='%239BC1F5'/%3E%3C/linearGradient%3E%3CradialGradient id='b' cx='55.585%25' cy='10.083%25' r='58.215%25' fx='55.585%25' fy='10.083%25' gradientTransform='matrix(0 -1 .719 0 .483 .657)'%3E%3Cstop offset='0%25' stop-color='%23486DA8' stop-opacity='.4'/%3E%3Cstop offset='100%25' stop-color='%23486DA8' stop-opacity='0'/%3E%3C/radialGradient%3E%3C/defs%3E%3Cg fill='none'%3E%3Cpath fill='%2373A5E6' d='M19 14c1.657 0 3-1.343 3-3s-1.343-3-3-3h-.031c.02-.164.031-.331.031-.5 0-2.209-1.791-4-4-4-1.75 0-3.238 1.124-3.78 2.689-.385-.123-.794-.189-1.22-.189-2.209 0-4 1.791-4 4s1.791 4 4 4c.345 0 .68-.044 1-.126v.126h8z' opacity='.32'/%3E%3Cpath fill='url(%23a)' d='M6 19c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182.563-1.842 2.277-3.182 4.304-3.182 2.485 0 4.5 2.015 4.5 4.5 0 .235-.018.465-.053.69.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11z'/%3E%3Cpath fill='url(%23b)' d='M7 12.5c0 2.485 2.015 4.5 4.5 4.5 2.251 0 4.115-1.652 4.447-3.81.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182-.128.417-.196.859-.196 1.318z'/%3E%3C/g%3E%3C/svg%3E");
+}
+.ovc_\+ra {
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='a' x1='50%25' x2='50%25' y1='0%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%239FC7FF'/%3E%3Cstop offset='100%25' stop-color='%239BC1F5'/%3E%3C/linearGradient%3E%3CradialGradient id='b' cx='55.585%25' cy='10.083%25' r='58.215%25' fx='55.585%25' fy='10.083%25' gradientTransform='matrix(0 -1 .719 0 .483 .657)'%3E%3Cstop offset='0%25' stop-color='%23486DA8' stop-opacity='.4'/%3E%3Cstop offset='100%25' stop-color='%23486DA8' stop-opacity='0'/%3E%3C/radialGradient%3E%3C/defs%3E%3Cg fill='none'%3E%3Cpath fill='%2366AFEB' fill-rule='nonzero' d='M5.56 15.452l-1.5 3.506c-.163.381.014.822.395.985.381.163.822-.014.985-.395l1.5-3.506c.163-.381-.014-.822-.395-.985-.381-.163-.822.014-.985.395zm4 0l-1.5 3.506c-.163.381.014.822.395.985.381.163.822-.014.985-.395l1.5-3.506c.163-.381-.014-.822-.395-.985-.381-.163-.822.014-.985.395zm4 0l-1.5 3.506c-.163.381.014.822.395.985.381.163.822-.014.985-.395l1.5-3.506c.163-.381-.014-.822-.395-.985-.381-.163-.822.014-.985.395zm4 0l-1.5 3.506c-.163.381.014.822.395.985.381.163.822-.014.985-.395l1.5-3.506c.163-.381-.014-.822-.395-.985-.381-.163-.822.014-.985.395z'/%3E%3Cpath fill='url(%23a)' d='M7 14c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182.563-1.842 2.277-3.182 4.304-3.182 2.485 0 4.5 2.015 4.5 4.5 0 .235-.018.465-.053.69.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11z'/%3E%3Cpath fill='url(%23b)' d='M8 7.5c0 2.485 2.015 4.5 4.5 4.5 2.251 0 4.115-1.652 4.447-3.81.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182-.128.417-.196.859-.196 1.318z'/%3E%3C/g%3E%3C/svg%3E");
+}
+.ovc_\+sn {
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='a' x1='50%25' x2='50%25' y1='0%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%239FC7FF'/%3E%3Cstop offset='100%25' stop-color='%239BC1F5'/%3E%3C/linearGradient%3E%3CradialGradient id='b' cx='55.585%25' cy='10.083%25' r='58.215%25' fx='55.585%25' fy='10.083%25' gradientTransform='matrix(0 -1 .719 0 .483 .657)'%3E%3Cstop offset='0%25' stop-color='%23486DA8' stop-opacity='.4'/%3E%3Cstop offset='100%25' stop-color='%23486DA8' stop-opacity='0'/%3E%3C/radialGradient%3E%3C/defs%3E%3Cg fill='none'%3E%3Cpath fill='%2367C8E2' fill-rule='nonzero' d='M12.125 18.417l.682-.394c.722-.417 1.347.666.625 1.083l-.682.394.682.394c.722.417.097 1.499-.625 1.083l-.682-.394v.787c0 .345-.28.625-.625.625s-.625-.28-.625-.625v-.787l-.682.394c-.722.417-1.347-.666-.625-1.083l.682-.394-.682-.394c-.722-.417-.097-1.499.625-1.083l.682.394v-.787c0-.345.28-.625.625-.625s.625.28.625.625v.787zm6-2l.682-.394c.722-.417 1.347.666.625 1.083l-.682.394.682.394c.722.417.097 1.499-.625 1.083l-.682-.394v.787c0 .345-.28.625-.625.625s-.625-.28-.625-.625v-.787l-.682.394c-.722.417-1.347-.666-.625-1.083l.682-.394-.682-.394c-.722-.417-.097-1.499.625-1.083l.682.394v-.787c0-.345.28-.625.625-.625s.625.28.625.625v.787zm-12 0l.682-.394c.722-.417 1.347.666.625 1.083l-.682.394.682.394c.722.417.097 1.499-.625 1.083l-.682-.394v.787c0 .345-.28.625-.625.625s-.625-.28-.625-.625v-.787l-.682.394c-.722.417-1.347-.666-.625-1.083l.682-.394-.682-.394c-.722-.417-.097-1.499.625-1.083l.682.394v-.787c0-.345.28-.625.625-.625s.625.28.625.625v.787z'/%3E%3Cpath fill='url(%23a)' d='M7 14c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182.563-1.842 2.277-3.182 4.304-3.182 2.485 0 4.5 2.015 4.5 4.5 0 .235-.018.465-.053.69.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11z'/%3E%3Cpath fill='url(%23b)' d='M8 7.5c0 2.485 2.015 4.5 4.5 4.5 2.251 0 4.115-1.652 4.447-3.81.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182-.128.417-.196.859-.196 1.318z'/%3E%3C/g%3E%3C/svg%3E");
+}
+.ovc_-ra {
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='a' x1='50%25' x2='50%25' y1='0%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%239FC7FF'/%3E%3Cstop offset='100%25' stop-color='%239BC1F5'/%3E%3C/linearGradient%3E%3CradialGradient id='b' cx='55.585%25' cy='10.083%25' r='58.215%25' fx='55.585%25' fy='10.083%25' gradientTransform='matrix(0 -1 .719 0 .483 .657)'%3E%3Cstop offset='0%25' stop-color='%23486DA8' stop-opacity='.4'/%3E%3Cstop offset='100%25' stop-color='%23486DA8' stop-opacity='0'/%3E%3C/radialGradient%3E%3C/defs%3E%3Cg fill='none'%3E%3Cpath fill='%2366AFEB' fill-rule='nonzero' d='M8.109 16.463l-1.05 2.499c-.16.382.019.822.401.982.382.16.822-.019.982-.401l1.05-2.499c.16-.382-.019-.822-.401-.982-.382-.16-.822.019-.982.401zm5-1l-1.05 2.499c-.16.382.019.822.401.982.382.16.822-.019.982-.401l1.05-2.499c.16-.382-.019-.822-.401-.982-.382-.16-.822.019-.982.401z'/%3E%3Cpath fill='url(%23a)' d='M7 14c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182.563-1.842 2.277-3.182 4.304-3.182 2.485 0 4.5 2.015 4.5 4.5 0 .235-.018.465-.053.69.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11z'/%3E%3Cpath fill='url(%23b)' d='M8 7.5c0 2.485 2.015 4.5 4.5 4.5 2.251 0 4.115-1.652 4.447-3.81.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182-.128.417-.196.859-.196 1.318z'/%3E%3C/g%3E%3C/svg%3E");
+}
+.ovc_-sn {
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='a' x1='50%25' x2='50%25' y1='0%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%239FC7FF'/%3E%3Cstop offset='100%25' stop-color='%239BC1F5'/%3E%3C/linearGradient%3E%3CradialGradient id='b' cx='55.585%25' cy='10.083%25' r='58.215%25' fx='55.585%25' fy='10.083%25' gradientTransform='matrix(0 -1 .719 0 .483 .657)'%3E%3Cstop offset='0%25' stop-color='%23486DA8' stop-opacity='.4'/%3E%3Cstop offset='100%25' stop-color='%23486DA8' stop-opacity='0'/%3E%3C/radialGradient%3E%3C/defs%3E%3Cg fill='none'%3E%3Cpath fill='%2367C8E2' fill-rule='nonzero' d='M12.125 17.417l.682-.394c.722-.417 1.347.666.625 1.083l-.682.394.682.394c.722.417.097 1.499-.625 1.083l-.682-.394v.787c0 .345-.28.625-.625.625s-.625-.28-.625-.625v-.787l-.682.394c-.722.417-1.347-.666-.625-1.083l.682-.394-.682-.394c-.722-.417-.097-1.499.625-1.083l.682.394v-.787c0-.345.28-.625.625-.625s.625.28.625.625v.787z'/%3E%3Cpath fill='url(%23a)' d='M7 15c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182.563-1.842 2.277-3.182 4.304-3.182 2.485 0 4.5 2.015 4.5 4.5 0 .235-.018.465-.053.69.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11z'/%3E%3Cpath fill='url(%23b)' d='M8 8.5c0 2.485 2.015 4.5 4.5 4.5 2.251 0 4.115-1.652 4.447-3.81.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182-.128.417-.196.859-.196 1.318z'/%3E%3C/g%3E%3C/svg%3E");
+}
+.ovc_ra {
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='a' x1='50%25' x2='50%25' y1='0%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%239FC7FF'/%3E%3Cstop offset='100%25' stop-color='%239BC1F5'/%3E%3C/linearGradient%3E%3CradialGradient id='b' cx='55.585%25' cy='10.083%25' r='58.215%25' fx='55.585%25' fy='10.083%25' gradientTransform='matrix(0 -1 .719 0 .483 .657)'%3E%3Cstop offset='0%25' stop-color='%23486DA8' stop-opacity='.4'/%3E%3Cstop offset='100%25' stop-color='%23486DA8' stop-opacity='0'/%3E%3C/radialGradient%3E%3C/defs%3E%3Cg fill='none'%3E%3Cpath fill='%2366AFEB' fill-rule='nonzero' d='M7.109 16.463l-1.05 2.499c-.16.382.019.822.401.982.382.16.822-.019.982-.401l1.05-2.499c.16-.382-.019-.822-.401-.982-.382-.16-.822.019-.982.401zm8 0l-1.05 2.499c-.16.382.019.822.401.982.382.16.822-.019.982-.401l1.05-2.499c.16-.382-.019-.822-.401-.982-.382-.16-.822.019-.982.401zm-4-1l-1.05 2.499c-.16.382.019.822.401.982.382.16.822-.019.982-.401l1.05-2.499c.16-.382-.019-.822-.401-.982-.382-.16-.822.019-.982.401z'/%3E%3Cpath fill='url(%23a)' d='M7 14c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182.563-1.842 2.277-3.182 4.304-3.182 2.485 0 4.5 2.015 4.5 4.5 0 .235-.018.465-.053.69.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11z'/%3E%3Cpath fill='url(%23b)' d='M8 7.5c0 2.485 2.015 4.5 4.5 4.5 2.251 0 4.115-1.652 4.447-3.81.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182-.128.417-.196.859-.196 1.318z'/%3E%3C/g%3E%3C/svg%3E");
+}
+.ovc_ra_sn {
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='a' x1='50%25' x2='50%25' y1='0%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%239FC7FF'/%3E%3Cstop offset='100%25' stop-color='%239BC1F5'/%3E%3C/linearGradient%3E%3CradialGradient id='b' cx='55.585%25' cy='10.083%25' r='58.215%25' fx='55.585%25' fy='10.083%25' gradientTransform='matrix(0 -1 .719 0 .483 .657)'%3E%3Cstop offset='0%25' stop-color='%23486DA8' stop-opacity='.4'/%3E%3Cstop offset='100%25' stop-color='%23486DA8' stop-opacity='0'/%3E%3C/radialGradient%3E%3C/defs%3E%3Cg fill='none'%3E%3Cpath fill='%2367C8E2' fill-rule='nonzero' d='M16.125 17.417l.682-.394c.722-.417 1.347.666.625 1.083l-.682.394.682.394c.722.417.097 1.499-.625 1.083l-.682-.394v.787c0 .345-.28.625-.625.625s-.625-.28-.625-.625v-.787l-.682.394c-.722.417-1.347-.666-.625-1.083l.682-.394-.682-.394c-.722-.417-.097-1.499.625-1.083l.682.394v-.787c0-.345.28-.625.625-.625s.625.28.625.625v.787z'/%3E%3Cpath fill='%2366AFEB' fill-rule='nonzero' d='M5.109 16.463l-1.05 2.499c-.16.382.019.822.401.982.382.16.822-.019.982-.401l1.05-2.499c.16-.382-.019-.822-.401-.982-.382-.16-.822.019-.982.401zm5-1l-1.05 2.499c-.16.382.019.822.401.982.382.16.822-.019.982-.401l1.05-2.499c.16-.382-.019-.822-.401-.982-.382-.16-.822.019-.982.401z'/%3E%3Cpath fill='url(%23a)' d='M7 14c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182.563-1.842 2.277-3.182 4.304-3.182 2.485 0 4.5 2.015 4.5 4.5 0 .235-.018.465-.053.69.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11z'/%3E%3Cpath fill='url(%23b)' d='M8 7.5c0 2.485 2.015 4.5 4.5 4.5 2.251 0 4.115-1.652 4.447-3.81.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182-.128.417-.196.859-.196 1.318z'/%3E%3C/g%3E%3C/svg%3E");
+}
+.ovc_sn {
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='a' x1='50%25' x2='50%25' y1='0%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%239FC7FF'/%3E%3Cstop offset='100%25' stop-color='%239BC1F5'/%3E%3C/linearGradient%3E%3CradialGradient id='b' cx='55.585%25' cy='10.083%25' r='58.215%25' fx='55.585%25' fy='10.083%25' gradientTransform='matrix(0 -1 .719 0 .483 .657)'%3E%3Cstop offset='0%25' stop-color='%23486DA8' stop-opacity='.4'/%3E%3Cstop offset='100%25' stop-color='%23486DA8' stop-opacity='0'/%3E%3C/radialGradient%3E%3C/defs%3E%3Cg fill='none'%3E%3Cpath fill='%2367C8E2' fill-rule='nonzero' d='M16.125 18.417l.682-.394c.722-.417 1.347.666.625 1.083l-.682.394.682.394c.722.417.097 1.499-.625 1.083l-.682-.394v.787c0 .345-.28.625-.625.625s-.625-.28-.625-.625v-.787l-.682.394c-.722.417-1.347-.666-.625-1.083l.682-.394-.682-.394c-.722-.417-.097-1.499.625-1.083l.682.394v-.787c0-.345.28-.625.625-.625s.625.28.625.625v.787zm-7-2l.682-.394c.722-.417 1.347.666.625 1.083l-.682.394.682.394c.722.417.097 1.499-.625 1.083l-.682-.394v.787c0 .345-.28.625-.625.625s-.625-.28-.625-.625v-.787l-.682.394c-.722.417-1.347-.666-.625-1.083l.682-.394-.682-.394c-.722-.417-.097-1.499.625-1.083l.682.394v-.787c0-.345.28-.625.625-.625s.625.28.625.625v.787z'/%3E%3Cpath fill='url(%23a)' d='M7 14c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182.563-1.842 2.277-3.182 4.304-3.182 2.485 0 4.5 2.015 4.5 4.5 0 .235-.018.465-.053.69.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11z'/%3E%3Cpath fill='url(%23b)' d='M8 7.5c0 2.485 2.015 4.5 4.5 4.5 2.251 0 4.115-1.652 4.447-3.81.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182-.128.417-.196.859-.196 1.318z'/%3E%3C/g%3E%3C/svg%3E");
+}
+.ovc_ts {
+	background-image: url("data:image/svg+xml,%0A%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='a' x1='50%25' x2='50%25' y1='0%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%23FFBE1D'/%3E%3Cstop offset='100%25' stop-color='%23FFB300'/%3E%3C/linearGradient%3E%3ClinearGradient id='b' x1='50%25' x2='50%25' y1='0%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%239FC7FF'/%3E%3Cstop offset='100%25' stop-color='%239BC1F5'/%3E%3C/linearGradient%3E%3CradialGradient id='c' cx='55.585%25' cy='10.083%25' r='58.215%25' fx='55.585%25' fy='10.083%25' gradientTransform='matrix(0 -1 .719 0 .483 .657)'%3E%3Cstop offset='0%25' stop-color='%23486DA8' stop-opacity='.4'/%3E%3Cstop offset='100%25' stop-color='%23486DA8' stop-opacity='0'/%3E%3C/radialGradient%3E%3C/defs%3E%3Cg fill='none'%3E%3Cpath fill='url(%23a)' d='M14 13h-4l-1 5h3v5l4-7-3.19-.024z'/%3E%3Cpath fill='url(%23b)' d='M7 14c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182.563-1.842 2.277-3.182 4.304-3.182 2.485 0 4.5 2.015 4.5 4.5 0 .235-.018.465-.053.69.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11z'/%3E%3Cpath fill='url(%23c)' d='M8 7.5c0 2.485 2.015 4.5 4.5 4.5 2.251 0 4.115-1.652 4.447-3.81.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182-.128.417-.196.859-.196 1.318z'/%3E%3C/g%3E%3C/svg%3E");
+}
+.ovc_ts_ra {
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='a' x1='50%25' x2='50%25' y1='0%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%23FFBE1D'/%3E%3Cstop offset='100%25' stop-color='%23FFB300'/%3E%3C/linearGradient%3E%3ClinearGradient id='b' x1='50%25' x2='50%25' y1='0%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%239FC7FF'/%3E%3Cstop offset='100%25' stop-color='%239BC1F5'/%3E%3C/linearGradient%3E%3CradialGradient id='c' cx='55.585%25' cy='10.083%25' r='58.215%25' fx='55.585%25' fy='10.083%25' gradientTransform='matrix(0 -1 .719 0 .483 .657)'%3E%3Cstop offset='0%25' stop-color='%23486DA8' stop-opacity='.4'/%3E%3Cstop offset='100%25' stop-color='%23486DA8' stop-opacity='0'/%3E%3C/radialGradient%3E%3C/defs%3E%3Cg fill='none'%3E%3Cpath fill='url(%23a)' d='M13 13h-4l-1 5h3v5l4-7-3.19-.024z'/%3E%3Cpath fill='%2366AFEB' fill-rule='nonzero' d='M5.109 16.463l-1.05 2.499c-.16.382.019.822.401.982.382.16.822-.019.982-.401l1.05-2.499c.16-.382-.019-.822-.401-.982-.382-.16-.822.019-.982.401zm12-1l-1.05 2.499c-.16.382.019.822.401.982.382.16.822-.019.982-.401l1.05-2.499c.16-.382-.019-.822-.401-.982-.382-.16-.822.019-.982.401z'/%3E%3Cpath fill='url(%23b)' d='M7 14c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182.563-1.842 2.277-3.182 4.304-3.182 2.485 0 4.5 2.015 4.5 4.5 0 .235-.018.465-.053.69.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11z'/%3E%3Cpath fill='url(%23c)' d='M8 7.5c0 2.485 2.015 4.5 4.5 4.5 2.251 0 4.115-1.652 4.447-3.81.328-.123.682-.19 1.053-.19 1.657 0 3 1.343 3 3s-1.343 3-3 3h-11c-2.209 0-4-1.791-4-4s1.791-4 4-4c.417 0 .818.064 1.196.182-.128.417-.196.859-.196 1.318z'/%3E%3C/g%3E%3C/svg%3E");
+}
+.skc_d {
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='a' x1='50%25' x2='50%25' y1='0%25' y2='98.667%25'%3E%3Cstop offset='0%25' stop-color='%23FFC227'/%3E%3Cstop offset='100%25' stop-color='%23FFB300'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cg fill='none'%3E%3Ccircle cx='12' cy='12' r='5' fill='url(%23a)'/%3E%3Cpath fill='%23FFB300' fill-rule='nonzero' d='M16.699 2.603l-1.175 2.837c-.383.924-1.769.35-1.386-.574l1.175-2.837c.383-.924 1.769-.35 1.386.574zm-6.846 16.527l-1.175 2.837c-.383.924-1.769.35-1.386-.574l1.175-2.837c.383-.924 1.769-.35 1.386.574zm12.112-10.449l-2.837 1.175c-.924.383-1.498-1.003-.574-1.386l2.837-1.175c.924-.383 1.498 1.003.574 1.386zm-16.527 6.846l-2.837 1.175c-.924.383-1.498-1.003-.574-1.386l2.837-1.175c.924-.383 1.498 1.003.574 1.386zm15.953 1.176l-2.837-1.175c-.924-.383-.35-1.769.574-1.386l2.837 1.175c.924.383.35 1.769-.574 1.386zm-16.527-6.846l-2.837-1.175c-.924-.383-.35-1.769.574-1.386l2.837 1.175c.924.383.35 1.769-.574 1.386zm3.813-7.829l1.175 2.837c.383.924-1.003 1.498-1.386.574l-1.175-2.837c-.383-.924 1.003-1.498 1.386-.574zm6.846 16.527l1.175 2.837c.383.924-1.003 1.498-1.386.574l-1.175-2.837c-.383-.924 1.003-1.498 1.386-.574z'/%3E%3C/g%3E%3C/svg%3E");
+}
+.skc_n {
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='a' x1='50%25' x2='50%25' y1='0%25' y2='98.667%25'%3E%3Cstop offset='0%25' stop-color='%23FFC227'/%3E%3Cstop offset='100%25' stop-color='%23FFB300'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath fill='url(%23a)' fill-rule='evenodd' d='M14.413 4.587c2.695 1.137 4.587 3.804 4.587 6.913 0 4.142-3.358 7.5-7.5 7.5-3.109 0-5.776-1.892-6.913-4.587.896.378 1.88.587 2.913.587 4.142 0 7.5-3.358 7.5-7.5 0-1.033-.209-2.018-.587-2.913z'/%3E%3C/svg%3E");
+}
+.moon_0{
+	background-image: url("data:image/svg+xml,%3Csvg preserveAspectRatio='xMinYMid' viewBox='0 0 150 150' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M75 15a20 20 0 110 120 20 20 0 110-120' fill='%23ffe56a'/%3E%3C/svg%3E");
+}
+.moon_1{
+	background-image: url("data:image/svg+xml,%3Csvg preserveAspectRatio='xMinYMid' viewBox='0 0 150 150' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M75 15a20 20 0 110 120 15 20 0 100-120' fill='%23727272'/%3E%3Cpath d='M75 15a15 20 0 110 120 20 20 0 110-120' fill='%23ffe56a'/%3E%3C/svg%3E");
+}
+.moon_2{
+	background-image: url("data:image/svg+xml,%3Csvg preserveAspectRatio='xMinYMid' viewBox='0 0 150 150' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M75 15a20 20 0 110 120 10 20 0 100-120' fill='%23727272'/%3E%3Cpath d='M75 15a10 20 0 110 120 20 20 0 110-120' fill='%23ffe56a'/%3E%3C/svg%3E");
+}
+.moon_3{
+	background-image: url("data:image/svg+xml,%3Csvg preserveAspectRatio='xMinYMid' viewBox='0 0 150 150' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M75 15a20 20 0 110 120 5 20 0 100-120' fill='%23727272'/%3E%3Cpath fill='%23ffe56a' d='M75 15a5 20 0 110 120 20 20 0 110-120'/%3E%3C/svg%3E");
+}
+.moon_4{
+	background-image: url("data:image/svg+xml,%3Csvg preserveAspectRatio='xMinYMid' viewBox='0 0 150 150' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M75 15a20 20 0 110 120V15' fill='%23727272'/%3E%3Cpath d='M75 15v120a20 20 0 110-120' fill='%23ffe56a'/%3E%3C/svg%3E");
+}
+.moon_5{
+	background-image: url("data:image/svg+xml,%3Csvg preserveAspectRatio='xMinYMid' viewBox='0 0 150 150' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill='%23727272' d='M75 15a20 20 0 110 120 5 20 0 110-120'/%3E%3Cpath d='M75 15a5 20 0 100 120 20 20 0 110-120' fill='%23ffe56a'/%3E%3C/svg%3E");
+}
+.moon_6{
+	background-image: url("data:image/svg+xml,%3Csvg preserveAspectRatio='xMinYMid' viewBox='0 0 150 150' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill='%23727272' d='M75 15a20 20 0 110 120 10 20 0 110-120'/%3E%3Cpath d='M75 15a10 20 0 100 120 20 20 0 110-120' fill='%23ffe56a'/%3E%3C/svg%3E");
+}
+.moon_7{
+	background-image: url("data:image/svg+xml,%3Csvg preserveAspectRatio='xMinYMid' viewBox='0 0 150 150' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M75 15a20 20 0 110 120 15 20 0 110-120' fill='%23727272'/%3E%3Cpath d='M75 15a15 20 0 100 120 20 20 0 110-120' fill='%23ffe56a'/%3E%3C/svg%3E");
+}
+.moon_8{
+	background-image: url("data:image/svg+xml,%3Csvg preserveAspectRatio='xMinYMid' viewBox='0 0 150 150' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill='%23727272' d='M75 15a20 20 0 110 120 20 20 0 110-120'/%3E%3C/svg%3E");
+}
+.moon_9{
+	background-image: url("data:image/svg+xml,%3Csvg preserveAspectRatio='xMinYMid' viewBox='0 0 150 150' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M75 15a15 20 0 110 120 20 20 0 110-120' fill='%23727272'/%3E%3Cpath d='M75 15a20 20 0 110 120 15 20 0 100-120' fill='%23ffe56a'/%3E%3C/svg%3E");
+}
+.moon_10{
+	background-image: url("data:image/svg+xml,%3Csvg preserveAspectRatio='xMinYMid' viewBox='0 0 150 150' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill='%23727272' d='M75 15a10 20 0 110 120 20 20 0 110-120'/%3E%3Cpath d='M75 15a20 20 0 110 120 10 20 0 100-120' fill='%23ffe56a'/%3E%3C/svg%3E");
+}
+.moon_11{
+	background-image: url("data:image/svg+xml,%3Csvg preserveAspectRatio='xMinYMid' viewBox='0 0 150 150' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M75 15a5 20 0 110 120 20 20 0 110-120' fill='%23727272'/%3E%3Cpath d='M75 15a20 20 0 110 120 5 20 0 100-120' fill='%23ffe56a'/%3E%3C/svg%3E");
+}
+.moon_12{
+	background-image: url("data:image/svg+xml,%3Csvg preserveAspectRatio='xMinYMid' viewBox='0 0 150 150' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M75 15v120a20 20 0 110-120' fill='%23727272'/%3E%3Cpath d='M75 15a20 20 0 110 120V15' fill='%23ffe56a'/%3E%3C/svg%3E");
+}
+.moon_13{
+	background-image: url("data:image/svg+xml,%3Csvg preserveAspectRatio='xMinYMid' viewBox='0 0 150 150' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M75 15a5 20 0 100 120 20 20 0 110-120' fill='%23727272'/%3E%3Cpath d='M75 15a20 20 0 110 120 5 20 0 110-120' fill='%23ffe56a'/%3E%3C/svg%3E");
+}
+.moon_14{
+	background-image: url("data:image/svg+xml,%3Csvg preserveAspectRatio='xMinYMid' viewBox='0 0 150 150' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill='%23727272' d='M75 15a10 20 0 100 120 20 20 0 110-120'/%3E%3Cpath d='M75 15a20 20 0 110 120 10 20 0 110-120' fill='%23ffe56a'/%3E%3C/svg%3E");
+}
+.moon_15{
+	background-image: url("data:image/svg+xml,%3Csvg preserveAspectRatio='xMinYMid' viewBox='0 0 150 150' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M75 15a15 20 0 100 120 20 20 0 110-120' fill='%23727272'/%3E%3Cpath d='M75 15a20 20 0 110 120 15 20 0 110-120' fill='%23ffe56a'/%3E%3C/svg%3E");
+}
+
+
+
+
+
+@media (orientation: landscape) {
+	html, body {
+		width: 100vw;
+		height: 100vh;
+		overflow: hidden;
+		background: #000;
+		margin: 0;
+		padding: 0;
+	}
+	#wrapper {
+		display: flex !important;
+		flex-direction: column !important;
+		width: 100vw !important;
+		height: 100vh !important;
+		box-sizing: border-box !important;
+		padding: 0 !important;
+		position: static !important;
+		background: #000 !important;
+	}
+	.spacer {
+		padding-bottom: 0 !important;
+		margin-bottom: 0 !important;
+	}
+
+	/* TOP SECTION: Maximum Width Clock & Date */
+	#datetime {
+		width: 100% !important;
+		height: 46vh !important;
+		display: flex !important;
+		flex-direction: column !important;
+		justify-content: center !important;
+		align-items: center !important;
+		position: static !important;
+		margin: 0 !important;
+		padding: 1.0vh 0 0.4vh 0 !important;
+		overflow: hidden !important;
+		border-bottom: 1px solid rgba(255, 255, 255, 0.15) !important;
+		box-sizing: border-box !important;
+	}
+	html.has_system_bar #datetime {
+		padding-top: 1.8vh !important;
+	}
+	#wrapper.weather_stale #datetime {
+		height: 88vh !important;
+		border-bottom: none !important;
+	}
+	#wrapper.weather_stale #time {
+		font-size: 30vw !important;
+	}
+	#time {
+		position: static !important;
+		font-size: 22.0vw !important;
+		line-height: 0.90 !important;
+		letter-spacing: -0.4vw !important;
+		transform: none !important;
+		top: auto !important;
+		left: auto !important;
+		margin: 0 !important;
+		font-weight: 500 !important;
+		white-space: nowrap !important;
+		display: flex !important;
+		flex-direction: row !important;
+		align-items: center !important;
+		justify-content: center !important;
+	}
+	#time .colon {
+		display: inline-block !important;
+		margin: 0 0.5vw !important;
+		-webkit-transform: translateY(-0.6vw) !important;
+		transform: translateY(-0.6vw) !important;
+	}
+	#date {
+		position: static !important;
+		font-size: 3.6vw !important;
+		line-height: 1.1 !important;
+		transform: none !important;
+		top: auto !important;
+		left: auto !important;
+		width: auto !important;
+		margin-top: 0.4vh !important;
+		font-weight: 500 !important;
+		opacity: 0.9 !important;
+	}
+
+	/* Completely collapse invisible sectors so they take 0 space in flex layout */
+	[class*="sector_"]:not(.visible),
+	#wind_humidity_pressure div[class*="sector_"]:not(.visible),
+	#wind_humidity_pressure .wind_humidity_pressure_bar[class*="sector_"]:not(.visible) {
+		display: none !important;
+		height: 0 !important;
+		margin: 0 !important;
+		padding: 0 !important;
+		border: none !important;
+	}
+
+	/* BOTTOM SECTION: 2 Columns (Left: Current Weather, Right: Forecast & Astro) */
+	#weather_body {
+		display: flex !important;
+		flex-direction: row !important;
+		width: 100% !important;
+		height: 54vh !important;
+		box-sizing: border-box !important;
+	}
+
+	/* LEFT COLUMN: Current Weather (aligned with forecast at top and flush to bottom) */
+	#now {
+		width: 50% !important;
+		height: 100% !important;
+		position: static !important;
+		display: flex !important;
+		flex-direction: column !important;
+		align-items: center !important;
+		justify-content: space-between !important;
+		border-right: 1px solid rgba(255, 255, 255, 0.15) !important;
+		padding: 0.6vh 2vw 2.8vh 2vw !important;
+		box-sizing: border-box !important;
+	}
+	#now_hero {
+		display: flex !important;
+		flex-direction: row !important;
+		align-items: center !important;
+		justify-content: center !important;
+		gap: 2.0vw !important;
+		width: 100% !important;
+	}
+	#icon {
+		position: static !important;
+		top: auto !important;
+		left: auto !important;
+		transform: none !important;
+		width: 9.6vw !important;
+		height: 9.6vw !important;
+		background-size: contain !important;
+		background-repeat: no-repeat !important;
+		margin: 0 !important;
+	}
+	#temperature_block {
+		position: static !important;
+		top: auto !important;
+		left: auto !important;
+		width: auto !important;
+		display: flex !important;
+		flex-direction: column !important;
+		align-items: flex-start !important;
+	}
+	#temperature {
+		font-size: 8.8vw !important;
+		line-height: 0.9 !important;
+		font-weight: bold !important;
+	}
+	#temperature_sub {
+		display: flex !important;
+		flex-direction: row !important;
+		gap: 1.2vw !important;
+		margin-top: 0.3vh !important;
+	}
+	#temperature_sub div {
+		width: auto !important;
+		font-size: 1.6vw !important;
+	}
+	#temperature_sub span {
+		display: inline !important;
+		padding-bottom: 0 !important;
+	}
+	#wind_humidity_pressure {
+		position: static !important;
+		top: auto !important;
+		right: auto !important;
+		width: 38vw !important;
+		display: flex !important;
+		flex-direction: column !important;
+		justify-content: center !important;
+	}
+	#wind_humidity_pressure div {
+		display: flex !important;
+		align-items: center !important;
+		white-space: nowrap !important;
+	}
+	#wind, #humidity, #pressure {
+		font-size: 3.4vw !important;
+		padding-left: 0.4vw !important;
+	}
+	#wind_humidity_pressure .wind_icon,
+	#wind_humidity_pressure .humidity_icon,
+	#wind_humidity_pressure .presure_icon {
+		min-height: 3vw !important;
+		min-width: 3vw !important;
+		background-size: 3vw 3vw !important;
+	}
+	.wind_humidity_pressure_bar {
+		height: 0.55vw !important;
+		border-radius: 0.4vw !important;
+		margin: 0.2vh 0 0.5vh !important;
+	}
+	.wind_humidity_progress, #pressure_progress {
+		height: 0.55vw !important;
+		border-radius: 0.4vw !important;
+	}
+
+	/* RIGHT COLUMN: Forecast (top) + Astro (bottom), pushed towards bottom */
+	#weather_right {
+		width: 50% !important;
+		height: 100% !important;
+		display: flex !important;
+		flex-direction: column !important;
+		justify-content: space-between !important;
+		padding: 0.6vh 1.5vw 2.8vh 1.5vw !important;
+		box-sizing: border-box !important;
+	}
+
+	#forecast {
+		width: 100% !important;
+		height: auto !important;
+		display: flex !important;
+		flex-direction: row !important;
+		justify-content: space-around !important;
+		align-items: center !important;
+		border-bottom: 1px solid rgba(255, 255, 255, 0.12) !important;
+		padding: 0 1vw 0.8vh 1vw !important;
+		box-sizing: border-box !important;
+	}
+	.forecast_part {
+		width: 48% !important;
+		padding: 0 !important;
+		display: flex !important;
+		flex-direction: column !important;
+		align-items: center !important;
+		justify-content: center !important;
+	}
+	.forecast_title {
+		font-size: 1.85vw !important;
+		margin-bottom: 0.2vh !important;
+		text-align: center !important;
+		opacity: 0.9 !important;
+	}
+	.forecast_temperature_wind {
+		display: flex !important;
+		align-items: center !important;
+		gap: 0.8vw !important;
+		font-size: 1.4vw !important;
+	}
+	.forecast_icon {
+		width: 4.6vw !important;
+		height: 4.6vw !important;
+		background-size: 4.6vw 4.6vw !important;
+	}
+	#forecast_temperature_0, #forecast_temperature_1, .forecast_temperature {
+		font-size: 6.5vw !important;
+		line-height: 0.95 !important;
+		font-weight: bold !important;
+		margin: 0 !important;
+	}
+	.forecast_wind_block {
+		display: flex !important;
+		align-items: center !important;
+		margin-top: 0.2vh !important;
+	}
+	.forecast_wind {
+		font-size: 3vw !important;
+	}
+	.forecast_wind_block .wind_icon {
+		height: 1.4vw !important;
+		width: 1.4vw !important;
+	}
+
+	#riseset {
+		width: 100% !important;
+		height: auto !important;
+		display: flex !important;
+		flex-direction: row !important;
+		justify-content: space-around !important;
+		align-items: center !important;
+		padding: 0.3vh 1vw 0 1vw !important;
+		box-sizing: border-box !important;
+	}
+	.riseset_block {
+		width: auto !important;
+		display: flex !important;
+		flex-direction: column !important;
+		align-items: center !important;
+		gap: 0.2vh !important;
+	}
+	.riseset_block span {
+		font-size: 3.6vw !important;
+		font-weight: bold !important;
+		line-height: 1 !important;
+	}
+	.rise, .set {
+		background-size: 3.4vw !important;
+		height: 3.4vw !important;
+		width: 3.4vw !important;
+		padding-bottom: 0 !important;
+	}
+	#duration_block {
+		width: 38% !important;
+		text-align: center !important;
+	}
+	#duration {
+		font-size: 1.5vw !important;
+	}
+	#duration_bar {
+		height: 0.5vw !important;
+		border-radius: 0.3vw !important;
+		margin: 0.2vh 0 !important;
+	}
+	#duration_time, #duration_progress {
+		border-radius: 0.3vw !important;
+	}
+	#duration_left {
+		font-size: 1.3vw !important;
+	}
+	#moon {
+		width: 4.8vw !important;
+		height: 4.8vw !important;
+		background-size: contain !important;
+	}
+	#status_bar {
+		font-size: 1.25vw !important;
+		padding: 0.2vh 1.5vw !important;
+		line-height: 1.2 !important;
+	}
+
+	/* ADAPTIVE RULES FOR TALLER LANDSCAPE (16:10 / 4:3, e.g. Digma 1280x800) */
+	@media screen and (orientation: landscape) and (max-aspect-ratio: 168/100),
+	       screen and (orientation: landscape) and (min-height: 680px) {
+		#datetime {
+			height: 53vh !important;
+			padding: 1.2vh 0 0.4vh 0 !important;
+		}
+		#wrapper.weather_stale #time {
+			font-size: 35vw !important;
+		}
+		#time {
+			font-size: 27.5vw !important;
+			line-height: 0.85 !important;
+			letter-spacing: -0.5vw !important;
+		}
+		#time .colon {
+			transform: translateY(-0.8vw) !important;
+		}
+		#date {
+			font-size: 4.1vw !important;
+			margin-top: 0.6vh !important;
+		}
+		#weather_body {
+			height: 47vh !important;
+		}
+		#now {
+			padding: 1.0vh 2vw 2.6vh 2vw !important;
+		}
+		#weather_right {
+			padding: 1.0vh 1.5vw 2.6vh 1.5vw !important;
+		}
+	}
+
+	html.screen_tall #datetime {
+		height: 53vh !important;
+		padding: 1.2vh 0 0.4vh 0 !important;
+	}
+	html.screen_tall #wrapper.weather_stale #time {
+		font-size: 35vw !important;
+	}
+	html.screen_tall #time {
+		font-size: 27.5vw !important;
+		line-height: 0.85 !important;
+		letter-spacing: -0.5vw !important;
+	}
+	html.screen_tall #time .colon {
+		transform: translateY(-0.8vw) !important;
+	}
+	html.screen_tall #date {
+		font-size: 4.1vw !important;
+		margin-top: 0.6vh !important;
+	}
+	html.screen_tall #weather_body {
+		height: 47vh !important;
+	}
+	html.screen_tall #now {
+		padding: 1.0vh 2vw 2.6vh 2vw !important;
+	}
+	html.screen_tall #weather_right {
+		padding: 1.0vh 1.5vw 2.6vh 1.5vw !important;
+	}
+}
+
+@media (orientation: portrait) {
+	#datetime {
+		height: auto !important;
+		padding: 2vh 0 0.5vh 0 !important;
+	}
+	#time {
+		font-size: 24vw !important;
+		line-height: 0.9 !important;
+		white-space: nowrap !important;
+	}
+	#date {
+		font-size: 6.5vw !important;
+		margin-top: 0.4vh !important;
+	}
+}
+
+@media screen and (orientation: landscape) and (min-aspect-ratio: 169/100) {
+	#riseset {
+		flex: 1 1 auto !important;
+	}
+}
+
+</style>
+	<div id="menu_btn">&#9776;</div>
+	<div id="weather_menu">
+		<div class="menu_title">Погода</div>
+		<div class="menu_item" id="menu_refresh">Обновить сейчас</div>
+		<div class="menu_title">Источник (по умолчанию)</div>
+		<div class="menu_item menu_src" data-src="default">По умолчанию</div>
+		<div class="menu_item menu_src" data-src="server">Локальный сервер</div>
+		<div class="menu_item menu_src" data-src="wttr">wttr.in</div>
+		<div class="menu_close" id="menu_close">Закрыть</div>
+	</div>
+	<div id="status_bar"></div>
+</body>
+</html>

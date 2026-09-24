@@ -1,0 +1,8 @@
+# реальный конфиг с ключом — не в репозитории (шаблон: config.example.json)
+config.json
+# рантайм-артефакты
+server.log
+weather_cache.json
+weather_stats.csv
+__pycache__/
+*.pyc
