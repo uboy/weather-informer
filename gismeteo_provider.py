@@ -36,9 +36,6 @@ def _moon_code():
     return int(round(frac * 8)) % 8
 
 
-MOON_CODE = _moon_code()
-
-
 class GismeteoError(Exception):
     """Ошибки провайдера Gismeteo (сеть, HTTP, XML, город не найден)."""
 
@@ -322,12 +319,12 @@ class GismeteoProvider:
         except (KeyError, ValueError):
             fact_hour = cur["_dt_local"].hour
         fact = {
-            "temp": self._i(fvals.get("t"), cur["temperature"] if cur["temperature"] is not None else 0),
+            "temp": self._i(fvals.get("t"), cur["temperature"]),
             "icon": self._icon(fvals, fact_hour),
-            "wind_speed": self._f(fvals.get("ws"), cur["wind_speed"] or 0),
+            "wind_speed": self._f(fvals.get("ws"), cur["wind_speed"]),
             "wind_angle": (self.WD_DEG[self._i(fvals.get("wd"), 0) % 8] if fvals.get("wd") is not None else cur["wind_direction"]),
-            "humidity": self._i(fvals.get("hum"), cur["humidity"] or 50),
-            "pressure_mm": self._i(fvals.get("p"), cur["pressure_mm"] or 748),
+            "humidity": self._i(fvals.get("hum"), cur["humidity"]),
+            "pressure_mm": self._i(fvals.get("p"), cur["pressure_mm"]),
             "condition": fvals.get("descr", cur["condition"]),
         }
 
@@ -339,7 +336,7 @@ class GismeteoProvider:
         forecasts = [{
             "sunrise": rise,
             "sunset": sett,
-            "moon_code": MOON_CODE,
+            "moon_code": _moon_code(),
             "hours": hours,
             "parts": parts,
         }, {"parts": next_night}]
@@ -424,15 +421,15 @@ class GismeteoProvider:
             mid = pts[len(pts) // 2]
             icon = self._icon_from_point(mid)
             return {
-                "temp_avg": round(sum(temps) / len(temps)) if temps else 0,
+                "temp_avg": round(sum(temps) / len(temps)) if temps else None,
                 "icon": icon,
-                "wind_speed": round(sum(winds) / len(winds), 1) if winds else 0,
-                "wind_angle": mid["wind_direction"] or 180,
+                "wind_speed": round(sum(winds) / len(winds), 1) if winds else None,
+                "wind_angle": mid["wind_direction"],
             }
 
         def part_or(date, h0, h1, fallback):
             p = make(date, h0, h1)
-            return p if p else {"temp_avg": 0, "icon": fallback, "wind_speed": 0, "wind_angle": 180}
+            return p if p else {"temp_avg": None, "icon": fallback, "wind_speed": None, "wind_angle": None}
 
         bkn_d, bkn_n = "bkn_d", "bkn_n"
         parts = {
@@ -485,7 +482,7 @@ class GismeteoProvider:
                     pt = by_hour[cand]
                     break
             t = pt["temperature"] if pt else None
-            out.append({"hour": str(h), "temp": int(t) if t is not None else 0})
+            out.append({"hour": str(h), "temp": (int(t) if t is not None else None)})
         return out
 
     @staticmethod

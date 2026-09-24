@@ -735,10 +735,10 @@ var fetch_from_owm = function(on_success, on_error) {
 					var arr = byName[name];
 					var b = arr.length ? arr[Math.floor(arr.length / 2)] : null;
 					parts[name] = {
-						temp_avg: b ? b.temp : 0,
+						temp_avg: b ? b.temp : null,
 						icon: b ? b.icon : 'bkn_d',
-						wind_speed: b ? b.wind_speed : 0,
-						wind_angle: b ? b.wind_angle : 180
+						wind_speed: b ? b.wind_speed : null,
+						wind_angle: (b && b.wind_angle != null) ? b.wind_angle : null
 					};
 				});
 				var city = om.city || {};
@@ -747,12 +747,12 @@ var fetch_from_owm = function(on_success, on_error) {
 				var fH = function(d) { return (d.getHours() < 10 ? '0' : '') + d.getHours() + ':' + (d.getMinutes() < 10 ? '0' : '') + d.getMinutes(); };
 				var converted = {
 					fact: {
-						temp: factB ? factB.temp : 0,
+						temp: factB ? factB.temp : null,
 						icon: factB ? factB.icon : 'bkn_d',
-						wind_speed: factB ? factB.wind_speed : 0,
-						wind_angle: factB ? factB.wind_angle : 180,
-						humidity: factB ? factB.humidity : 50,
-						pressure_mm: factB ? factB.pressure_mm : 750
+						wind_speed: factB ? factB.wind_speed : null,
+						wind_angle: (factB && factB.wind_angle != null) ? factB.wind_angle : null,
+						humidity: (factB && factB.humidity != null) ? factB.humidity : null,
+						pressure_mm: (factB && factB.pressure_mm != null) ? factB.pressure_mm : null
 					},
 					forecasts: [{
 						sunrise: fH(sr), sunset: fH(ss), moon_code: moonPhaseCode(),
@@ -853,7 +853,7 @@ var fetch_from_om_client = function(on_success, on_error) {
 						temp: Math.round(cw.temperature || 0),
 						icon: fact_icon,
 						wind_speed: Math.round(((cw.windspeed || 0) / 3.6) * 10) / 10,
-						wind_angle: Math.round(cw.winddirection || 180),
+						wind_angle: (cw.winddirection != null ? Math.round(cw.winddirection) : null),
 						humidity: (rh[hIdx] != null ? Math.round(rh[hIdx]) : null),
 						pressure_mm: (pr[hIdx] != null ? Math.round(pr[hIdx] * 0.750062) : null)
 					},
@@ -879,8 +879,8 @@ var fetch_from_7timer_client = function(on_success, on_error) {
 				var ds = st.dataseries || [];
 				var init = String(st.init || '000000000000');
 				var initH = parseInt(init.substring(8, 10), 10) || 0;
-				var BFT = [0.3, 1.6, 3.4, 5.5, 8, 10.8, 13.9, 17.2, 20.8, 24.5, 28.5, 32.7];
-				var DIR7 = { N: 0, NNE: 22, NE: 45, ENE: 67, E: 90, ESE: 112, SE: 135, SSE: 157, S: 180, SSW: 202, SW: 225, WSW: 247, W: 270, WNW: 292, NW: 315 };
+				var BFT = [0, 0.8, 2.4, 4.3, 6.7, 9.3, 12.3, 15.5, 18.9, 22.6, 26.4, 30.5, 34.7];
+				var DIR7 = { N: 0, NNE: 22, NE: 45, ENE: 67, E: 90, ESE: 112, SE: 135, SSE: 157, S: 180, SSW: 202, SW: 225, WSW: 247, W: 270, WNW: 292, NW: 315, NNW: 337 };
 				function icon7(b, hour) {
 					var cc = parseInt(b.cloudcover, 10) || 0;
 					var prec = String(b.prec_type || 'none').toLowerCase();
@@ -990,12 +990,15 @@ function fetch_from_wttr(on_success, on_error) {
 					var n = parseInt(x, 10);
 					return isNaN(n) ? fb : n;
 				};
+				var rn = function(v) { return v == null ? null : Math.round(v); };
 
-				var temp = Math.round(iv(cc.temp_C, 0));
-				var wind_speed = Math.round((iv(cc.windspeedKmph, 0) / 3.6) * 10) / 10;
-				var wind_angle = Math.round(iv(cc.winddirDegree, 0));
-				var humidity = Math.round(iv(cc.humidity, 50));
-				var pressure_mm = Math.round((iv(cc.pressure, 1013)) * 0.750062);
+				var temp = rn(iv(cc.temp_C));
+				var wsK = iv(cc.windspeedKmph);
+				var wind_speed = (wsK == null ? null : Math.round(wsK / 3.6 * 10) / 10);
+				var wind_angle = iv(cc.winddirDegree);
+				var humidity = iv(cc.humidity);
+				var p_hpa = iv(cc.pressure);
+				var pressure_mm = (p_hpa == null ? null : Math.round(p_hpa * 0.750062));
 
 				var hourNow = new Date().getHours();
 				var icon = get_wttr_icon(cc.weatherCode, (hourNow >= 8 && hourNow < 20));
@@ -1018,12 +1021,12 @@ function fetch_from_wttr(on_success, on_error) {
 						var isDayH = (hh * 60 >= srM && hh * 60 < ssM) ? 1 : 0;
 						dayHours.push({
 							hour: String(h),
-							temp: Math.round(iv(b.tempC, temp)),
+							temp: rn(iv(b.tempC, temp)),
 							icon: get_wttr_icon(b.weatherCode, isDayH),
-							wind_speed: Math.round((iv(b.windspeedKmph, 0) / 3.6) * 10) / 10,
-							wind_angle: Math.round(iv(b.winddirDegree, 0)),
-							humidity: Math.round(iv(b.humidity, 50)),
-							pressure_mm: Math.round(iv(b.pressure, 1013) * 0.750062)
+							wind_speed: (function(w) { return w == null ? null : Math.round(w / 3.6 * 10) / 10; })(iv(b.windspeedKmph)),
+							wind_angle: iv(b.winddirDegree),
+							humidity: iv(b.humidity),
+							pressure_mm: (function(hp) { return hp == null ? null : Math.round(hp * 0.750062); })(iv(b.pressure))
 						});
 					}
 
@@ -1464,8 +1467,9 @@ function render_weather(data) {
 		if (hourForecast.hasOwnProperty('icon')) result.icon = icon_daynight(hourForecast.icon, (data.forecasts && data.forecasts[0]) ? data.forecasts[0].sunrise : null, (data.forecasts && data.forecasts[0]) ? data.forecasts[0].sunset : null);
 		else if (data.fact.hasOwnProperty('icon')) result.icon = icon_daynight(data.fact.icon, (data.forecasts && data.forecasts[0]) ? data.forecasts[0].sunrise : null, (data.forecasts && data.forecasts[0]) ? data.forecasts[0].sunset : null);
 
-		if (hourForecast.hasOwnProperty('temp')) result.temperature = (hourForecast.temp > 0 ? '+' : '') + hourForecast.temp;
-		else if (data.fact.hasOwnProperty('temp')) result.temperature = (data.fact.temp > 0 ? '+' : '') + data.fact.temp;
+		if (hourForecast.hasOwnProperty('temp') && hourForecast.temp != null) result.temperature = (hourForecast.temp > 0 ? '+' : '') + hourForecast.temp;
+		else if (data.fact.hasOwnProperty('temp') && data.fact.temp != null) result.temperature = (data.fact.temp > 0 ? '+' : '') + data.fact.temp;
+		else result.temperature = '—';
 
 		if (hourForecast.hasOwnProperty('wind_speed') && hourForecast.wind_speed != null) {
 			result.wind = hourForecast.wind_speed;
@@ -1503,7 +1507,11 @@ function render_weather(data) {
 	} else {
 		// Свежий факт
 		if (data.fact.hasOwnProperty('icon')) result.icon = icon_daynight(data.fact.icon, (data.forecasts && data.forecasts[0]) ? data.forecasts[0].sunrise : null, (data.forecasts && data.forecasts[0]) ? data.forecasts[0].sunset : null);
-		if (data.fact.hasOwnProperty('temp')) result.temperature = (data.fact.temp > 0 ? '+' : '') + data.fact.temp;
+		if (data.fact.hasOwnProperty('temp') && data.fact.temp != null) {
+			result.temperature = (data.fact.temp > 0 ? '+' : '') + data.fact.temp;
+		} else {
+			result.temperature = '—';
+		}
 		if (data.fact.hasOwnProperty('wind_speed') && data.fact.wind_speed != null) {
 			result.wind = data.fact.wind_speed;
 			result.wind_progress = 'width: ' + (100 - Math.round(data.fact.wind_speed / wind_max * 100)) + '%';

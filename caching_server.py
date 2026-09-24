@@ -305,8 +305,9 @@ def fetch_from_openweathermap(lat, lon, api_key):
     temp = round(main.get("temp", 0))
     wind_speed = round(wind.get("speed", 0), 1)
     wind_angle = int(wind["deg"]) if wind.get("deg") is not None else None
-    humidity = int(main.get("humidity", 50) or 50)
-    pressure_mm = round(int(main.get("pressure", 1013) or 1013) * 0.750062)
+    humidity = int(main["humidity"]) if main.get("humidity") is not None else None
+    pressure_mm = (round(int(main["pressure"]) * 0.750062)
+                   if main.get("pressure") is not None else None)
     fact_icon = _owm_icon(w0)
     sunrise_dt = datetime.fromtimestamp(sys.get("sunrise", 0))
     sunset_dt = datetime.fromtimestamp(sys.get("sunset", 0))
@@ -325,7 +326,7 @@ def fetch_from_openweathermap(lat, lon, api_key):
         blocks.append({
             "date": dt_l.strftime("%Y-%m-%d"), "hour": dt_l.hour,
             "temp": round(it.get("main", {}).get("temp", 0)),
-            "humidity": int(it.get("main", {}).get("humidity", 50) or 50),
+            "humidity": (int(it["main"]["humidity"]) if it.get("main", {}).get("humidity") is not None else None),
             "wind_speed": round(it.get("wind", {}).get("speed", 0), 1),
             "wind_angle": (int(it["wind"]["deg"]) if it.get("wind", {}).get("deg") is not None else None),
             "icon": _owm_icon((it.get("weather") or [{}])[0])
@@ -404,9 +405,11 @@ def fetch_from_openmeteo(lat, lon, proxy=None):
     if "time" in hourly and curr_time in hourly["time"]:
         h_idx = hourly["time"].index(curr_time)
 
-    humidity = hourly.get("relativehumidity_2m", [50])[h_idx]
-    pressure_hpa = hourly.get("surface_pressure", [1013])[h_idx]
-    pressure_mm = round(pressure_hpa * 0.750062)
+    rh_list = hourly.get("relativehumidity_2m") or []
+    sp_list = hourly.get("surface_pressure") or []
+    humidity = rh_list[h_idx] if h_idx < len(rh_list) and rh_list[h_idx] is not None else None
+    pressure_mm = (round(sp_list[h_idx] * 0.750062)
+                   if h_idx < len(sp_list) and sp_list[h_idx] is not None else None)
 
     def _om_icon(wcode, is_day):
         suf = "_d" if is_day else "_n"
@@ -430,12 +433,8 @@ def fetch_from_openmeteo(lat, lon, proxy=None):
     is_day = cw.get("is_day", 1)
     icon = _om_icon(wcode, is_day)
 
-    sunrise = "06:00"
-    sunset = "19:00"
-    if daily.get("sunrise"):
-        sunrise = daily["sunrise"][0].split("T")[-1][:5]
-    if daily.get("sunset"):
-        sunset = daily["sunset"][0].split("T")[-1][:5]
+    sunrise = daily["sunrise"][0].split("T")[-1][:5] if daily.get("sunrise") else None
+    sunset = daily["sunset"][0].split("T")[-1][:5] if daily.get("sunset") else None
 
     def _hm(v):
         a = str(v).split(":")
@@ -583,12 +582,13 @@ def fetch_from_wttr(lat, lon):
     today = days[0] if days else {}
     hourly = today.get("hourly") or []
 
-    temp = int(cc.get("temp_C", 0) or 0)
-    humidity = int(cc.get("humidity", 50) or 50)
-    pressure_hpa = int(cc.get("pressure", 1013) or 1013)
-    pressure_mm = round(pressure_hpa * 0.750062)
-    wind_speed = round(int(cc.get("windspeedKmph", 0) or 0) / 3.6, 1)
-    wind_angle = int(cc.get("winddirDegree", 0) or 0)
+    temp = int(cc["temp_C"]) if cc.get("temp_C") is not None else None
+    humidity = int(cc["humidity"]) if cc.get("humidity") is not None else None
+    pressure_mm = (round(int(cc["pressure"]) * 0.750062)
+                   if cc.get("pressure") is not None else None)
+    wind_speed = (round(int(cc["windspeedKmph"]) / 3.6, 1)
+                  if cc.get("windspeedKmph") is not None else None)
+    wind_angle = int(cc["winddirDegree"]) if cc.get("winddirDegree") is not None else None
 
     hour_now = datetime.now().hour
     suf = "_d" if 8 <= hour_now < 20 else "_n"
@@ -610,7 +610,7 @@ def fetch_from_wttr(lat, lon):
         return {
             "temp_avg": int(b.get("tempC", temp) or temp),
             "icon": _icon_with_suffix(_wwo_icon(b.get("weatherCode", "116")), 8 <= hh < 20),
-            "wind_speed": round(int(b.get("windspeedKmph", 5) or 5) / 3.6, 1),
+            "wind_speed": (round(int(b["windspeedKmph"]) / 3.6, 1) if b.get("windspeedKmph") is not None else None),
             "wind_angle": (int(b["winddirDegree"]) if b.get("winddirDegree") is not None else None)
         }
 
