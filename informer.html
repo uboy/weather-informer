@@ -545,9 +545,12 @@ function load_config(callback) {
 var fetch_from_owm = function(on_success, on_error) {
 	if (!owm_key) { on_error(null, "no_owm_key", "нет ключа OpenWeatherMap"); return; }
 	var url = 'https://api.openweathermap.org/data/2.5/forecast?lat=' + lat + '&lon=' + lon + '&units=metric&appid=' + owm_key;
-	$.getJSON(url)
+	$.ajax({ url: url, dataType: 'json', timeout: 15000 })
 		.done(function(om) {
 			try {
+				var tz = ((om.city || {}).timezone) || 0;
+				var nowD = new Date();
+				var today = nowD.getFullYear() + '-' + ('0' + (nowD.getMonth() + 1)).slice(-2) + '-' + ('0' + nowD.getDate()).slice(-2);
 				var blocks = (om.list || []).map(function(it) {
 					var w = (it.weather && it.weather[0]) || {};
 					var id = parseInt(w.id, 10) || 800;
@@ -562,8 +565,14 @@ var fetch_from_owm = function(on_success, on_error) {
 					var dn = (String(w.icon || 'd').slice(-1) === 'd') ? '_d' : '_n';
 					var icon = (base === 'skc' || base === 'bkn') ? base + dn : base;
 					return {
-						date: String(it.dt_txt || '').substring(0, 10),
-						hour: parseInt(String(it.dt_txt || '0000-00-00 00').substring(11, 13), 10) || 0,
+						date: (function(dt) {
+							var d = new Date(Date.UTC(+dt.substring(0, 4), +dt.substring(5, 7) - 1, +dt.substring(8, 10), +dt.substring(11, 13), +dt.substring(14, 16)) + tz * 1000);
+							return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+						})(String(it.dt_txt || '')),
+						hour: (function(dt) {
+							var d = new Date(Date.UTC(+dt.substring(0, 4), +dt.substring(5, 7) - 1, +dt.substring(8, 10), +dt.substring(11, 13), +dt.substring(14, 16)) + tz * 1000);
+							return d.getHours();
+						})(String(it.dt_txt || '')),
 						temp: Math.round((it.main && it.main.temp) || 0),
 						icon: icon,
 						wind_speed: Math.round((((it.wind || {}).speed) || 0) * 10) / 10,
@@ -572,7 +581,6 @@ var fetch_from_owm = function(on_success, on_error) {
 						pressure_mm: Math.round((((it.main || {}).pressure) || 1013) * 0.750062)
 					};
 				});
-				var today = blocks.length ? blocks[0].date : '';
 				var byName = { morning: [], day: [], evening: [], night: [] };
 				for (var i = 0; i < blocks.length; i++) {
 					var b = blocks[i];
@@ -628,7 +636,7 @@ var fetch_from_owm = function(on_success, on_error) {
 var fetch_from_om_client = function(on_success, on_error) {
 	var url = 'https://api.open-meteo.com/v1/forecast?latitude=' + lat + '&longitude=' + lon +
 		'&current_weather=true&hourly=temperature_2m,weathercode,relativehumidity_2m,surface_pressure,windspeed_10m,winddirection_10m&daily=sunrise,sunset&timezone=auto';
-	$.getJSON(url)
+	$.ajax({ url: url, dataType: 'json', timeout: 15000 })
 		.done(function(om) {
 			try {
 				var cw = om.current_weather || {};
@@ -684,8 +692,8 @@ var fetch_from_om_client = function(on_success, on_error) {
 					fact: {
 						temp: Math.round(cw.temperature || 0),
 						icon: fact_icon,
-						wind_speed: wind_speed,
-						wind_angle: wind_angle,
+						wind_speed: Math.round(((cw.windspeed || 0) / 3.6) * 10) / 10,
+						wind_angle: Math.round(cw.winddirection || 180),
 						humidity: Math.round(rh[hIdx] || 50),
 						pressure_mm: Math.round((pr[hIdx] || 1013) * 0.750062)
 					},
@@ -705,7 +713,7 @@ var fetch_from_om_client = function(on_success, on_error) {
 
 var fetch_from_7timer_client = function(on_success, on_error) {
 	var url = 'http://www.7timer.info/bin/civil.php?lon=' + lon + '&lat=' + lat + '&ac=0&unit=metric&output=json&tzshift=0';
-	$.getJSON(url)
+	$.ajax({ url: url, dataType: 'json', timeout: 15000 })
 		.done(function(st) {
 			try {
 				var ds = st.dataseries || [];
@@ -1159,7 +1167,21 @@ function get_data() {
 
 		if (owm_key && !only_server) {
 			console.log("Trying OpenWeatherMap client fallback...");
-			fetch_from_owm(on_success, on_error);
+			fetch_from_owm(function(owm_data) {
+				console.log("OpenWeatherMap fallback SUCCESS");
+				current_weather_data = owm_data;
+				try {
+					localStorage.setItem('weather_cache_data', JSON.stringify(owm_data));
+					localStorage.setItem('weather_cache_time', String(Date.now()));
+					localStorage.setItem('weather_cache_source', 'OpenWeatherMap');
+					localStorage.removeItem('weather_last_attempt_error');
+				} catch (e) {}
+				render_weather(owm_data);
+				update_status_bar();
+			}, function(owm_xhr, owm_status, owm_err) {
+				console.log("OpenWeatherMap fallback failed, trying wttr.in");
+				show_error(xhr, status, err);
+			});
 			return;
 		}
 
