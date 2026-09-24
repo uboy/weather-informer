@@ -479,7 +479,7 @@ function init_menu() {
 	var menu = $("#weather_menu");
 	function render_src() {
 		var pref = safe_get_item("weather_source_pref", "default");
-		if (pref !== "server" && pref !== "wttr" && pref !== "owm" && pref !== "om" && pref !== "7timer" && pref !== "yandex") pref = "default";
+		if (pref !== "server" && pref !== "wttr" && pref !== "owm" && pref !== "om" && pref !== "7timer" && pref !== "yandex" && pref !== "gismeteo") pref = "default";
 		$(".menu_src").each(function() {
 			var src = $(this).attr("data-src");
 			if (src === "yandex" && !allow_direct_yandex) { $(this).hide(); return; }
@@ -680,8 +680,8 @@ var fetch_from_owm = function(on_success, on_error) {
 		.done(function(om) {
 			try {
 				var tz = ((om.city || {}).timezone) || 0;
-				var nowD = new Date();
-				var today = nowD.getFullYear() + '-' + ('0' + (nowD.getMonth() + 1)).slice(-2) + '-' + ('0' + nowD.getDate()).slice(-2);
+				var nowD = new Date(Date.now() - tz * 1000);
+				var today = nowD.getUTCFullYear() + '-' + ('0' + (nowD.getUTCMonth() + 1)).slice(-2) + '-' + ('0' + nowD.getUTCDate()).slice(-2);
 				var blocks = (om.list || []).map(function(it) {
 					var w = (it.weather && it.weather[0]) || {};
 					var id = parseInt(w.id, 10) || 800;
@@ -698,11 +698,11 @@ var fetch_from_owm = function(on_success, on_error) {
 					return {
 						date: (function(dt) {
 							var d = new Date(Date.UTC(+dt.substring(0, 4), +dt.substring(5, 7) - 1, +dt.substring(8, 10), +dt.substring(11, 13), +dt.substring(14, 16)) + tz * 1000);
-							return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+							return d.getUTCFullYear() + '-' + ('0' + (d.getUTCMonth() + 1)).slice(-2) + '-' + ('0' + d.getUTCDate()).slice(-2);
 						})(String(it.dt_txt || '')),
 						hour: (function(dt) {
 							var d = new Date(Date.UTC(+dt.substring(0, 4), +dt.substring(5, 7) - 1, +dt.substring(8, 10), +dt.substring(11, 13), +dt.substring(14, 16)) + tz * 1000);
-							return d.getHours();
+							return d.getUTCHours();
 						})(String(it.dt_txt || '')),
 						temp: Math.round((it.main && it.main.temp) || 0),
 						icon: icon,
@@ -785,6 +785,12 @@ var fetch_from_om_client = function(on_success, on_error) {
 					return 'bkn';
 				}
 				var fact_icon = base(cwCode) + (cwDay ? '_d' : '_n');
+				var hIdx = 0, _nowMs = Date.now();
+				for (var _i = 0; _i < ht.length; _i++) {
+					var _t = new Date(ht[_i]).getTime();
+					if (isNaN(_t)) continue;
+					if (_t <= _nowMs) hIdx = _i; else break;
+				}
 				var sr = (om.daily && om.daily.sunrise && om.daily.sunrise[0]) ? om.daily.sunrise[0].substring(11, 16) : '06:00';
 				var ss = (om.daily && om.daily.sunset && om.daily.sunset[0]) ? om.daily.sunset[0].substring(11, 16) : '19:00';
 				var srM = (+sr.substring(0, 2)) * 60 + (+sr.substring(3, 5));
@@ -1168,7 +1174,7 @@ function get_data() {
 
 	// Выбор источника из меню (localStorage weather_source_pref): default = обычная цепочка
 	var source_pref = safe_get_item("weather_source_pref", "default");
-	if (source_pref !== "server" && source_pref !== "wttr" && source_pref !== "owm" && source_pref !== "om" && source_pref !== "7timer" && source_pref !== "yandex") source_pref = "default";
+	if (source_pref !== "server" && source_pref !== "wttr" && source_pref !== "owm" && source_pref !== "om" && source_pref !== "7timer" && source_pref !== "yandex" && source_pref !== "gismeteo") source_pref = "default";
 	var only_server = (source_pref === "server");
 
 	if (source_pref === "owm") {
@@ -1258,6 +1264,12 @@ function get_data() {
 		return;
 	}
 
+	if (source_pref === "gismeteo" && server) {
+		// Gismeteo через сервер: сервер сам фетчит только Gismeteo для этой точки;
+		// при ошибке сервер вернёт 503 и сработает обычный клиентский фолбэк
+		server += "&source=gismeteo";
+	}
+
 	var primary_url, headers, is_direct_yandex;
 	if (server) {
 		primary_url = server;
@@ -1285,7 +1297,7 @@ function get_data() {
 				console.log("get_data SUCCESS from " + url + ":", JSON.stringify(result).substring(0, 100));
 				if (result.hasOwnProperty('fact') && result.hasOwnProperty('forecasts')) {
 					current_weather_data = result;
-					var sourceName = is_direct_yandex ? 'Яндекс.Погода' : 'Локальный сервер';
+					var sourceName = is_direct_yandex ? 'Яндекс.Погода' : (result.src || 'Локальный сервер');
 					try {
 						localStorage.setItem('weather_cache_data', JSON.stringify(result));
 						localStorage.setItem('weather_cache_time', String(Date.now()));
@@ -2489,6 +2501,7 @@ body {
 		<div class="menu_item menu_src" data-src="server">Локальный сервер</div>
 		<div class="menu_item menu_src" data-src="owm">OpenWeatherMap</div>
 		<div class="menu_item menu_src" data-src="om">Open-Meteo</div>
+		<div class="menu_item menu_src" data-src="gismeteo">Gismeteo</div>
 		<div class="menu_item menu_src" data-src="7timer">7timer</div>
 		<div class="menu_item menu_src" data-src="wttr">wttr.in</div>
 		<div class="menu_item menu_src" data-src="yandex" style="display:none">Яндекс (прямой)</div>

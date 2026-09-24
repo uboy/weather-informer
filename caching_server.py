@@ -22,6 +22,8 @@ import urllib.error
 import urllib.parse
 from urllib.parse import parse_qs, urlparse
 
+from gismeteo_provider import GismeteoProvider
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -90,6 +92,13 @@ def reverse_geocode(lat, lon):
     if not name:
         name = (res.get("display_name", "").split(",")[0] or "").strip()
     return {"name": name, "lat": round(float(lat), 4), "lon": round(float(lon), 4)}
+
+
+GISMETEO = GismeteoProvider(
+    geocode_fn=geocode_search,
+    city_cache_path=os.path.join(SCRIPT_DIR, "gismeteo_cities.json"),
+    logger=log,
+)
 STATS_FILE = os.path.join(SCRIPT_DIR, "weather_stats.csv")
 STATS_LOCK = threading.Lock()
 
@@ -102,6 +111,7 @@ DEFAULT_CONFIG = {
     "lon": 43.999303,
     "enable_openmeteo_fallback": True,
     "om_proxy": "",
+    "enable_gismeteo_fallback": True,
     "enable_wttr_fallback": True,
     "enable_7timer_fallback": True,
     "stats_enabled": True,
@@ -121,7 +131,7 @@ def load_config():
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 user_cfg = json.load(f)
                 cfg.update(user_cfg)
-                log.info("Loaded config from %s", CONFIG_FILE)
+                log.debug("Loaded config from %s", CONFIG_FILE)
         except Exception as e:
             log.warning("Could not parse %s: %s (using defaults)", CONFIG_FILE, e)
     return cfg
@@ -706,10 +716,11 @@ def fetch_weather(force=False):
     return get_weather_for(cfg.get("lat", 56.317722), cfg.get("lon", 43.999303), force=force)
 
 
-def get_weather_for(lat, lon, force=False):
+def get_weather_for(lat, lon, force=False, sources=None):
     """Погода для конкретной точки: свежий кэш — мгновенно,
-    устаревший — фетч с неблокирующим локом на точку."""
-    key = loc_key(lat, lon)
+    устаревший — фетч с неблокирующим локом на точку.
+    sources: None (вся цепочка) или кортеж имён источников-фильтр."""
+    key = loc_key(lat, lon) + (":" + ",".join(sorted(sources)) if sources else "")
     interval = load_config().get("cache_interval_minutes", 90) * 60
     entry = LOCATION_CACHE.get(key)
     if not force and entry and entry.get("data") and (time.time() - entry["ts"] < interval):
@@ -719,7 +730,7 @@ def get_weather_for(lat, lon, force=False):
         # другой поток уже обновляет эту точку — отдаём что есть (может быть None)
         return entry["data"] if entry else None
     try:
-        return _fetch_weather_locked(force, lat, lon)
+        return _fetch_weather_locked(force, lat, lon, sources)
     finally:
         lock.release()
 
@@ -729,12 +740,12 @@ def _store_location_result(key, data, note=None):
     global cached_data, last_fetch_time, last_error_message
     ts = time.time()
     LOCATION_CACHE[key] = {"data": data, "ts": ts}
-    if len(LOCATION_CACHE) > MAX_LOCATIONS:
-        for k in sorted(LOCATION_CACHE, key=lambda k: LOCATION_CACHE[k]["ts"])[:-MAX_LOCATIONS]:
-            if k != key:
-                LOCATION_CACHE.pop(k, None)
     cfg = load_config()
     defk = loc_key(cfg.get("lat", 56.317722), cfg.get("lon", 43.999303))
+    if len(LOCATION_CACHE) > MAX_LOCATIONS:
+        for k in sorted(LOCATION_CACHE, key=lambda k: LOCATION_CACHE[k]["ts"])[:-MAX_LOCATIONS]:
+            if k != key and k != defk:  # дефолтный город не эвиктим — иначе внеплановый расход квоты
+                LOCATION_CACHE.pop(k, None)
     if key == defk:
         cached_data = data
         last_fetch_time = ts
@@ -742,7 +753,7 @@ def _store_location_result(key, data, note=None):
         save_disk_cache(data)
 
 
-def _fetch_weather_locked(force, lat, lon):
+def _fetch_weather_locked(force, lat, lon, sources=None):
     global last_error_message
     key = loc_key(lat, lon)
     interval = load_config().get("cache_interval_minutes", 90) * 60
@@ -751,38 +762,44 @@ def _fetch_weather_locked(force, lat, lon):
     if not force and entry and entry.get("data") and (now - entry["ts"] < interval):
         return entry["data"]
 
+    def want(name):
+        return sources is None or name in sources
+
     api_key = load_config().get("api", "")
 
-    yandex_url = f"https://api.weather.yandex.ru/v2/forecast?lat={lat}&lon={lon}"
-    headers = {
-        "X-Yandex-Weather-Key": api_key,
-        "User-Agent": "WeatherInformerLocal/1.0"
-    }
+    if want("yandex"):
+        yandex_url = f"https://api.weather.yandex.ru/v2/forecast?lat={lat}&lon={lon}"
+        headers = {
+            "X-Yandex-Weather-Key": api_key,
+            "User-Agent": "WeatherInformerLocal/1.0"
+        }
 
-    log.info("Requesting Yandex Weather API (%s, %s) [%s]...", lat, lon, key)
-    req = urllib.request.Request(yandex_url, headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            if "fact" in data and "forecasts" in data:
-                data = normalize_weather_data(data)
-                _store_location_result(key, data, None)
-                stats_log_source("Yandex", data)
-                log.info("Successfully fetched and cached Yandex weather (temp: %s°)", data["fact"].get("temp"))
-                return data
-    except urllib.error.HTTPError as e:
-        last_error_message = f"Yandex HTTP {e.code}: {e.reason}"
-        log.warning("Yandex API returned HTTP %s: %s", e.code, e.reason)
-    except Exception as e:
-        last_error_message = f"Yandex request error: {e}"
-        log.warning("Yandex request failed: %s", e)
+        log.info("Requesting Yandex Weather API (%s, %s) [%s]...", lat, lon, key)
+        req = urllib.request.Request(yandex_url, headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                if "fact" in data and "forecasts" in data:
+                    data = normalize_weather_data(data)
+                    data["src"] = "Yandex"
+                    _store_location_result(key, data, None)
+                    stats_log_source("Yandex", data)
+                    log.info("Successfully fetched and cached Yandex weather (temp: %s°)", data["fact"].get("temp"))
+                    return data
+        except urllib.error.HTTPError as e:
+            last_error_message = f"Yandex HTTP {e.code}: {e.reason}"
+            log.warning("Yandex API returned HTTP %s: %s", e.code, e.reason)
+        except Exception as e:
+            last_error_message = f"Yandex request error: {e}"
+            log.warning("Yandex request failed: %s", e)
 
     # Fallback на OpenWeatherMap (если задан ключ) при ошибке Яндекса
-    if load_config().get("enable_openweathermap_fallback", True) and load_config().get("openweathermap_api_key", ""):
+    if want("owm") and load_config().get("enable_openweathermap_fallback", True) and load_config().get("openweathermap_api_key", ""):
         owm_key = load_config().get("openweathermap_api_key", "")
         log.info("Attempting fallback to OpenWeatherMap...")
         try:
             owm_data = fetch_from_openweathermap(lat, lon, owm_key)
+            owm_data["src"] = "OpenWeatherMap"
             _store_location_result(key, owm_data, "Active fallback: OpenWeatherMap (Yandex quota/error)")
             stats_log_source("OpenWeatherMap", owm_data)
             log.info("Successfully updated weather via OpenWeatherMap fallback (temp: %s°)", owm_data["fact"].get("temp"))
@@ -791,12 +808,13 @@ def _fetch_weather_locked(force, lat, lon):
             log.error("OpenWeatherMap fallback failed: %s", e)
 
     # Fallback на Open-Meteo при ошибке Яндекса (опционально через прокси)
-    if load_config().get("enable_openmeteo_fallback", True):
+    if want("om") and load_config().get("enable_openmeteo_fallback", True):
         proxy = load_config().get("om_proxy", "") or None
         log.info("Attempting fallback to Open-Meteo%s...",
                  " via proxy" if proxy else "")
         try:
             om_data = fetch_from_openmeteo(lat, lon, proxy)
+            om_data["src"] = "Open-Meteo"
             _store_location_result(key, om_data, "Active fallback: Open-Meteo (Yandex quota/error)")
             stats_log_source("Open-Meteo", om_data)
             log.info("Successfully updated weather via Open-Meteo fallback (temp: %s°)", om_data["fact"].get("temp"))
@@ -804,11 +822,25 @@ def _fetch_weather_locked(force, lat, lon):
         except Exception as e:
             log.error("Open-Meteo fallback also failed: %s", e)
 
+    # Fallback: Gismeteo (без токена, изолированный провайдер)
+    if want("gismeteo") and load_config().get("enable_gismeteo_fallback", True):
+        log.info("Attempting fallback to Gismeteo...")
+        try:
+            g_data = GISMETEO.get_weather(latitude=lat, longitude=lon)
+            _store_location_result(key, g_data, "Active fallback: Gismeteo (Yandex/OWM/OM unavailable)")
+            stats_log_source("Gismeteo", g_data)
+            log.info("Successfully updated weather via Gismeteo fallback (temp: %s°)", g_data["fact"].get("temp"))
+            return g_data
+        except Exception as e:
+            last_error_message = f"Gismeteo: {e}"
+            log.error("Gismeteo fallback failed: %s", e)
+
     # Fallback 2: wttr.in (без ключа)
-    if load_config().get("enable_wttr_fallback", True):
+    if want("wttr") and load_config().get("enable_wttr_fallback", True):
         log.info("Attempting fallback to wttr.in...")
         try:
             wt_data = fetch_from_wttr(lat, lon)
+            wt_data["src"] = "wttr.in"
             _store_location_result(key, wt_data, "Active fallback: wttr.in (Yandex/OM unavailable)")
             stats_log_source("wttr.in", wt_data)
             log.info("Successfully updated weather via wttr.in fallback (temp: %s°)", wt_data["fact"].get("temp"))
@@ -817,10 +849,11 @@ def _fetch_weather_locked(force, lat, lon):
             log.error("wttr.in fallback also failed: %s", e)
 
     # Fallback 3: 7timer (последний рубеж)
-    if load_config().get("enable_7timer_fallback", True):
+    if want("7timer") and load_config().get("enable_7timer_fallback", True):
         log.info("Attempting fallback to 7timer...")
         try:
             st_data = fetch_from_7timer(lat, lon)
+            st_data["src"] = "7timer"
             _store_location_result(key, st_data, "Active fallback: 7timer (others unavailable)")
             stats_log_source("7timer", st_data)
             log.info("Successfully updated weather via 7timer fallback (temp: %s°)", st_data["fact"].get("temp"))
@@ -931,16 +964,31 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
         # Координаты можно передать (?lat=&lon=) — выбор города на планшете;
         # без параметров отдаётся город по умолчанию из config.json
         qs = parse_qs(urlparse(self.path).query)
-        try:
-            q_lat = float(qs.get("lat", [""])[0])
-            q_lon = float(qs.get("lon", [""])[0])
-            if not (-90.0 <= q_lat <= 90.0 and -180.0 <= q_lon <= 180.0):
-                raise ValueError("coords out of range")
-        except (ValueError, IndexError):
+        lat_raw = qs.get("lat", [None])[0]
+        lon_raw = qs.get("lon", [None])[0]
+        if lat_raw is None and lon_raw is None:
+            # координаты не переданы — город по умолчанию из config.json
             cfg_w = load_config()
             q_lat = cfg_w.get("lat", 56.317722)
             q_lon = cfg_w.get("lon", 43.999303)
-        data = get_weather_for(q_lat, q_lon, force=False)
+        else:
+            # координаты переданы (обе) — валидация обязательна
+            try:
+                q_lat = float(lat_raw)
+                q_lon = float(lon_raw)
+            except (TypeError, ValueError):
+                q_lat = q_lon = None
+            if q_lat is None or not (-90.0 <= q_lat <= 90.0 and -180.0 <= q_lon <= 180.0):
+                self.send_response(400)
+                self.send_cors_headers()
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "invalid lat/lon"}).encode("utf-8"))
+                log.warning("Rejected weather request with invalid coords: lat=%r lon=%r", lat_raw, lon_raw)
+                return
+        src_filter = (qs.get("source", [""])[0] or "").strip().lower()
+        sources = ("gismeteo",) if src_filter == "gismeteo" else None
+        data = get_weather_for(q_lat, q_lon, force=False, sources=sources)
         if data:
             body = json.dumps(data, ensure_ascii=False)
             self.send_response(200)
