@@ -516,14 +516,15 @@ function fetch_from_wttr(on_success, on_error) {
 				var hourly = today.hourly || [];
 
 				var get_wttr_icon = function(code, isDay) {
-					var s = isDay ? "_d" : "_n";
+					// имена значков = словарь сервера: суффикс _d/_n только у skc/bkn
 					var c = parseInt(code, 10) || 116;
+					var s = (c === 113 || c === 116) ? (isDay ? "_d" : "_n") : "";
 					if (c === 113) return "skc" + s;
-					if (c === 200 || c === 386 || c === 389) return "ts" + s;
-					if (c === 179 || c === 182 || c === 185 || c === 227 || c === 230 || c === 320 || c === 323 || c === 325 || c === 326 || c === 328 || c === 329 || c === 331 || c === 332 || c === 334 || c === 335 || c === 338 || c === 350 || (c >= 362 && c <= 371) || c === 374 || c === 377) return "sn" + s;
-					if (c === 176 || c === 263 || c === 266 || c === 281 || c === 284 || c === 293 || c === 296 || c === 299 || c === 302 || c === 305 || c === 308 || c === 353 || c === 356 || c === 359) return "ra" + s;
-					if (c === 143 || c === 248 || c === 260) return "fg" + s;
-					if (c === 119 || c === 122) return "ovc" + s;
+					if (c === 200 || c === 386 || c === 389) return "ovc_ts";
+					if (c === 179 || c === 182 || c === 185 || c === 227 || c === 230 || c === 320 || c === 323 || c === 325 || c === 326 || c === 328 || c === 329 || c === 331 || c === 332 || c === 334 || c === 335 || c === 338 || c === 350 || (c >= 362 && c <= 371) || c === 374 || c === 377) return "ovc_sn";
+					if (c === 176 || c === 263 || c === 266 || c === 281 || c === 284 || c === 293 || c === 296 || c === 299 || c === 302 || c === 305 || c === 308 || c === 353 || c === 356 || c === 359) return "ovc_ra";
+					if (c === 143 || c === 248 || c === 260) return "ovc";
+					if (c === 119 || c === 122) return "ovc";
 					return "bkn" + s;
 				};
 
@@ -561,10 +562,12 @@ function fetch_from_wttr(on_success, on_error) {
 					var dSunset = fmt12(astro.sunset) || "19:00";
 
 					var dayHours = [];
+					var srM = (function(v) { var p = String(v).split(":"); return (+p[0]) * 60 + (+p[1] || 0); })(dSunrise);
+					var ssM = (function(v) { var p = String(v).split(":"); return (+p[0]) * 60 + (+p[1] || 0); })(dSunset);
 					for (var h = 0; h < 24; h++) {
 						var b = dayHourly[Math.min(dayHourly.length - 1, Math.floor(h / 3))] || {};
 						var hh = Math.floor(h / 3) * 3;
-						var isDayH = (hh >= 6 && hh < 21) ? 1 : 0;
+						var isDayH = (hh * 60 >= srM && hh * 60 < ssM) ? 1 : 0;
 						dayHours.push({
 							hour: String(h),
 							temp: Math.round(iv(b.tempC, temp)),

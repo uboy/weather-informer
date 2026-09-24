@@ -308,9 +308,6 @@ def fetch_url_via(url, proxy, timeout, headers=None):
         return resp.read().decode("utf-8")
 
 
-_ICON_MAP = {"ra": "ovc_ra", "sn": "ovc_sn", "ts": "ovc_ts", "fg": "ovc"}
-
-
 def _icon_with_suffix(base, is_day):
     """skc/bkn получают суффикс _d/_n; конечные классы (ovc_ra и пр.) — как есть"""
     if base in ("skc", "bkn"):
