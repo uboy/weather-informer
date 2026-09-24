@@ -443,7 +443,7 @@ function init_menu() {
 	var menu = $("#weather_menu");
 	function render_src() {
 		var pref = safe_get_item("weather_source_pref", "default");
-		if (pref !== "server" && pref !== "wttr" && pref !== "owm" && pref !== "yandex") pref = "default";
+		if (pref !== "server" && pref !== "wttr" && pref !== "owm" && pref !== "om" && pref !== "7timer" && pref !== "yandex") pref = "default";
 		$(".menu_src").each(function() {
 			var src = $(this).attr("data-src");
 			if (src === "yandex" && !allow_direct_yandex) { $(this).hide(); return; }
@@ -619,6 +619,148 @@ var fetch_from_owm = function(on_success, on_error) {
 		})
 		.fail(function(xhr, status, err) {
 			console.log('OWM request failed:', status, err);
+			on_error(xhr, status, err);
+		});
+};
+
+var fetch_from_om_client = function(on_success, on_error) {
+	var url = 'https://api.open-meteo.com/v1/forecast?latitude=' + lat + '&longitude=' + lon +
+		'&current_weather=true&hourly=temperature_2m,weathercode,relativehumidity_2m,surface_pressure,windspeed_10m,winddirection_10m&daily=sunrise,sunset&timezone=auto';
+	$.getJSON(url)
+		.done(function(om) {
+			try {
+				var cw = om.current_weather || {};
+				var H = om.hourly || {};
+				var ht = H.time || [], hc = H.weathercode || [], tmp = H.temperature_2m || [], rh = H.relativehumidity_2m || [], pr = H.surface_pressure || [], ws = H.windspeed_10m || [], wd = H.winddirection_10m || [];
+				var cwCode = cw.weathercode || 0, cwDay = (cw.is_day === 0) ? 0 : 1;
+				function base(code) {
+					if (code === 0) return 'skc';
+					if (code === 1 || code === 2) return 'bkn';
+					if (code === 3) return 'ovc';
+					if (code === 45 || code === 48) return 'ovc';
+					if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82)) return 'ovc_ra';
+					if ((code >= 71 && code <= 77) || code === 85 || code === 86) return 'ovc_sn';
+					if (code >= 95) return 'ovc_ts';
+					return 'bkn';
+				}
+				var fact_icon = base(cwCode) + (cwDay ? '_d' : '_n');
+				var sr = (om.daily && om.daily.sunrise && om.daily.sunrise[0]) ? om.daily.sunrise[0].substring(11, 16) : '06:00';
+				var ss = (om.daily && om.daily.sunset && om.daily.sunset[0]) ? om.daily.sunset[0].substring(11, 16) : '19:00';
+				var srM = (+sr.substring(0, 2)) * 60 + (+sr.substring(3, 5));
+				var ssM = (+ss.substring(0, 2)) * 60 + (+ss.substring(3, 5));
+				var byName = { morning: [], day: [], evening: [], night: [] };
+				var hours_list = [];
+				var today = (ht[0] || '').substring(0, 10);
+				for (var i = 0; i < ht.length; i++) {
+					var hh = parseInt(ht[i].substring(11, 13), 10) || 0;
+					var code = hc[i] || 0;
+					var dayM = 1;
+					var mNow = hh * 60;
+					if (mNow < srM || mNow >= ssM) dayM = 0;
+					var icon = base(code) + (dayM ? '_d' : '_n');
+					if (base(code) === 'ovc' || base(code) === 'ovc_ra' || base(code) === 'ovc_sn' || base(code) === 'ovc_ts') icon = base(code);
+					if (ht[i].substring(0, 10) === today) {
+						hours_list.push({ hour: String(hh), temp: Math.round(tmp[i] || 0) });
+						if (hh >= 6 && hh < 12) byName.morning.push(icon);
+						else if (hh >= 12 && hh < 18) byName.day.push(icon);
+						else if (hh >= 18) byName.evening.push(icon);
+						else byName.night.push(icon);
+					} else if (hh < 6) {
+						byName.night.push(icon);
+					}
+				}
+				function dominant(arr) {
+					return arr.length ? arr[Math.floor(arr.length / 2)] : 'bkn_d';
+				}
+				var parts = {
+					morning: { temp_avg: Math.round(tmp[8] || 0) || 0, icon: dominant(byName.morning), wind_speed: 2.5, wind_angle: 180 },
+					day: { temp_avg: Math.round(tmp[13] || 0) || 0, icon: dominant(byName.day), wind_speed: 3.0, wind_angle: 180 },
+					evening: { temp_avg: Math.round(tmp[20] || 0) || 0, icon: dominant(byName.evening), wind_speed: 2.0, wind_angle: 170 },
+					night: { temp_avg: Math.round(tmp[2] || 0) || 0, icon: dominant(byName.night), wind_speed: 1.5, wind_angle: 160 }
+				};
+				var converted = {
+					fact: {
+						temp: Math.round(cw.temperature || 0),
+						icon: fact_icon,
+						wind_speed: wind_speed,
+						wind_angle: wind_angle,
+						humidity: Math.round(rh[hIdx] || 50),
+						pressure_mm: Math.round((pr[hIdx] || 1013) * 0.750062)
+					},
+					forecasts: [{ sunrise: sr, sunset: ss, moon_code: 9, hours: hours_list, parts: parts }, { parts: parts }]
+				};
+				on_success(converted);
+			} catch (ex) {
+				console.error('OM parse error:', ex);
+				on_error(null, 'parse_error', ex ? ex.message : 'parse error');
+			}
+		})
+		.fail(function(xhr, status, err) {
+			console.log('OM request failed:', status, err);
+			on_error(xhr, status, err);
+		});
+};
+
+var fetch_from_7timer_client = function(on_success, on_error) {
+	var url = 'http://www.7timer.info/bin/civil.php?lon=' + lon + '&lat=' + lat + '&ac=0&unit=metric&output=json&tzshift=0';
+	$.getJSON(url)
+		.done(function(st) {
+			try {
+				var ds = st.dataseries || [];
+				var init = String(st.init || '000000000000');
+				var initH = parseInt(init.substring(8, 10), 10) || 0;
+				var BFT = [0.3, 1.6, 3.4, 5.5, 8, 10.8, 13.9, 17.2, 20.8, 24.5, 28.5, 32.7];
+				function icon7(b, hour) {
+					var cc = parseInt(b.cloudcover, 10) || 0;
+					var prec = String(b.prec_type || 'none').toLowerCase();
+					var base = 'bkn';
+					if (prec === 'rain' || prec === 'frzr') base = 'ovc_ra';
+					else if (prec === 'snow' || prec === 'icep') base = 'ovc_sn';
+					else if (cc < 15) base = 'skc';
+					else if (cc < 70) base = 'bkn';
+					else base = 'ovc';
+					if (base === 'skc' || base === 'bkn') return base + (hour >= 6 && hour < 18 ? '_d' : '_n');
+					return base;
+				}
+				var b0 = ds[0] || {};
+				var fact = {
+					temp: Math.round(b0.temp2m || 0),
+					icon: icon7(b0, new Date().getHours()),
+					wind_speed: Math.round((BFT[Math.min(12, parseInt(b0.wind10m, 10) || 0)] || 0) * 10) / 10,
+					wind_angle: 180,
+					humidity: 50,
+					pressure_mm: 748
+				};
+				var byName = { morning: [], day: [], evening: [], night: [] };
+				var hours_list = [];
+				for (var i = 0; i < ds.length; i++) {
+					var hh = (initH + (ds[i].timepoint || 0) * 3) % 24;
+					var icon = icon7(ds[i], hh);
+					hours_list.push({ hour: String(hh), temp: Math.round(ds[i].temp2m || 0) });
+					if (hh >= 6 && hh < 12) byName.morning.push(icon);
+					else if (hh >= 12 && hh < 18) byName.day.push(icon);
+					else if (hh >= 18) byName.evening.push(icon);
+					else byName.night.push(icon);
+				}
+				function part(name, fb) { return byName[name].length ? byName[name][0] : fb; }
+				var parts = {
+					morning: part('morning', 'bkn_d'),
+					day: part('day', 'bkn_d'),
+					evening: part('evening', 'bkn_n'),
+					night: part('night', 'skc_n')
+				};
+				var converted = {
+					fact: fact,
+					forecasts: [{ sunrise: '06:00', sunset: '19:00', moon_code: 9, hours: hours_list, parts: parts }, { parts: parts }]
+				};
+				on_success(converted);
+			} catch (ex) {
+				console.error('7timer parse error:', ex);
+				on_error(null, 'parse_error', ex ? ex.message : 'parse error');
+			}
+		})
+		.fail(function(xhr, status, err) {
+			console.log('7timer request failed:', status, err);
 			on_error(xhr, status, err);
 		});
 };
@@ -957,6 +1099,47 @@ function get_data() {
 		if (owm_key && !only_server) {
 			console.log("Trying OpenWeatherMap client fallback...");
 			fetch_from_owm(on_success, on_error);
+			return;
+		}
+
+		if (source_pref === "om") {
+			console.log("get_data: source pref = Open-Meteo (direct)");
+			fetch_from_om_client(function(d) {
+				current_weather_data = d;
+				try {
+					localStorage.setItem('weather_cache_data', JSON.stringify(d));
+					localStorage.setItem('weather_cache_time', String(Date.now()));
+					localStorage.setItem('weather_cache_source', 'Open-Meteo');
+					localStorage.removeItem('weather_last_attempt_error');
+				} catch (e) {}
+				render_weather(d);
+				update_status_bar();
+			}, function(ox, os, oe) {
+				show_error(ox, os, oe, "Open-Meteo");
+			});
+			return;
+		}
+		if (source_pref === "7timer") {
+			console.log("get_data: source pref = 7timer (direct)");
+			fetch_from_7timer_client(function(d) {
+				current_weather_data = d;
+				try {
+					localStorage.setItem('weather_cache_data', JSON.stringify(d));
+					localStorage.setItem('weather_cache_time', String(Date.now()));
+					localStorage.setItem('weather_cache_source', '7timer');
+					localStorage.removeItem('weather_last_attempt_error');
+				} catch (e) {}
+				render_weather(d);
+				update_status_bar();
+			}, function(ox, os, oe) {
+				show_error(ox, os, oe, "7timer");
+			});
+			return;
+		}
+		if (source_pref === "yandex") {
+			if (!allow_direct_yandex) { show_error(null, "source_disabled", "прямой Яндекс отключён конфигом"); return; }
+			console.log("get_data: source pref = Yandex (direct)");
+			fetch_url('https://api.weather.yandex.ru/v2/forecast?lat=' + lat + '&lon=' + lon, {'X-Yandex-Weather-Key': api}, true);
 			return;
 		}
 
@@ -2072,6 +2255,8 @@ body {
 		<div class="menu_item menu_src" data-src="default">По умолчанию</div>
 		<div class="menu_item menu_src" data-src="server">Локальный сервер</div>
 		<div class="menu_item menu_src" data-src="owm">OpenWeatherMap</div>
+		<div class="menu_item menu_src" data-src="om">Open-Meteo</div>
+		<div class="menu_item menu_src" data-src="7timer">7timer</div>
 		<div class="menu_item menu_src" data-src="wttr">wttr.in</div>
 		<div class="menu_item menu_src" data-src="yandex" style="display:none">Яндекс (прямой)</div>
 		<div class="menu_title">Цвет</div>
