@@ -5,7 +5,7 @@
 
 - `99-adbtcp.sh` — adb-over-WiFi: persist-проперти 5555 (ROM их стирает),
   рестарт adbd, быстрый разгон экрана/ключгарда первые 15 мин после загрузки,
-  почасовой рефреш adb в 04:00.
+  ежедневный рефреш adb в 04:00.
 - `kg_watch.sh` — бессрочный сторож ключгарда (раз в минуту, только если
   `isStatusBarKeyguard=true`; Digma-keyguard на swipe не реагирует — только
   keyevent 82 + wm dismiss-keyguard). Демон до first-unlock не срабатывает
