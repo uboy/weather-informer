@@ -91,6 +91,20 @@ const WWO = { 113:'skc', 116:'bkn', 119:'ovc', 122:'ovc', 143:'ovc', 176:'ovc_ra
 const emitted = new Set();
 for (const b of Object.values(OM)) { emitted.add(suffix(b, true)); emitted.add(suffix(b, false)); }
 for (const b of Object.values(WWO)) { emitted.add(suffix(b, true)); emitted.add(suffix(b, false)); }
+// OWM (OpenWeatherMap): id-группы -> имена
+const OWM = {};
+for (let id = 200; id < 300; id++) OWM[id] = 'ovc_ts';
+for (let id = 300; id < 400; id++) OWM[id] = 'ovc_ra';
+for (let id = 500; id < 600; id++) OWM[id] = 'ovc_ra';
+for (let id = 600; id < 700; id++) OWM[id] = 'ovc_sn';
+for (let id = 700; id < 800; id++) OWM[id] = 'ovc';
+OWM[800] = 'skc'; OWM[801] = 'bkn'; OWM[802] = 'bkn'; OWM[803] = 'ovc'; OWM[804] = 'ovc';
+for (const k of Object.keys(OWM)) {
+    const b = OWM[k];
+    const emit = (b === 'skc' || b === 'bkn') ? [b + '_d', b + '_n'] : [b];
+    for (const ic of emit) if (!cssClasses.has(ic)) { vocFail++; console.log('  [FAIL] OWM id ' + k + ' -> нет CSS для "' + ic + '"'); }
+}
+console.log('OWM id-групп: ' + Object.keys(OWM).length);
 console.log('имён значков, порождаемых сервером: ' + emitted.size);
 let vocFail = 0;
 for (const ic of emitted) if (!cssClasses.has(ic)) { vocFail++; console.log('  [FAIL] нет CSS для "' + ic + '"'); }

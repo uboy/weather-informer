@@ -8,5 +8,7 @@
   "wind_max": 15,
   "pressure_min": 710,
   "pressure_max": 770,
-  "enable_wttr_fallback": true
+  "enable_wttr_fallback": true,
+  "openweathermap_api_key": "ВАШ_КЛЮЧ_OPENWEATHERMAP",
+  "text_color": "#00FF00"
 }

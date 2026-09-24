@@ -15,5 +15,7 @@
   "enable_wttr_fallback": true,
   "enable_7timer_fallback": true,
   "stats_enabled": true,
-  "stats_interval_minutes": 60
+  "stats_interval_minutes": 60,
+  "openweathermap_api_key": "ВАШ_КЛЮЧ_OPENWEATHERMAP",
+  "enable_openweathermap_fallback": true
 }

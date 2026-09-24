@@ -178,6 +178,121 @@ def stats_loop():
         time.sleep(interval)
 
 
+
+def fetch_from_openweathermap(lat, lon, api_key):
+    """Источник OpenWeatherMap (нужен ключ) -> формат Яндекса"""
+    def _get(path):
+        url = (f"https://api.openweathermap.org/data/2.5/{path}"
+               f"?lat={lat}&lon={lon}&units=metric&appid={api_key}")
+        req = urllib.request.Request(url, headers={"User-Agent": "WeatherInformerLocal/1.0"})
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    cur = _get("weather")
+    fc = _get("forecast")
+
+    def _owm_base(code):
+        if 200 <= code < 300:
+            return "ovc_ts"
+        if 300 <= code < 400:
+            return "ovc_ra"
+        if 500 <= code < 600:
+            return "ovc_ra"
+        if 600 <= code < 700:
+            return "ovc_sn"
+        if 700 <= code < 800:
+            return "ovc"
+        if code == 800:
+            return "skc"
+        if code in (801, 802):
+            return "bkn"
+        return "ovc"
+
+    def _owm_icon(weather_entry):
+        base = _owm_base(int(weather_entry.get("id", 800)))
+        day = str(weather_entry.get("icon", "01d"))[-1] == "d"
+        if base in ("skc", "bkn"):
+            return base + ("_d" if day else "_n")
+        return base
+
+    w0 = (cur.get("weather") or [{}])[0]
+    main = cur.get("main", {})
+    wind = cur.get("wind", {})
+    sys = cur.get("sys", {})
+    temp = round(main.get("temp", 0))
+    wind_speed = round(wind.get("speed", 0), 1)
+    wind_angle = int(wind.get("deg", 180) or 180)
+    humidity = int(main.get("humidity", 50) or 50)
+    pressure_mm = round(int(main.get("pressure", 1013) or 1013) * 0.750062)
+    fact_icon = _owm_icon(w0)
+    sunrise_dt = datetime.fromtimestamp(sys.get("sunrise", 0))
+    sunset_dt = datetime.fromtimestamp(sys.get("sunset", 0))
+    sunrise = sunrise_dt.strftime("%H:%M")
+    sunset = sunset_dt.strftime("%H:%M")
+
+    # Части суток и часы из 3-часового прогноза
+    blocks = []
+    for it in fc.get("list", []):
+        dt_txt = it.get("dt_txt", "")
+        blocks.append({
+            "date": dt_txt[:10], "hour": int(dt_txt[11:13]),
+            "temp": round(it.get("main", {}).get("temp", 0)),
+            "humidity": int(it.get("main", {}).get("humidity", 50) or 50),
+            "wind_speed": round(it.get("wind", {}).get("speed", 0), 1),
+            "wind_angle": int(it.get("wind", {}).get("deg", 180) or 180),
+            "icon": _owm_icon((it.get("weather") or [{}])[0])
+        })
+    today = blocks[0]["date"] if blocks else ""
+    morning = [b for b in blocks if b["date"] == today and 6 <= b["hour"] < 12]
+    dayb = [b for b in blocks if b["date"] == today and 12 <= b["hour"] < 18]
+    evening = [b for b in blocks if b["date"] == today and 18 <= b["hour"] < 24]
+    night = [b for b in blocks if b["date"] != today and b["hour"] < 6]
+
+    def avg_block(bs, fallback_icon):
+        if not bs:
+            return {"temp_avg": temp, "icon": fallback_icon, "wind_speed": wind_speed, "wind_angle": wind_angle}
+        temps = [b["temp"] for b in bs]
+        mid = bs[len(bs) // 2]
+        return {
+            "temp_avg": round(sum(temps) / len(temps)),
+            "icon": mid["icon"],
+            "wind_speed": round(sum(b["wind_speed"] for b in bs) / len(bs), 1),
+            "wind_angle": mid["wind_angle"]
+        }
+
+    parts = {
+        "morning": avg_block(morning, "bkn_d"),
+        "day": avg_block(dayb, "bkn_d"),
+        "evening": avg_block(evening, "bkn_n"),
+        "night": avg_block(night, "skc_n")
+    }
+
+    hours_list = [{"hour": str(b["hour"]), "temp": b["temp"]} for b in blocks if b["date"] == today]
+
+    return {
+        "fact": {
+            "temp": temp,
+            "icon": fact_icon,
+            "wind_speed": wind_speed,
+            "wind_angle": wind_angle,
+            "humidity": humidity,
+            "pressure_mm": pressure_mm
+        },
+        "forecasts": [
+            {
+                "sunrise": sunrise,
+                "sunset": sunset,
+                "moon_code": 9,
+                "hours": hours_list,
+                "parts": parts
+            },
+            {
+                "parts": parts
+            }
+        ]
+    }
+
+
 def fetch_from_openmeteo(lat, lon, proxy=None):
     """Fallback-источник Open-Meteo с конвертацией в формат Яндекс.Погоды"""
     url = (
@@ -570,6 +685,22 @@ def _fetch_weather_locked(force=False):
     except Exception as e:
         last_error_message = f"Yandex request error: {e}"
         log.warning("Yandex request failed: %s", e)
+
+    # Fallback на OpenWeatherMap (если задан ключ) при ошибке Яндекса
+    if cfg.get("enable_openweathermap_fallback", True) and cfg.get("openweathermap_api_key", ""):
+        owm_key = cfg.get("openweathermap_api_key", "")
+        log.info("Attempting fallback to OpenWeatherMap...")
+        try:
+            owm_data = fetch_from_openweathermap(lat, lon, owm_key)
+            cached_data = owm_data
+            last_fetch_time = time.time()
+            last_error_message = "Active fallback: OpenWeatherMap (Yandex quota/error)"
+            save_disk_cache(owm_data)
+            stats_log_source("OpenWeatherMap", owm_data)
+            log.info("Successfully updated weather via OpenWeatherMap fallback (temp: %s°)", owm_data["fact"].get("temp"))
+            return cached_data
+        except Exception as e:
+            log.error("OpenWeatherMap fallback failed: %s", e)
 
     # Fallback на Open-Meteo при ошибке Яндекса (опционально через прокси)
     if cfg.get("enable_openmeteo_fallback", True):

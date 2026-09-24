@@ -76,7 +76,7 @@ var pressure_max = 770; //Давление, максимум, мм рт ст
 	font-family: sans-serif;
 }
 #menu_btn:active {
-	color: #ffffff;
+	color: var(--tc, #ffffff);
 	background: rgba(60, 60, 60, 0.85);
 }
 #weather_menu {
@@ -91,6 +91,8 @@ var pressure_max = 770; //Давление, максимум, мм рт ст
 	box-sizing: border-box;
 	z-index: 99995;
 	display: none;
+	max-height: 92vh;
+	overflow-y: auto;
 	color: #bbbbbb;
 	font-family: sans-serif;
 	box-shadow: 0 0 2.2vw rgba(0, 0, 0, 0.8);
@@ -114,7 +116,7 @@ var pressure_max = 770; //Давление, максимум, мм рт ст
 }
 .menu_item:active {
 	background: rgba(255, 255, 255, 0.12);
-	color: #ffffff;
+	color: var(--tc, #ffffff);
 }
 .menu_src::before {
 	content: "\25CB\00A0";
@@ -125,7 +127,18 @@ var pressure_max = 770; //Давление, максимум, мм рт ст
 	color: #9fd06a;
 }
 .menu_src.menu_active {
-	color: #ffffff;
+	color: var(--tc, #ffffff);
+}
+.menu_color::before {
+	content: "\25CB\00A0";
+	color: #777777;
+}
+.menu_color.menu_active::before {
+	content: "\25CF\00A0";
+	color: #9fd06a;
+}
+.menu_color.menu_active {
+	color: var(--tc, #ffffff);
 }
 .menu_close {
 	font-size: 2.4vw;
@@ -454,7 +467,21 @@ function init_menu() {
 			localStorage.setItem("weather_source_pref", String($(this).attr("data-src")));
 		} catch (err) {}
 		render_src();
-		menu.removeClass("menu_open");
+	});
+	function render_color() {
+		var pref = safe_get_item("weather_text_color", "#ffffff");
+		$(".menu_color").each(function() {
+			if (String($(this).attr("data-color")).toLowerCase() === pref.toLowerCase()) $(this).addClass("menu_active");
+			else $(this).removeClass("menu_active");
+		});
+	}
+	render_color();
+	$(".menu_color").on("click", function(e) {
+		e.stopPropagation();
+		var c = String($(this).attr("data-color"));
+		try { localStorage.setItem("weather_text_color", c); } catch (err) {}
+		apply_text_color(c);
+		render_color();
 	});
 	$("#menu_close").on("click", function(e) {
 		e.stopPropagation();
@@ -463,6 +490,14 @@ function init_menu() {
 }
 
 var server_url = ""; // Локальный сервер кэширования (если задан)
+var owm_key = ""; // Ключ OpenWeatherMap для клиентского фолбэка
+
+function apply_text_color(c) {
+	try {
+		if (c) document.documentElement.style.setProperty("--tc", c);
+		else document.documentElement.style.removeProperty("--tc");
+	} catch (e) {}
+}
 var allow_direct_yandex = false; // Прямой доступ планшета к Яндекс API: только явным разрешением в config.json (иначе расход квоты ключа)
 var enable_wttr_fallback = true; // Резервный источник wttr.in
 
@@ -473,6 +508,9 @@ function load_config(callback) {
 			if (cfg.lat !== undefined) lat = cfg.lat;
 			if (cfg.lon !== undefined) lon = cfg.lon;
 			if (cfg.server_url !== undefined) server_url = cfg.server_url;
+			if (cfg.openweathermap_api_key !== undefined) owm_key = cfg.openweathermap_api_key;
+			var storedColor = safe_get_item("weather_text_color", "");
+			apply_text_color(storedColor || cfg.text_color || "");
 			if (cfg.timeout !== undefined) timeout = cfg.timeout;
 			if (cfg.update_interval_sec !== undefined) timeout = cfg.update_interval_sec;
 			if (cfg.max_cache_age_hours !== undefined) {
@@ -830,6 +868,12 @@ function get_data() {
 			return;
 		}
 
+		if (owm_key && !only_server) {
+			console.log("Trying OpenWeatherMap client fallback...");
+			fetch_from_owm(on_success, on_error);
+			return;
+		}
+
 		if (enable_wttr_fallback && !only_server) {
 			console.log("Yandex API unavailable/failed, trying wttr.in fallback...");
 			fetch_from_wttr(function(wt_data) {
@@ -1144,7 +1188,7 @@ body {
 	width: 100%;
 	font-family: Verdana, Arial, Sans-serif;
 	text-align: center;
-	color: #fff;
+	color: var(--tc, #fff);
 }
 #weather_body, #weather_right, #now_hero {
 	display: block;
@@ -1942,6 +1986,12 @@ body {
 		<div class="menu_item menu_src" data-src="default">По умолчанию</div>
 		<div class="menu_item menu_src" data-src="server">Локальный сервер</div>
 		<div class="menu_item menu_src" data-src="wttr">wttr.in</div>
+		<div class="menu_title">Цвет</div>
+		<div class="menu_item menu_color" data-color="#ffffff">Белый</div>
+		<div class="menu_item menu_color" data-color="#00FF00">Зелёный</div>
+		<div class="menu_item menu_color" data-color="#FFA500">Янтарный</div>
+		<div class="menu_item menu_color" data-color="#4FC3F7">Голубой</div>
+		<div class="menu_item menu_color" data-color="#FF6EC7">Розовый</div>
 		<div class="menu_close" id="menu_close">Закрыть</div>
 	</div>
 	<div id="status_bar"></div>
