@@ -921,6 +921,10 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
 
 
 class WeatherHTTPHandler(BaseHTTPRequestHandler):
+    # Заморозка однопоточного сервера на полумёртвом клиентском сокете
+    # (keep-alive readline без таймаута) — закрываем соединение через 30 с
+    timeout = 30
+
     def send_cors_headers(self):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")

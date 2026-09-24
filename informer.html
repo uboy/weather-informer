@@ -815,7 +815,7 @@ var fetch_from_om_client = function(on_success, on_error) {
 					var icon = base(code) + (dayM ? '_d' : '_n');
 					if (base(code) === 'ovc' || base(code) === 'ovc_ra' || base(code) === 'ovc_sn' || base(code) === 'ovc_ts') icon = base(code);
 					if (ht[i].substring(0, 10) === today) {
-						hours_list.push({ hour: String(hh), temp: Math.round(tmp[i] || 0) });
+						hours_list.push({ hour: String(hh), temp: (tmp[i] != null ? Math.round(tmp[i]) : null) });
 						if (hh >= 6 && hh < 12) byName.morning.push(icon);
 						else if (hh >= 12 && hh < 18) byName.day.push(icon);
 						else if (hh >= 18) byName.evening.push(icon);
@@ -1033,7 +1033,7 @@ function fetch_from_wttr(on_success, on_error) {
 					var max_t = rn(iv(day.maxtempC, dayHours[13] ? dayHours[13].temp : null));
 					var min_t = rn(iv(day.mintempC, dayHours[1] ? dayHours[1].temp : null));
 					var m_t = rn(iv((dayHourly[3] || {}).tempC, max_t));
-					var e_t = Math.round(iv((dayHourly[6] || {}).tempC, max_t));
+					var e_t = rn(iv((dayHourly[6] || {}).tempC, max_t));
 
 					var dParts = {
 						morning: {temp_avg: m_t, icon: dayHours[9].icon, wind_speed: dayHours[9].wind_speed, wind_angle: dayHours[9].wind_angle},
