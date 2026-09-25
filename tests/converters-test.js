@@ -299,5 +299,19 @@ function hoursSane(hours) {
     }
 })();
 
+// --- astro_sun: астрономический восход/закат (фолбэк для источников без солнца) ---
+(function () {
+    const m = html.match(/^function astro_sun[\s\S]*?^\}/m);
+    check('astro_sun извлечена', !!m);
+    if (m) {
+        const fn = eval('(function(){' + m[0] + '; return astro_sun;})()');
+        const r = fn(56.3177, 43.9993, new Date());
+        check('astro_sun: НН восход в 03-08ч', r.sunrise && parseInt(r.sunrise) >= 3 && parseInt(r.sunrise) <= 8, r.sunrise);
+        check('astro_sun: НН закат в 15-21ч', r.sunset && parseInt(r.sunset) >= 15 && parseInt(r.sunset) <= 21, r.sunset);
+        const dur = (parseInt(r.sunset) - parseInt(r.sunrise)) * 60 + (parseInt(r.sunset.slice(3)) - parseInt(r.sunrise.slice(3)));
+        check('astro_sun: длительность 10-14ч (сентябрь НН)', dur >= 600 && dur <= 840, dur + ' мин');
+    }
+})();
+
 console.log('\nИТОГ: pass=' + pass + ' fail=' + fail);
 process.exit(fail ? 1 : 0);

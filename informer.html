@@ -390,6 +390,28 @@ function normalize_icon(name) {
 	return n;
 }
 
+function astro_sun(lat, lon, dateObj) {
+	// Восход/закат по NOAA-алгоритму (без внешних данных): на случай источника без солнца
+	var rad = Math.PI / 180, dayMs = 86400000, J1970 = 2440588, J2000 = 2451545;
+	var J = dateObj.valueOf() / dayMs - 0.5 + J1970;
+	var n = Math.round(J - J2000 - 0.0009 + lon / 360);
+	var Jstar = J2000 + 0.0009 - lon / 360 + n;
+	var M = rad * ((357.5291 + 0.98560028 * (Jstar - J2000)) % 360);
+	var C = rad * (1.9148 * Math.sin(M) + 0.02 * Math.sin(2 * M) + 0.0003 * Math.sin(3 * M));
+	var Pl = rad * 102.9372;
+	var L = M + C + Pl + Math.PI;
+	var Jtransit = Jstar + 0.0053 * Math.sin(M) - 0.0069 * Math.sin(2 * L);
+	var decl = Math.asin(Math.sin(Pl) * Math.sin(L));
+	var cosw = (Math.sin(-0.833 * rad) - Math.sin(lat * rad) * Math.sin(decl)) / (Math.cos(lat * rad) * Math.cos(decl));
+	if (cosw > 1 || cosw < -1) return { sunrise: null, sunset: null }; // полярный день/ночь
+	var w = Math.acos(cosw) / rad;
+	function hm(j) {
+		var d = new Date((j + 0.5 - J1970) * dayMs);
+		return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+	}
+	return { sunrise: hm(Jtransit - w / 360), sunset: hm(Jtransit + w / 360) };
+}
+
 function moonPhaseCode() {
 	// 0 новолуние .. 4 полнолуние .. 7 (семантика Яндекс.Погоды)
 	var ref = Date.UTC(2000, 0, 6, 18, 14);
@@ -1984,8 +2006,15 @@ function render_weather(data) {
 		result.set = data.forecasts[0].sunset;
 		riseset(result.rise, result.set);
 	} else {
-		result.rise = '—';
-		result.set = '—';
+		var astro = astro_sun(lat, lon, new Date());
+		if (astro.sunrise && astro.sunset) {
+			result.rise = astro.sunrise;
+			result.set = astro.sunset;
+			riseset(result.rise, result.set);
+		} else {
+			result.rise = '—';
+			result.set = '—';
+		}
 	}
 
 	update(result);
