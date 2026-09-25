@@ -412,8 +412,12 @@ def collect_ogimet_synop(hours_back=30):
             ts_utc_iso = ts_utc.isoformat(timespec="seconds") + "Z"
             try:
                 from zoneinfo import ZoneInfo
-                # naive локальное МСК: офсет в строке ломает julianday-сравнения
-                ts_local = ts_utc.astimezone(ZoneInfo("Europe/Moscow")).replace(tzinfo=None).isoformat(timespec="seconds")
+                from datetime import timezone as _dt_utc
+                # ts_utc парсится naive: сначала помечаем UTC, потом МСК, потом снова naive
+                # (astimezone на naive трактует его как system-local — был баг: строки оставались UTC)
+                ts_local = (ts_utc.replace(tzinfo=_dt_utc)
+                             .astimezone(ZoneInfo("Europe/Moscow"))
+                             .replace(tzinfo=None).isoformat(timespec="seconds"))
             except Exception:
                 ts_local = (ts_utc + timedelta(hours=3)).isoformat(timespec="seconds")
             decoded = _decode_synop(raw_msg)
@@ -503,7 +507,10 @@ def stats_loop():
         rotate_stats_if_needed()
         prune_history()
         collect_foreca_observations()  # почасовой ground truth для /accuracy
-        collect_ogimet_synop(hours_back=30)
+        try:
+            collect_ogimet_synop(hours_back=30)
+        except Exception as e:
+            log.warning("observations: ogimet tick failed: %s", e)
         time.sleep(interval)
 
 

@@ -947,6 +947,14 @@ var fetch_from_7timer_client = function(on_success, on_error) {
 					return base;
 				}
 				var b0 = ds[0] || {};
+				(function() {
+					var idDate = new Date(parseInt(init.substring(0, 4), 10), parseInt(init.substring(4, 6), 10) - 1, parseInt(init.substring(6, 8), 10), initH, 0, 0, 0);
+					var nowMs = Date.now(), bestDiff = Infinity;
+					for (var bi = 0; bi < ds.length; bi++) {
+						var bdiff = Math.abs(idDate.getTime() + (ds[bi].timepoint || 0) * 3600000 - nowMs);
+						if (bdiff < bestDiff) { bestDiff = bdiff; b0 = ds[bi]; }
+					}
+				})();
 				var w0 = b0.wind10m || {};
 				var bft0 = parseInt(w0.speed, 10);
 				var rhRaw = String(b0.rh2m || '').replace(/[^0-9]/g, '');
@@ -1209,8 +1217,8 @@ function fetch_from_wttr(on_success, on_error) {
 
 					var max_t = rn(iv(day.maxtempC, dayHours[13] ? dayHours[13].temp : null));
 					var min_t = rn(iv(day.mintempC, dayHours[1] ? dayHours[1].temp : null));
-					var m_t = rn(iv((dayHourly[3] || {}).tempC, max_t));
-					var e_t = rn(iv((dayHourly[6] || {}).tempC, max_t));
+					var m_t = rn(iv((dayHourly[9] || {}).tempC, max_t));
+					var e_t = rn(iv((dayHourly[18] || {}).tempC, max_t));
 
 					var dParts = {
 						morning: {temp_avg: m_t, icon: dayHours[9].icon, wind_speed: dayHours[9].wind_speed, wind_angle: dayHours[9].wind_angle},
