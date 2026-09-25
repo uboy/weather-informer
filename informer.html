@@ -209,6 +209,11 @@ body.night-dim #status_bar { opacity: 0.5; }
 <meta name="viewport" content="width=device-width, minimum-scale=0.1">
 </head>
 <body>
+	<script src="config.js"></script>
+	<script>
+		// config.js загружается через script tag (не подчиняется cross-origin file://)
+		// если не загрузился — переменная window.CONFIG_JS не определена
+	</script>
 	<div id="wrapper">
 		<div id="datetime" class="spacer">
 			<div id="time" class="sector_time sector_hours visible"><span id="hours" class="value"></span><span class="colon">:</span><span id="minutes" class="value"></span></div>
@@ -799,6 +804,38 @@ var allow_direct_yandex = false; // Прямой доступ планшета �
 var enable_wttr_fallback = true; // Резервный источник wttr.in
 
 function load_config(callback) {
+	// Приоритет: CONFIG_JS из script tag (работает всегда, даже когда WebView блокирует file:// XHR)
+	// затем: $.getJSON (обычный путь)
+	// затем: дефолты
+	if (typeof CONFIG_JS === 'object' && CONFIG_JS !== null) {
+		// config.js loaded via script tag (immune to file:// XHR blocks)
+		var cfg = CONFIG_JS;
+		if (cfg.api) api = cfg.api;
+		if (cfg.lat !== undefined) lat = cfg.lat;
+		if (cfg.lon !== undefined) lon = cfg.lon;
+		base_lat = lat; base_lon = lon;
+		if (cfg.server_url !== undefined) server_url = cfg.server_url;
+		if (cfg.city_name !== undefined) city_name_cfg = String(cfg.city_name);
+		if (cfg.night_dim_start_hour !== undefined) night_dim_start = parseInt(cfg.night_dim_start_hour, 10) || 23;
+		if (cfg.night_dim_end_hour !== undefined) night_dim_end = parseInt(cfg.night_dim_end_hour, 10) || 6;
+		if (cfg.foreca_api_key !== undefined) foreca_api_key_cfg = String(cfg.foreca_api_key);
+		if (cfg.openweathermap_api_key !== undefined) owm_key = cfg.openweathermap_api_key;
+		apply_text_color(safe_get_item("weather_text_color", "") || cfg.text_color || "");
+		if (cfg.timeout !== undefined) timeout = cfg.timeout;
+		if (cfg.update_interval_sec !== undefined) timeout = cfg.update_interval_sec;
+		if (cfg.direct_update_interval_sec !== undefined) direct_timeout = cfg.direct_update_interval_sec;
+		if (cfg.max_cache_age_hours !== undefined) {
+			max_cache_age_hours = Number(cfg.max_cache_age_hours);
+			max_cache_age_ms = max_cache_age_hours * 60 * 60 * 1000;
+		}
+		if (cfg.enable_wttr_fallback !== undefined) enable_wttr_fallback = Boolean(cfg.enable_wttr_fallback);
+		if (cfg.allow_direct_yandex !== undefined) allow_direct_yandex = Boolean(cfg.allow_direct_yandex);
+		if (cfg.wind_max !== undefined) wind_max = cfg.wind_max;
+		if (cfg.pressure_min !== undefined) pressure_min = cfg.pressure_min;
+		if (cfg.pressure_max !== undefined) pressure_max = cfg.pressure_max;
+		if (callback) callback();
+		return;
+	}
 	$.getJSON("config.json")
 		.done(function(cfg) {
 			if (cfg.api) api = cfg.api;
