@@ -17,7 +17,7 @@ import time
 import threading
 import logging
 from datetime import datetime, timedelta
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 import urllib.request
 import urllib.error
 import urllib.parse
@@ -116,6 +116,7 @@ GISMETEO = GismeteoProvider(
 STATS_FILE = os.path.join(SCRIPT_DIR, "weather_stats.csv")
 FORECAST_DB = os.path.join(SCRIPT_DIR, "forecast.db")
 HISTORY_DAYS = 90  # ротация истории: кольцо в 90 дней
+last_obs_fetch = 0.0  # троттлинг /observations/fetch
 STATS_LOCK = threading.Lock()
 
 # Дефолтные параметры
@@ -367,7 +368,8 @@ def _decode_synop(msg):
             val = int(tok[1:])
             out["pressure_sl"] = val / 10.0 + (1000.0 if val < 5000 else 0.0)
         elif tok[0] == "6" and len(tok) == 5 and tok[1:].isdigit():
-            out["precip_mm"] = int(tok[1:4]) / 10.0
+            v = int(tok[1:4])
+            out["precip_mm"] = (v / 10.0 if v >= 991 else float(v))  # 991-999 = следы
     return out
 
 
@@ -1264,6 +1266,15 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/observations/fetch":
+            global last_obs_fetch
+            if time.time() - last_obs_fetch < 600:
+                self.send_response(429)
+                self.send_cors_headers()
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "too soon"}).encode("utf-8"))
+                return
+            last_obs_fetch = time.time()
             n = collect_foreca_observations()
             try:
                 n += collect_ogimet_synop(hours_back=30)
@@ -1307,7 +1318,7 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
                          AND o.temperature IS NOT NULL
                         WHERE fp.provider = ? AND fp.temperature IS NOT NULL
                           AND (? = '' OR o.phys_station = ?)
-                          AND (julianday(fp.valid_at) - julianday(fp.created)) BETWEEN ? AND ?
+                          AND (julianday(fp.valid_at) - julianday(fp.created)) * 24 BETWEEN ? AND ?
                           AND fp.created > datetime('now', ?)""",
                         (window, provider, phys, phys,
                          max(0, lead - 1), lead + 1, f"-{days} days"))
@@ -1332,7 +1343,16 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({"error": str(e)}).encode("utf-8"))
             return
 
-        # Любой погодный маршрут: /, /weather.json, /forecast.json, /v2/forecast
+        # Погодные маршруты — только известные: остальное 404,
+        # чтобы сканеры/favicon не запускали фетчи и не жгли квоту
+        if path not in ("/", "/weather.json", "/forecast.json", "/v2/forecast"):
+            self.send_response(404)
+            self.send_cors_headers()
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": "not found"}).encode("utf-8"))
+            return
+
         # Координаты можно передать (?lat=&lon=) — выбор города на планшете;
         # без параметров отдаётся город по умолчанию из config.json
         qs = parse_qs(urlparse(self.path).query)
@@ -1401,7 +1421,8 @@ def main():
     # Биндим порт ДО старта фоновых потоков: вторая копия сервера умирает
     # здесь же мгновенно — без потоков и без запросов к источникам
     # (защита от дублей: ручные запуски поверх systemd-инстанса)
-    server = HTTPServer(("0.0.0.0", port), WeatherHTTPHandler)
+    server = ThreadingHTTPServer(("0.0.0.0", port), WeatherHTTPHandler,
+                                daemon_threads=True)
     log.info("WeatherInformer Caching Proxy listening on port %d...", port)
 
     # Первичный запрос в фоне

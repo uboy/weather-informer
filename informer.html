@@ -141,6 +141,7 @@ var pressure_max = 770; //Давление, максимум, мм рт ст
 }
 #key_dialog {
 	display: none;
+	z-index: 100000;
 	position: fixed;
 	top: 50%;
 	left: 50%;
@@ -239,7 +240,7 @@ var pressure_max = 770; //Давление, максимум, мм рт ст
 					</div>
 					<div class="sector_pressure">
 						<span id="presure_icon" class="presure_icon"></span>
-						<span><span id="pressure" class="value"></span> мм рс</span>
+						<span><span id="pressure" class="value"></span> мм рт. ст.</span>
 					</div>
 					<div class="wind_humidity_pressure_bar pressure_bar sector_pressure_progress">
 						<div id="pressure_progress" class="value" data-type="style"></div>
@@ -503,6 +504,33 @@ function hide_error() {
 	update_status_bar();
 }
 
+function show_key_dialog(title, lsKey, onSave, onDelete) {
+		var cur = safe_get_item(lsKey, "");
+		$("#key_dialog_title").text(title + (cur ? " — ключ сохранён: " + cur.substring(0, 16) + "…" : ""));
+		$("#key_dialog_input").val("");
+		$("#key_delete").toggle(!!cur);
+		$("#key_dialog").addClass("key_dialog_open");
+		$("#key_save").off("click").on("click", function(e) {
+			e.stopPropagation();
+			var v = $("#key_dialog_input").val().trim();
+			if (!v) return;
+			safe_set_item(lsKey, v);
+			$("#key_dialog").removeClass("key_dialog_open");
+			if (onSave) onSave();
+		});
+		$("#key_delete").off("click").on("click", function(e) {
+			e.stopPropagation();
+			try { localStorage.removeItem(lsKey); } catch (err) {}
+			$("#key_dialog").removeClass("key_dialog_open");
+			if (onDelete) onDelete();
+		});
+		$("#key_cancel").off("click").on("click", function(e) {
+			e.stopPropagation();
+			$("#key_dialog").removeClass("key_dialog_open");
+		});
+		$("#key_dialog_input").on("click", function(e) { e.stopPropagation(); });
+	}
+
 function init_menu() {
 	var menu = $("#weather_menu");
 	function render_src() {
@@ -530,9 +558,11 @@ function init_menu() {
 	});
 	$(".menu_src").on("click", function(e) {
 		e.stopPropagation();
+		var prevPref = safe_get_item("weather_source_pref", "default");
 		try {
 			localStorage.setItem("weather_source_pref", String($(this).attr("data-src")));
 		} catch (err) {}
+		if (prevPref !== String($(this).attr("data-src"))) current_weather_data = null;
 		render_src();
 		menu.removeClass("menu_open");
 		get_data();
@@ -552,32 +582,6 @@ function init_menu() {
 		apply_text_color(c);
 		render_color();
 	});
-	function show_key_dialog(title, lsKey, onSave, onDelete) {
-		var cur = safe_get_item(lsKey, "");
-		$("#key_dialog_title").text(title + (cur ? " — ключ сохранён: " + cur.substring(0, 16) + "…" : ""));
-		$("#key_dialog_input").val("");
-		$("#key_delete").toggle(!!cur);
-		$("#key_dialog").addClass("key_dialog_open");
-		$("#key_save").off("click").on("click", function(e) {
-			e.stopPropagation();
-			var v = $("#key_dialog_input").val().trim();
-			if (!v) return;
-			safe_set_item(lsKey, v);
-			$("#key_dialog").removeClass("key_dialog_open");
-			if (onSave) onSave();
-		});
-		$("#key_delete").off("click").on("click", function(e) {
-			e.stopPropagation();
-			try { localStorage.removeItem(lsKey); } catch (err) {}
-			$("#key_dialog").removeClass("key_dialog_open");
-			if (onDelete) onDelete();
-		});
-		$("#key_cancel").off("click").on("click", function(e) {
-			e.stopPropagation();
-			$("#key_dialog").removeClass("key_dialog_open");
-		});
-		$("#key_dialog_input").on("click", function(e) { e.stopPropagation(); });
-	}
 	function render_city() {
 		var n = current_city_name();
 		$("#city_current").text("Город: " + (n ? n : "не задан"));
@@ -585,6 +589,7 @@ function init_menu() {
 		else $("#city_reset").hide();
 	}
 	function apply_city() {
+		current_weather_data = null; // не показывать погоду чужого города
 		render_city();
 		menu.removeClass("menu_open");
 		get_data();
@@ -646,7 +651,7 @@ function init_menu() {
 		city_search();
 	});
 	$("#city_search_input").on("keydown", function(e) {
-		if (e.key === "Enter") { e.stopPropagation(); city_search(); }
+		if (e.key === "Enter" || e.keyCode === 13) { e.stopPropagation(); city_search(); }
 	});
 	$("#city_results").on("click", ".city_result", function(e) {
 		e.stopPropagation();
@@ -955,8 +960,15 @@ var fetch_from_7timer_client = function(on_success, on_error) {
 				};
 				var hours_list = [];
 				var byRange = { morning: [], day: [], evening: [], night: [] };
+				var initDate = new Date(parseInt(init.substring(0, 4), 10),
+					parseInt(init.substring(4, 6), 10) - 1, parseInt(init.substring(6, 8), 10),
+					initH, 0, 0, 0);
 				for (var i = 0; i < ds.length; i++) {
-					var hh = (initH + (ds[i].timepoint || 0)) % 24;
+					var ptDate = new Date(initDate.getTime() + (ds[i].timepoint || 0) * 3600000);
+					var todayStr = initDate.getFullYear() + '-' + ('0' + (initDate.getMonth() + 1)).slice(-2) + '-' + ('0' + initDate.getDate()).slice(-2);
+					var ptStr = ptDate.getFullYear() + '-' + ('0' + (ptDate.getMonth() + 1)).slice(-2) + '-' + ('0' + ptDate.getDate()).slice(-2);
+					if (ptStr !== todayStr) continue; // только сегодняшние точки (как на сервере)
+					var hh = ptDate.getHours();
 					var icon = icon7(ds[i], hh);
 					var w = ds[i].wind10m || {};
 					var bf = parseInt(w.speed, 10);
@@ -1416,7 +1428,7 @@ function get_data() {
 		return;
 	}
 	if (source_pref === "foreca") {
-		var fkey = safe_get_item("foreca_api_key", "");
+		var fkey = safe_get_item("foreca_api_key", "") || foreca_api_key_cfg;
 		if (!fkey) {
 			show_key_dialog("Ключ Foreca (Bearer)", "foreca_api_key", function() { get_data(); });
 			return;
@@ -1462,7 +1474,7 @@ function get_data() {
 			return;
 		}
 		console.log("get_data: source pref = Yandex (direct)");
-		fetch_url('https://api.weather.yandex.ru/v2/forecast?lat=' + lat + '&lon=' + lon, {'X-Yandex-Weather-Key': effKey}, true);
+		fetch_url('https://api.weather.yandex.ru/v2/forecast?lat=' + lat + '&lon=' + lon, {'X-Yandex-Weather-Key': effKey}, true, 'Яндекс.Погода');
 		return;
 	}
 
@@ -1517,7 +1529,7 @@ function get_data() {
 
 	console.log("get_data CALLED, target: " + primary_url);
 
-	function fetch_url(url, req_headers, is_fallback) {
+	function fetch_url(url, req_headers, is_fallback, sourceName) {
 		$.ajax({
 			url: url,
 			headers: req_headers,
@@ -1527,7 +1539,7 @@ function get_data() {
 				console.log("get_data SUCCESS from " + url + ":", JSON.stringify(result).substring(0, 100));
 				if (result.hasOwnProperty('fact') && result.hasOwnProperty('forecasts')) {
 					current_weather_data = result;
-					var sourceName = is_direct_yandex ? 'Яндекс.Погода' : (result.src || 'Локальный сервер');
+					sourceName = sourceName || (is_direct_yandex ? 'Яндекс.Погода' : (result.src || 'Локальный сервер'));
 					try {
 						localStorage.setItem('weather_cache_data', JSON.stringify(result));
 						localStorage.setItem('weather_cache_time', String(Date.now()));
@@ -1729,6 +1741,23 @@ function render_weather(data) {
 	}
 
 	// Нет данных -> "—", полосы сбрасываем, чтобы не оставались значения чужого источника
+	if (result.rise === undefined || result.rise === null) {
+		result.rise = '—';
+		result.set = '—';
+		result.duration_hour = '00';
+		result.duration_minute = '00';
+		result.duration_time = 'width: 0%; left: 0%';
+		result.duration_progress = 'width: 0%';
+		result.duration_left = '—';
+	}
+	if ((result.min === undefined || result.min === null)) {
+		result.min = '—';
+		result.min_date = '';
+	}
+	if (result.max === undefined || result.max === null) {
+		result.max = '—';
+		result.max_date = '';
+	}
 	if (result.wind === undefined || result.wind === null) {
 		result.wind = '—';
 		result.wind_progress = 'width: 100%';
