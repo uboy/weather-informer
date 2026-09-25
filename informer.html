@@ -309,7 +309,8 @@ var pressure_max = 770; //Давление, максимум, мм рт ст
 var day = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
 var period = {morning: 'утром', day: 'днём', evening: 'вечером', night: 'ночью', day_day: 'день', day_night: 'ночь'};
 
-var timeout = 60 * 60; // API call interval, sec
+var timeout = 60 * 60; // интервал опроса СЕРВЕРА, сек
+var direct_timeout = 30 * 60; // интервал ПРЯМЫХ запросов (форс квоты), сек
 var max_cache_age_hours = 48; // Max cache age before hiding weather, hours
 var max_cache_age_ms = 48 * 60 * 60 * 1000;
 var expire = 60 * 60 * 48; // Data expire for sectors, sec
@@ -730,6 +731,7 @@ function load_config(callback) {
 			apply_text_color(storedColor || cfg.text_color || "");
 			if (cfg.timeout !== undefined) timeout = cfg.timeout;
 			if (cfg.update_interval_sec !== undefined) timeout = cfg.update_interval_sec;
+			if (cfg.direct_update_interval_sec !== undefined) direct_timeout = cfg.direct_update_interval_sec;
 			if (cfg.max_cache_age_hours !== undefined) {
 				max_cache_age_hours = Number(cfg.max_cache_age_hours);
 				max_cache_age_ms = max_cache_age_hours * 60 * 60 * 1000;
@@ -1458,7 +1460,10 @@ function run() {
 	if (storedLastCall > lastcall) lastcall = storedLastCall;
 
 	try {
-		if (lastcall < now - timeout * 1000 && (server_url.trim() !== '' || api != 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx')) {
+		var _curPref = safe_get_item("weather_source_pref", "default");
+		var _isDirect = ["owm", "om", "7timer", "wttr", "yandex", "foreca"].indexOf(_curPref) >= 0;
+		var _effTimeout = (_isDirect ? direct_timeout : timeout) * 1000;
+		if (lastcall < now - _effTimeout && (server_url.trim() !== '' || api != 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx')) {
 			get_data();
 		}
 
