@@ -219,6 +219,10 @@ def _history_conn():
         ts TEXT NOT NULL, station TEXT NOT NULL, source TEXT NOT NULL,
         temperature REAL, humidity REAL, pressure REAL, precip_mm REAL,
         UNIQUE(ts, station, source))""")
+    try:
+        conn.execute("ALTER TABLE observations ADD COLUMN phys_station TEXT")
+    except Exception:
+        pass
     return conn
 
 
@@ -314,10 +318,11 @@ def collect_foreca_observations():
                 if "T" in ts:
                     ts = ts[:19]  # нормализация naive локального времени
                 conn.execute(
-                    "INSERT OR REPLACE INTO observations VALUES (?,?,?,?,?,?,?)",
+                    "INSERT OR REPLACE INTO observations VALUES (?,?,?,?,?,?,?,?)",
                     (ts, o.get("station", ""), "foreca-obs",
                      o.get("temperature"), o.get("relHumidity"),
-                     o.get("pressure"), o.get("precip_mm")))
+                     o.get("pressure"), o.get("precip_mm"),
+                     OGIMET_PHYS.get(o.get("station", ""), o.get("station", ""))))
                 n += 1
             conn.commit()
         finally:
@@ -327,6 +332,93 @@ def collect_foreca_observations():
     except Exception as e:
         log.warning("observations: Foreca недоступен: %s", e)
         return 0
+
+
+OGIMET_PHYS = {  # Foreca-имя -> физическая станция
+    "Niznij Novgorod": "27459", "Nizhny Novgorod": "27459",
+    "Nizhny Novgorod/Strigino": "STRIGINO",
+    "Volzskaja Gmo": "VOLGA_GMO", "Sergac": "SERGACH",
+    "Krasnye Baki": "KRASNYE_BAKI",
+}
+SYNOP_GROUPS = {  # индикатор группы -> (поле, множитель)
+    "1": ("temperature", 0.1), "3": ("pressure", 0.1), "4": ("pressure_sl", 0.1),
+}
+
+
+def _decode_synop(msg):
+    """Минимальный FM-12 SYNOP декодер: температура (1sTTT), давление на станции
+    (3P0P0P0), на уровне моря (4PPPP), осадки (6RRRtR). Давление кодируется
+    без ведущих сотен: val<500 -> +1000 hPa, иначе +900 hPa (WMO)."""
+    out = {"temperature": None, "pressure": None, "pressure_sl": None, "precip_mm": None}
+    sec3 = False
+    for tok in msg.split():
+        if tok == "333":
+            sec3 = True
+            continue
+        if tok in ("AAXX", "BBXX") or not tok:
+            continue
+        if tok[0] == "1" and len(tok) == 5 and tok[1] in "01" and tok[2:].isdigit():
+            sign = -1.0 if tok[1] == "1" else 1.0
+            out["temperature"] = sign * int(tok[2:]) / 10.0
+        elif tok[0] == "3" and len(tok) == 5 and tok[1:].isdigit() and not sec3:
+            val = int(tok[1:])
+            out["pressure"] = val / 10.0 + (1000.0 if val < 5000 else 0.0)
+        elif tok[0] == "4" and len(tok) == 5 and tok[1:].isdigit():
+            val = int(tok[1:])
+            out["pressure_sl"] = val / 10.0 + (1000.0 if val < 5000 else 0.0)
+        elif tok[0] == "6" and len(tok) == 5 and tok[1:].isdigit():
+            out["precip_mm"] = int(tok[1:4]) / 10.0
+    return out
+
+
+def collect_ogimet_synop(hours_back=30):
+    """SYNOP станции WMO 27459 через OGIMET -> observations.db (raw + разбор)."""
+    import urllib.parse as up
+    now = datetime.utcnow()
+    begin = (now - timedelta(hours=hours_back)).strftime("%Y%m%d%H%M")
+    end = (now + timedelta(minutes=10)).strftime("%Y%m%d%H%M")
+    url = ("https://www.ogimet.com/cgi-bin/getsynop?block=27459"
+           f"&begin={begin}&end={end}")
+    req = urllib.request.Request(url, headers={"User-Agent": "weather-validation/1.0"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        text = resp.read().decode("utf-8", "replace")
+    conn = _history_conn()
+    n = 0
+    try:
+        conn.execute("CREATE TABLE IF NOT EXISTS synop_raw (ts_utc TEXT UNIQUE, raw TEXT)")
+        try:
+            conn.execute("ALTER TABLE observations ADD COLUMN phys_station TEXT")
+        except Exception:
+            pass
+        for line in text.splitlines():
+            line = line.strip().lstrip("#")
+            if not line or "," not in line:
+                continue
+            parts = line.split(",", 6)
+            if len(parts) < 7:
+                continue
+            y, mo, d, h, mi = parts[1:6]
+            raw_msg = parts[6].strip()
+            try:
+                ts_utc = datetime(int(y), int(mo), int(d), int(h), int(mi))
+            except ValueError:
+                continue
+            ts_utc_iso = ts_utc.isoformat(timespec="seconds") + "Z"
+            ts_local = (ts_utc + timedelta(hours=3)).isoformat(timespec="seconds")
+            decoded = _decode_synop(raw_msg)
+            conn.execute("INSERT OR REPLACE INTO synop_raw VALUES (?,?)",
+                         (ts_utc_iso, raw_msg))
+            conn.execute(
+                "INSERT OR REPLACE INTO observations VALUES (?,?,?,?,?,?,?,?)",
+                (ts_local, "Nizhny Novgorod WMO27459", "ogimet-synop",
+                 decoded["temperature"], None, decoded["pressure"],
+                 decoded["precip_mm"], "27459"))
+            n += 1
+        conn.commit()
+    finally:
+        conn.close()
+    log.info("observations: OGIMET SYNOP 27459 — %d сообщений", n)
+    return n
 
 
 def stats_log_source(source, data):
@@ -400,6 +492,7 @@ def stats_loop():
         rotate_stats_if_needed()
         prune_history()
         collect_foreca_observations()  # почасовой ground truth для /accuracy
+        collect_ogimet_synop(hours_back=30)
         time.sleep(interval)
 
 
@@ -1172,6 +1265,10 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
 
         if path == "/observations/fetch":
             n = collect_foreca_observations()
+            try:
+                n += collect_ogimet_synop(hours_back=30)
+            except Exception as e:
+                log.warning("observations: ogimet failed: %s", e)
             self.send_response(200)
             self.send_cors_headers()
             self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -1182,6 +1279,11 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
         if path == "/accuracy":
             qs = parse_qs(urlparse(self.path).query)
             provider = (qs.get("provider", [""])[0] or "").strip()
+            phys = (qs.get("phys", [""])[0] or "").strip()
+            try:
+                window = float(qs.get("window", ["1.0"])[0])
+            except ValueError:
+                window = 1.0
             try:
                 lead = int(qs.get("lead_hours", ["24"])[0])
                 days = int(qs.get("days", ["90"])[0])
@@ -1201,12 +1303,14 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
                         SELECT avg(abs(fp.temperature - o.temperature)), count(*)
                         FROM forecast_points fp
                         JOIN observations o
-                          ON abs(julianday(o.ts) - julianday(fp.valid_at)) <= 1.0/24
+                          ON abs(julianday(o.ts) - julianday(fp.valid_at)) <= ? / 24.0
                          AND o.temperature IS NOT NULL
                         WHERE fp.provider = ? AND fp.temperature IS NOT NULL
+                          AND (? = '' OR o.phys_station = ?)
                           AND (julianday(fp.valid_at) - julianday(fp.created)) BETWEEN ? AND ?
                           AND fp.created > datetime('now', ?)""",
-                        (provider, max(0, lead - 1), lead + 1, f"-{days} days"))
+                        (window, provider, phys, phys,
+                         max(0, lead - 1), lead + 1, f"-{days} days"))
                     mae, n = cur.fetchone()
                 finally:
                     conn.close()

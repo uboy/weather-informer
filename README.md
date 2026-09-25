@@ -112,6 +112,25 @@ stop adbd; start adbd
 Данные Gismeteo — 3-часовые точки; исходные точки сохраняются в ответе
 (`gismeteo_points[]`, `"interpolated": false`), почасовик — выдержка ближайшей точки.
 
+## Ground truth (наблюдения для проверки прогнозов)
+
+| Физическая станция | Канал | Статус |
+|---|---|---|
+| Нижний Новгород WMO 27459 | **OGIMET SYNOP** (`/observations/fetch`, raw в `synop_raw`) | ✅ основной (t/давление/осадки, каждые 3 ч, UTC→МСК) |
+| Нижний Новгород WMO 27459 | Foreca observations | ✅ контроль (тот же физический датчик) |
+| Strigino (аэропорт) | Foreca / METAR | ✅ независимая станция |
+| Volzskaya GMO, Sergac, Arzamas, Krasnye Baki | Foreca | ✅ региональный контроль (осадки — только по нескольким станциям) |
+| WMO 27459 через Meteostat | — | ❌ 100% модель DWD MOSMIX, наблюдений нет |
+| ISD 274590-99999 | NOAA | 🟡 архив до 08.2025; оперативно — GHCNh (исследовать) |
+
+Наблюдения копятся в `forecast.db` (таблица `observations`, колонка `phys_station`
+различает физические датчики; raw SYNOP — `synop_raw`). OGIMET SYNOP хранится
+в исходном виде. Влажность станция 27459 не передаёт — humidity-эталон только
+из Foreca-станций.
+
+Проверка точности: `GET /accuracy?provider=Gismeteo&lead_hours=3&phys=27459&window=1.5`
+(MAE температуры; `phys` — фильтр физической станции, `window` — допуск часов).
+
 ## Кэши и лимиты
 
 | Что | TTL / лимит |
