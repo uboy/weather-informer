@@ -376,13 +376,17 @@ var ICON_ALIAS = {
 	'ovc_ts_sm': 'ovc_ts', 'ovc_ts_ra': 'ovc_ts',
 	'ovc_+ts_ra': 'ovc_ts',
 	'ovc_+_ra_sn': 'ovc_ra_sn', 'ovc_+_sn_ra': 'ovc_ra_sn',
+	// базы с суффиксом пересобираются: bkn_+ra_d -> bkn_-ra_d (голых bkn_-ra в CSS нет)
 	'bkn_+ra': 'bkn_-ra', 'bkn_+sn': 'bkn_-sn'
 };
 function normalize_icon(name) {
 	// Имена Яндекса вне нашего CSS-вокабуляра -> ближайшие существующие классы
 	if (name == null) return name;
 	var n = String(name);
-	return ICON_ALIAS.hasOwnProperty(n) ? ICON_ALIAS[n] : n;
+	if (ICON_ALIAS.hasOwnProperty(n)) return ICON_ALIAS[n];
+	var m = n.match(/^(.*)_([dn])$/);
+	if (m && ICON_ALIAS.hasOwnProperty(m[1])) return ICON_ALIAS[m[1]] + '_' + m[2];
+	return n;
 }
 
 function moonPhaseCode() {

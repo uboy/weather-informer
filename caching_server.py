@@ -252,6 +252,17 @@ def record_forecast(provider, loc, data):
             valid_at = f"{day.isoformat()}T{hh:02d}:00:00"
             rows.append((now_iso, provider, loc, valid_at,
                          h.get("temp"), None, None, None, None))
+        # завтрашние часы (forecasts[1].hours есть у Яндекса) — оживляет lead 23-46ч
+        f1_hours = ((data.get("forecasts") or [{}, {}])[1:2] or [{}])[0].get("hours") or []
+        tomorrow = now.date() + timedelta(days=1)
+        for h in f1_hours:
+            try:
+                hh = int(h.get("hour", -1))
+            except (TypeError, ValueError):
+                continue
+            valid_at = f"{tomorrow.isoformat()}T{hh:02d}:00:00"
+            rows.append((now_iso, provider, loc, valid_at,
+                         h.get("temp"), None, None, None, None))
         conn = _history_conn()
         try:
             conn.executemany("INSERT INTO forecast_points VALUES (?,?,?,?,?,?,?,?,?)", rows)

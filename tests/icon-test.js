@@ -112,5 +112,27 @@ console.log('имён значков, порождаемых сервером: '
 let vocFail = 0;
 for (const ic of emitted) if (!cssClasses.has(ic)) { vocFail++; console.log('  [FAIL] нет CSS для "' + ic + '"'); }
 check('весь серверный вокабуляр значков покрыт CSS', vocFail === 0, vocFail + ' отсутствуют');
+// --- 4. ICON_ALIAS: значения алиасов существуют в CSS (голые или с суффиксом) ---
+if (aliasSrc) {
+    const nrm = eval('(function(){' + aliasSrc + '; return normalize_icon;})()');
+    const cssSet = new Set();
+    for (const m2 of html.matchAll(/\.([a-z_0-9+\\-]+)\s*\{/g)) cssSet.add(m2[1]);
+    const vectors = [
+        ['fg', 'ovc'], ['mist', 'ovc'],
+        ['ovc_+_ra', 'ovc_ra'], ['ovc_ts_ra', 'ovc_ts'],
+        ['ovc_+_ra_sn', 'ovc_ra_sn'],
+        ['bkn_+ra_d', 'bkn_-ra_d'], ['bkn_+ra_n', 'bkn_-ra_n'], ['bkn_+sn_d', 'bkn_-sn_d'],
+    ];
+    for (const [src, expected] of vectors) {
+        const got = nrm(src);
+        check('alias ' + src + ' -> ' + expected, got === expected, 'получено ' + got);
+        const target = got.match(/_[dn]$/) ? got : got;
+        const inCss = cssSet.has(target) || cssSet.has(got);
+        check('alias-цель ' + got + ' есть в CSS', inCss);
+    }
+    check('alias null passthrough', nrm(null) === null);
+    check('alias неизвестного — как есть', nrm('skc_d') === 'skc_d');
+}
+
 console.log('\nИТОГ: pass=' + pass + ' fail=' + fail);
 process.exit(fail ? 1 : 0);

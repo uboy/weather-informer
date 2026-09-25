@@ -34,7 +34,7 @@ function srcOf(name) {
     for (; j < html.length; j++) {
         const c = html[j];
         if (q) {
-            if (c === '\\\\') { j++; continue; }
+            if (c === '\\') { j++; continue; }
             if (c === q) q = null;
             continue;
         }
@@ -146,13 +146,20 @@ function hoursSane(hours) {
 (function () {
     const list = [];
     const city = { timezone: 3 * 3600, sunrise: Math.floor(now.getTime() / 1000) - 5 * 3600, sunset: Math.floor(now.getTime() / 1000) + 2 * 3600 };
-    for (let i = 0; i < 16; i++) {
+    const tomorrow = new Date(now.getTime() + 24 * 3600000);
+    for (let i = 0; i < 40; i++) {
         const d = new Date(now.getTime() + (i * 3 - 3) * 3600000); // блоки 3ч вокруг сейчас (локаль=город)
-        const utc = new Date(d.getTime() - city.timezone * 1000);
+        // dt_txt: UTC-компоненты = local_d − city.tz (по компонентам, БЕЗ двойного сдвига toISOString)
+        const utc = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate(), d.getHours(), d.getMinutes(), 0) - city.timezone * 1000);
+        let temp = 100 + i; // сегодня: уникальные (факт = blocks[0] = 100)
+        if (d.getDate() === tomorrow.getDate() && d.getMonth() === tomorrow.getMonth()) {
+            if (d.getHours() < 6) temp = 7;       // завтра-ночь: константа
+            else if (d.getHours() < 12) temp = 9; // завтра-утро: константа
+        }
         list.push({
-            dt_txt: utc.toISOString().slice(0, 19).replace(/-|:/g, m => m === '-' ? '-' : ':'),
-            main: { temp: 10 + i, humidity: 50 + i, pressure: 1010 + i },
-            wind: { speed: 2 + (i % 3), deg: (i * 30) % 360 },
+            dt_txt: utc.toISOString().slice(0, 19).replace('T', ' '),
+            main: { temp: temp, humidity: 50, pressure: 1010 },
+            wind: { speed: 2, deg: 120 },
             weather: [{ id: 800 }]
         });
     }
@@ -163,7 +170,9 @@ function hoursSane(hours) {
     ]);
     check('OWM: конвертация без ошибок', !r.error && r.result, r.error || (r.threw ? 'THROW:' + r.threw.message : ''));
     if (r.result) {
-        check('OWM: fact есть', r.result.fact && typeof r.result.fact.temp === 'number');
+        check('OWM: fact = первый блок (100)', r.result.fact && r.result.fact.temp === 100, JSON.stringify(r.result.fact && r.result.fact.temp));
+        check('OWM: завтра-ночь temp = 7', r.result.forecasts[1].parts.night.temp_avg === 7, JSON.stringify(r.result.forecasts[1].parts.night));
+        check('OWM: завтра-утро temp = 9', r.result.forecasts[1].parts.morning.temp_avg === 9, JSON.stringify(r.result.forecasts[1].parts.morning));
         check('OWM: forecasts[1].parts завтра', r.result.forecasts[1] && r.result.forecasts[1].parts && r.result.forecasts[1].parts.night, JSON.stringify(r.result.forecasts[1] && r.result.forecasts[1].parts && r.result.forecasts[1].parts.night));
         check('OWM: иконки частей в CSS', iconsOk(r.result.forecasts[0].parts));
         check('OWM: hours sane', hoursSane(r.result.forecasts[0].hours));
@@ -176,7 +185,11 @@ function hoursSane(hours) {
     const day0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     for (let i = 0; i < 48; i++) {
         const d = new Date(day0.getTime() + i * 3600000);
-        H.time.push(tstr(d)); H.weathercode.push(i % 3); H.temperature_2m.push(8 + (i % 10));
+        H.time.push(tstr(d)); H.weathercode.push(i % 3);
+        let t = 8 + i; // сегодня: уникальные
+        if (i >= 24 && i < 30) t = 7;   // завтра 0-6ч
+        else if (i >= 30 && i < 36) t = 9; // завтра 6-12ч
+        H.temperature_2m.push(t);
         H.relativehumidity_2m.push(60); H.surface_pressure.push(1005);
         H.windspeed_10m.push(3.6 * (1 + i % 4)); H.winddirection_10m.push(90 + i);
     }
@@ -193,6 +206,8 @@ function hoursSane(hours) {
         check('OM: fact temp = current_weather', r.result.fact.temp === 12, JSON.stringify(r.result.fact));
         check('OM: humidity из hourly (не null при данных)', r.result.fact.humidity === 60, JSON.stringify(r.result.fact.humidity));
         check('OM: forecasts[1].parts.night завтра', r.result.forecasts[1] && r.result.forecasts[1].parts && r.result.forecasts[1].parts.night);
+        check('OM: завтра-ночь temp = 7', r.result.forecasts[1].parts.night.temp_avg === 7, JSON.stringify(r.result.forecasts[1].parts.night));
+        check('OM: завтра-утро temp = 9', r.result.forecasts[1].parts.morning.temp_avg === 9, JSON.stringify(r.result.forecasts[1].parts.morning));
         check('OM: иконки частей в CSS', iconsOk(r.result.forecasts[0].parts));
         check('OM: hours sane', hoursSane(r.result.forecasts[0].hours));
     }
@@ -200,23 +215,33 @@ function hoursSane(hours) {
 
 // ============================= 7timer =============================
 (function () {
-    const init = new Date(now.getTime() - 6 * 3600000); // модель 6ч назад (UTC)
+    const init = new Date(now.getTime() - 3 * 3600000); // init = сейчас-3ч (UTC): timepoint 3 == now
     const initStr = '' + init.getUTCFullYear() + pad2(init.getUTCMonth() + 1) + pad2(init.getUTCDate()) + pad2(init.getUTCHours());
     const ds = [];
     for (let i = 1; i <= 64; i++) {
-        ds.push({ timepoint: i * 3, cloudcover: i % 2 ? 20 : 80, prec_type: 'none', temp2m: 10 + (i % 8), rh2m: (40 + i % 30) + '%', wind10m: { direction: 'SE', speed: 3 } });
+        const tp = i * 3;
+        // завтрашние диапазоны — константные температуры для однозначных ассертов
+        let t = 1000 + tp;
+        const ptLocal = new Date(Date.UTC(init.getUTCFullYear(), init.getUTCMonth(), init.getUTCDate(), init.getUTCHours()) + tp * 3600000);
+        const tomorrow = new Date(now.getTime() + 24 * 3600000);
+        const isTomorrow = ptLocal.getDate() === tomorrow.getDate() && ptLocal.getMonth() === tomorrow.getMonth();
+        if (isTomorrow && ptLocal.getHours() < 6) t = 7;
+        else if (isTomorrow && ptLocal.getHours() >= 6 && ptLocal.getHours() < 12) t = 9;
+        ds.push({ timepoint: tp, cloudcover: i % 2 ? 20 : 80, prec_type: 'none', temp2m: t, rh2m: (40 + i % 30) + '%', wind10m: { direction: 'SE', speed: 3 } });
     }
     const r = runConvert('fetch_from_7timer_client', [
         { match: '7timer.info/bin/civil.php', payload: { dataseries: ds, init: initStr } }
     ]);
     check('7timer: конвертация без ошибок', !r.error && r.result, r.error || (r.threw ? 'THROW:' + r.threw.message : ''));
     if (r.result) {
-        check('7timer: факт ~текущей точке (не +3ч)', r.result.fact.temp !== null && r.result.fact.temp >= 10 && r.result.fact.temp <= 18, JSON.stringify(r.result.fact.temp));
+        check('7timer: факт = блок timepoint 3 (=now), 1003 (tz-скос дал бы 1006)', r.result.fact.temp === 1003, JSON.stringify(r.result.fact.temp));
         check('7timer: humidity из rh2m', typeof r.result.fact.humidity === 'number', JSON.stringify(r.result.fact.humidity));
         check('7timer: давление честно null', r.result.fact.pressure_mm === null);
         check('7timer: forecasts[1].parts.night завтра', r.result.forecasts[1] && r.result.forecasts[1].parts && r.result.forecasts[1].parts.night);
         const nIc = r.result.forecasts[1].parts.night.icon;
         check('7timer: завтра-ночь иконка ночная (_n) или ovc*', nIc.indexOf('_n') >= 0 || nIc.indexOf('ovc') === 0, nIc);
+        check('7timer: завтра-ночь temp = 7 (константа ночного бэнда)', r.result.forecasts[1].parts.night.temp_avg === 7, JSON.stringify(r.result.forecasts[1].parts.night));
+        check('7timer: завтра-утро temp = 9', r.result.forecasts[1].parts.morning.temp_avg === 9, JSON.stringify(r.result.forecasts[1].parts.morning));
         check('7timer: иконки частей в CSS', iconsOk(r.result.forecasts[0].parts));
     }
 })();
@@ -247,9 +272,15 @@ function hoursSane(hours) {
 // ============================= Foreca =============================
 (function () {
     const fc = [];
+    const tmrF = new Date(now.getTime() + 24 * 3600000);
     for (let i = 0; i < 49; i++) {
         const d = new Date(Math.floor(now.getTime() / 3600000) * 3600000 + i * 3600000);
-        fc.push({ time: tstr(d) + '+03:00', temperature: 12 + (i % 9), windSpeed: 3 + (i % 3), windDir: (100 + i) % 360, precipProb: i % 20, precipAccum: 0, symbol: (d.getHours() >= 6 && d.getHours() < 20 ? 'd' : 'n') + '200' });
+        let temp = 12 + i;
+        if (d.getDate() === tmrF.getDate() && d.getMonth() === tmrF.getMonth()) {
+            if (d.getHours() < 6) temp = 7;
+            else if (d.getHours() >= 6 && d.getHours() < 12) temp = 9;
+        }
+        fc.push({ time: tstr(d) + '+03:00', temperature: temp, windSpeed: 3, windDir: 180, precipProb: 0, precipAccum: 0, symbol: (d.getHours() >= 6 && d.getHours() < 20 ? 'd' : 'n') + '200' });
     }
     const r = runConvert('fetch_from_foreca_client', [
         { match: '/location/search/', payload: { locations: [{ id: 100520555, name: 'Nizhny Novgorod', timezone: 'Europe/Moscow' }] } },
@@ -259,6 +290,8 @@ function hoursSane(hours) {
     if (r.result) {
         check('Foreca: humidity/pressure null (API не отдаёт)', r.result.fact.humidity === null && r.result.fact.pressure_mm === null);
         check('Foreca: forecasts[1].parts.night завтра', r.result.forecasts[1] && r.result.forecasts[1].parts && r.result.forecasts[1].parts.night);
+        check('Foreca: завтра-ночь temp = 7', r.result.forecasts[1].parts.night.temp_avg === 7, JSON.stringify(r.result.forecasts[1].parts.night));
+        check('Foreca: завтра-утро temp = 9', r.result.forecasts[1].parts.morning.temp_avg === 9, JSON.stringify(r.result.forecasts[1].parts.morning));
         const nIc = r.result.forecasts[1].parts.night.icon;
         check('Foreca: завтра-ночь иконка ночная/ovc', nIc.indexOf('_n') >= 0 || nIc.indexOf('ovc') === 0, nIc);
         check('Foreca: hours sane', hoursSane(r.result.forecasts[0].hours));
