@@ -12,6 +12,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import caching_server as cs
 
 
+from unittest.mock import patch
+
+
 class RecordForecastTests(unittest.TestCase):
     def setUp(self):
         import tempfile, os
@@ -46,15 +49,16 @@ class RecordForecastTests(unittest.TestCase):
         rows = self._rows()
         self.assertTrue(any(v.endswith(f"T{now.hour:02d}:00:00") for v, t in rows), "факт-строка на текущий час")
 
-    def test_past_hours_skipped(self):
-        now = datetime.now()
-        if now.hour == 0:
-            self.skipTest("в 00:xx нет прошедших часов сегодняшних суток")
+    @patch.object(cs, "datetime")
+    def test_past_hours_skipped(self, mock_dt):
+        fixed_now = datetime(2026, 9, 26, 14, 0, 0)
+        mock_dt.now.return_value = fixed_now
         data = {"fact": {"temp": 1},
-                "forecasts": [{"hours": [{"hour": str(now.hour - 1), "temp": 99}]}, {}]}
+                "forecasts": [{"hours": [{"hour": "10", "temp": 99}, {"hour": "15", "temp": 25}]}, {}]}
         cs.record_forecast("T", "k", data)
         temps = [t for _, t in self._rows()]
-        self.assertNotIn(99, temps, "прошедший час не должен записываться")
+        self.assertNotIn(99, temps, "прошедший час 10 не должен записываться при cur_hour=14")
+        self.assertIn(25, temps, "будущий час 15 должен быть записан")
 
     def test_tomorrow_hours_recorded(self):
         now = datetime.now()

@@ -961,9 +961,9 @@ var fetch_from_owm = function(on_success, on_error) {
 				});
 				parts2.day = parts.day; parts2.evening = parts.evening;
 				var city = om.city || {};
-				var sr = new Date((city.sunrise || 0) * 1000);
-				var ss = new Date((city.sunset || 0) * 1000);
-				var fH = function(d) { return (d.getHours() < 10 ? '0' : '') + d.getHours() + ':' + (d.getMinutes() < 10 ? '0' : '') + d.getMinutes(); };
+				var sr = new Date(((city.sunrise || 0) + tz) * 1000);
+				var ss = new Date(((city.sunset || 0) + tz) * 1000);
+				var fH = function(d) { return (d.getUTCHours() < 10 ? '0' : '') + d.getUTCHours() + ':' + (d.getUTCMinutes() < 10 ? '0' : '') + d.getUTCMinutes(); };
 				var converted = {
 					fact: {
 						temp: factB ? factB.temp : null,
@@ -974,7 +974,7 @@ var fetch_from_owm = function(on_success, on_error) {
 						pressure_mm: (factB && factB.pressure_mm != null) ? factB.pressure_mm : null
 					},
 					forecasts: [{
-						sunrise: fH(sr), sunset: fH(ss), moon_code: moonPhaseCode(),
+						sunrise: city.sunrise ? fH(sr) : null, sunset: city.sunset ? fH(ss) : null, moon_code: moonPhaseCode(),
 						hours: blocks.filter(function(b) { return b.date === today; }).map(function(b) { return { hour: String(b.hour), temp: b.temp }; }),
 						parts: parts
 					}, { parts: parts2 }]
@@ -2135,13 +2135,14 @@ function riseset(rise, set) {
 	set =  set.split(':');
 	rise = Number(rise[0]) * 60 + Number(rise[1]);
 	set = Number(set[0]) * 60 + Number(set[1]);
-	duration = set - rise;
-	current = date.getHours() * 60 + date.getMinutes();
-	hour = Math.floor(duration / 60);
+	var duration = set - rise;
+	var current = date.getHours() * 60 + date.getMinutes();
+	var hour = Math.floor(duration / 60);
 	result.duration_hour = String(pad(hour));
 	result.duration_minute = String(pad(duration - hour * 60));
 	result.duration_time = 'width: ' + Math.round((duration / (60 * 24) * 100)) + '%; left: ' + Math.round(rise / (60 * 24) * 100) + '%';
 	result.duration_progress = 'width: ' + Math.round(current / (60 * 24) * 100) + '%';
+	var minutes;
 	if (current >= rise && current < set) {
 		minutes = set - current;
 		result.duration_left = period.day_day;
@@ -2149,7 +2150,7 @@ function riseset(rise, set) {
 		minutes = (current < rise) ? (rise - current) : (60 * 24 - current + rise);
 		result.duration_left = period.day_night;
 	}
-	hours = Math.floor(minutes / 60);
+	var hours = Math.floor(minutes / 60);
 	result.duration_left += ' ' + String(pad(hours)) + ':' + String(pad(minutes - hours * 60));
 	update(result);
 }
