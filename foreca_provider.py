@@ -270,24 +270,25 @@ class ForecaProvider:
     # ------------------------------------------------------------------ #
     @staticmethod
     def _icon_from_point(p, local_hour=None):
-        """symbol Foreca (d000/d100/.../r*/s*) + вероятность/объём осадков -> класс информера."""
+        """symbol Foreca (d000..d730/n...) + вероятность/объём осадков -> класс информера.
+        Реальный справочник (живые данные): префикс d/n + цифры;
+        0xx ясно, 1xx-2xx малооблачно/переменно, 3xx-4xx облачно/пасмурно,
+        41x-42x морось/гололёд, 5xx дождь, 6xx снег, 7xx гроза."""
         sym = str(p.get("symbol") or "")
         prob = p.get("precip_prob") or 0
         accum = p.get("precip_mm") or 0
         first = sym[:1]
-        suffix = "_d" if first == "d" else ("_n" if first == "n" else "_d")
-        if first not in ("d", "n"):
-            suffix = "_d" if (local_hour is not None and 6 <= local_hour < 20) else "_n"
-        # осадки по символу: 6xx/7xx дождь, 6xx снег? У Foreca r*=rain, s*=snow, t*=thunder
-        if sym[:1] == "t" or "thunder" in sym:
+        suffix = "_n" if first == "n" else "_d"
+        digits = "".join(ch for ch in sym if ch.isdigit())
+        code = int(digits[:3]) if digits else 100
+        if 700 <= code < 800:
             return "ovc_ts"
-        if sym[:1] == "s":
+        if 600 <= code < 700:
             return "ovc_sn"
-        if sym[:1] == "r":
+        if 410 <= code < 600:
             return "ovc_ra"
         if (prob is not None and prob >= 40) or (accum and accum > 0.1):
             return "ovc_ra"
-        digits = "".join(ch for ch in sym if ch.isdigit())
         code = int(digits[:3]) if digits else 100
         if code == 0:
             return "skc" + suffix
