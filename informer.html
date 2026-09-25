@@ -139,6 +139,17 @@ var pressure_max = 770; //Давление, максимум, мм рт ст
 	content: "\25CF\00A0";
 	color: #9fd06a;
 }
+/* Защита от выгорания: pixel shift (1px, 4 позиции) и ночное затемнение */
+body.px-shift-0 { transform: translate(0, 0); }
+body.px-shift-1 { transform: translate(1px, 0); }
+body.px-shift-2 { transform: translate(0, 1px); }
+body.px-shift-3 { transform: translate(-1px, 0); }
+body.px-shift-4 { transform: translate(0, -1px); }
+body.night-dim #wrapper { opacity: 0.4; transition: opacity 5s; }
+body.night-dim #weather_body { opacity: 0.4; }
+body.night-dim #status_bar { opacity: 0.6; }
+body.night-dim #menu_btn { opacity: 0.3; }
+
 #key_dialog {
 	display: none;
 	z-index: 100000;
@@ -437,6 +448,28 @@ function astro_sun(lat, lon, dateObj) {
 		return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
 	}
 	return { sunrise: hm(Jtransit - w / 360), sunset: hm(Jtransit + w / 360) };
+}
+
+var burnInShift = 0;
+var burnInTimer = null;
+
+function startBurnInProtection() {
+	if (burnInTimer) clearInterval(burnInTimer);
+	burnInTimer = setInterval(function() {
+		burnInShift = (burnInShift + 1) % 5;
+		document.body.className = document.body.className.replace(/\s*px-shift-\d/g, '');
+		document.body.className += ' px-shift-' + burnInShift;
+		applyNightDim();
+	}, 30 * 60 * 1000);
+	applyNightDim();
+}
+
+function applyNightDim() {
+	var h = new Date().getHours();
+	var dim = (h >= 23 || h < 6);
+	var has = document.body.className.indexOf('night-dim') >= 0;
+	if (dim && !has) document.body.className += ' night-dim';
+	else if (!dim && has) document.body.className = document.body.className.replace(/\s*night-dim/g, '');
 }
 
 function moonPhaseCode() {
@@ -1457,7 +1490,8 @@ window.onload = function() {
 				render_weather(current_weather_data);
 			}
 			update_status_bar();
-			run();
+			startBurnInProtection();
+run();
 		});
 	}
 
