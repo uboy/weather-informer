@@ -885,7 +885,7 @@ var fetch_from_owm = function(on_success, on_error) {
 		.done(function(om) {
 			try {
 				var tz = ((om.city || {}).timezone) || 0;
-				var nowD = new Date(Date.now() - tz * 1000);
+				var nowD = new Date(Date.now() + tz * 1000);
 				var today = nowD.getUTCFullYear() + '-' + ('0' + (nowD.getUTCMonth() + 1)).slice(-2) + '-' + ('0' + nowD.getUTCDate()).slice(-2);
 				var blocks = (om.list || []).map(function(it) {
 					var w = (it.weather && it.weather[0]) || {};
@@ -920,7 +920,7 @@ var fetch_from_owm = function(on_success, on_error) {
 				var byName = { morning: [], day: [], evening: [], night: [] };
 				for (var i = 0; i < blocks.length; i++) {
 					var b = blocks[i];
-					if (b.date !== today) { if (b.hour < 6) byName.night.push(b); continue; }
+					if (b.date !== today) { continue; }
 					if (b.hour >= 6 && b.hour < 12) byName.morning.push(b);
 					else if (b.hour >= 12 && b.hour < 18) byName.day.push(b);
 					else if (b.hour >= 18) byName.evening.push(b);
@@ -929,7 +929,7 @@ var fetch_from_owm = function(on_success, on_error) {
 				var factB = blocks.length ? blocks[0] : null;
 				var tomorrowStr = null;
 				for (var qi = 0; qi < blocks.length; qi++) {
-					if (blocks[qi].date !== today) { tomorrowStr = blocks[qi].date; break; }
+					if (blocks[qi].date > today) { tomorrowStr = blocks[qi].date; break; }
 				}
 				var byTmrw = { night: [], morning: [] };
 				for (var ti = 0; ti < blocks.length; ti++) {

@@ -48,8 +48,10 @@ class RecordForecastTests(unittest.TestCase):
 
     def test_past_hours_skipped(self):
         now = datetime.now()
+        if now.hour == 0:
+            self.skipTest("в 00:xx нет прошедших часов сегодняшних суток")
         data = {"fact": {"temp": 1},
-                "forecasts": [{"hours": [{"hour": str((now.hour - 2) % 24), "temp": 99}]}, {}]}
+                "forecasts": [{"hours": [{"hour": str(now.hour - 1), "temp": 99}]}, {}]}
         cs.record_forecast("T", "k", data)
         temps = [t for _, t in self._rows()]
         self.assertNotIn(99, temps, "прошедший час не должен записываться")
