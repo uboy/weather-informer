@@ -399,8 +399,7 @@ def stats_loop():
             log.error("stats loop error: %s", e)
         rotate_stats_if_needed()
         prune_history()
-        if time.localtime().tm_hour == 9 and time.localtime().tm_min < interval // 60:
-            collect_foreca_observations()
+        collect_foreca_observations()  # почасовой ground truth для /accuracy
         time.sleep(interval)
 
 
