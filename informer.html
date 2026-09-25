@@ -217,7 +217,7 @@ var pressure_max = 770; //Давление, максимум, мм рт ст
 							</div>
 							<div class="sector_feels">
 								<span id="feels" class="value"></span>
-								<span id="feels_label">ощущается</span>
+								<span id="feels_label">ощущ.</span>
 							</div>
 							<div class="sector_max">
 								<span id="max" class="value"></span>
@@ -2198,6 +2198,9 @@ body {
 #temperature {
 	font-size: 21vw;
 }
+#temperature_sub {
+	display: flex;
+}
 #temperature_sub div {
 	width: 33%;
 	font-size: 5vw;
@@ -2209,8 +2212,10 @@ body {
 	color: var(--tc, #ffffff);
 }
 #feels_label {
-	font-size: 2.0vw;
 	color: #999999;
+}
+#temperature_sub div, #temperature_sub span {
+	white-space: nowrap;
 }
 #minmax_first {
 	text-align: left;
