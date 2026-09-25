@@ -122,7 +122,7 @@ STATS_LOCK = threading.Lock()
 # Дефолтные параметры
 DEFAULT_CONFIG = {
     "port": 8085,
-    "cache_interval_minutes": 90,  # 16 запросов в сутки (квота 30/день)
+    "cache_interval_minutes": 60,  # 24 запроса в сутки (квота 30/день)
     "api": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
     "lat": 56.317722,
     "lon": 43.999303,

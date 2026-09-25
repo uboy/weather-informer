@@ -8,7 +8,7 @@
   "pressure_min": 710,
   "pressure_max": 770,
   "port": 8085,
-  "cache_interval_minutes": 90,
+  "cache_interval_minutes": 60,
   "max_cache_age_hours": 48,
   "enable_openmeteo_fallback": true,
   "om_proxy": "",
