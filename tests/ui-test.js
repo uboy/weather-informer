@@ -48,17 +48,18 @@ check('z-index: status_bar (' + zStatus + ') > weather_menu (' + zMenu + ')',
 
 // 2.3 один градус (::after) на feels, temperature, min, max — не в JS
 const feelsLines = html.split('\n').filter(l => l.includes('result.feels'));
-check('feels в JS без ° (градус из CSS ::after)',
-    feelsLines.length > 0 && !feelsLines.some(l => l.includes("'°'") || l.includes('"°"')),
+check('feels в JS С ° (градус в значении, не CSS)',
+    feelsLines.length > 0 && feelsLines.every(l => l.includes("'°'")),
     JSON.stringify(feelsLines.map(l => l.trim().slice(0, 60))));
+check('#feels НЕ в CSS ::after (градус из JS)', !html.match(/#feels::after/));
 
 // 2.4 nowrap на sub-row (регрессия «порвана строка»)
 const nowrap = html.match(/#temperature_sub div,\s*#temperature_sub span\s*\{[^}]*white-space:\s*nowrap/s);
 check('#temperature_sub nowrap (анти-перенос)', !!nowrap);
 
 // 2.5 feels_label без собственного font-size (наследует от div — регрессия 2vw vs 1.6vw)
-const labelCss = html.match(/#feels_label\s*\{[^}]*\}/);
-check('#feels_label без font-size (наследование)', labelCss && !/font-size/.test(labelCss[0]),
+const labelCss = html.match(/\.sector_feels\s*\{[^}]*\}/);
+check('.sector_feels без font-size (наследование)', labelCss && !/font-size/.test(labelCss[0]),
     labelCss ? labelCss[0] : 'не найден');
 
 // ===== 3. JS-инварианты =====
@@ -70,10 +71,14 @@ if (flMatch) {
     check('feels_like: null → null', fn(null, 50, 3) === null);
     check('feels_like: undefined → null', fn(undefined, 50, 3) === null);
     check('feels_like: NaN → null', fn('abc', 50, 3) === null);
-    check('feels_like: зима −5°/8м/с → ветер-чилл ≤ −6', fn(-5, 80, 8) <= -6, String(fn(-5, 80, 8)));
+    check('feels_like: 0°/3м/с(10.8км/ч) → −4 (км/ч-формула)', fn(0, 50, 3) <= -3 && fn(0, 50, 3) >= -5, String(fn(0, 50, 3)));
+    check('feels_like: −10°/5м/с(18км/ч) → −17±2', fn(-10, 50, 5) <= -15 && fn(-10, 50, 5) >= -19, String(fn(-10, 50, 5)));
+    check('feels_like: −5°/8м/с(29км/ч) → −14±2', fn(-5, 80, 8) <= -12 && fn(-5, 80, 8) >= -16, String(fn(-5, 80, 8)));
+    check('feels_like: Foreca hum=null → чилл работает', fn(5, null, 2) != null, String(fn(5, null, 2)));
+    check('feels_like: граница t=10 слабый ветер ~факт', Math.abs(fn(10, 50, 1) - 10) <= 1, String(fn(10, 50, 1)));
+    check('feels_like: граница t=27/hum=39 → факт', fn(27, 39, 2) === 27, String(fn(27, 39, 2)));
     check('feels_like: жара 30°/70% → ≥ +32', fn(30, 70, 2) >= 32, String(fn(30, 70, 2)));
-    check('feels_like: жара 30°/30% → факт (без индекса)', fn(30, 30, 2) === 30, String(fn(30, 30, 2)));
-    check('feels_like: осень 8° → ≤ факт', fn(8, 60, 3) <= 8, String(fn(8, 60, 3)));
+    check('feels_like: жара 30°/30% → факт', fn(30, 30, 2) === 30, String(fn(30, 30, 2)));
 }
 
 // 3.2 astro_sun: polar guard

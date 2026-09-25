@@ -211,17 +211,14 @@ var pressure_max = 770; //Давление, максимум, мм рт ст
 					<div id="temperature_block">
 						<div id="temperature" class="value sector_temperature"></div>
 						<div id="temperature_sub">
-							<div class="sector_min">
-								<span id="min" class="value"></span>
-								<span id="min_date" class="value"></span>
-							</div>
 							<div class="sector_feels">
-								<span id="feels" class="value"></span>
-								<span id="feels_label">ощущ.</span>
+								<span id="feels_label">ощущ.</span> <span id="feels" class="value"></span><span class="sub_sep">;</span>
+							</div>
+							<div class="sector_min">
+								<span class="sub_label">мин</span> <span id="min" class="value"></span> <span id="min_date" class="value"></span><span class="sub_sep">;</span>
 							</div>
 							<div class="sector_max">
-								<span id="max" class="value"></span>
-								<span id="max_date" class="value"></span>
+								<span class="sub_label">макс</span> <span id="max" class="value"></span> <span id="max_date" class="value"></span>
 							</div>
 						</div>
 					</div>
@@ -395,14 +392,17 @@ function normalize_icon(name) {
 }
 
 function calc_feels_like(t, hum, wind) {
-	// Ощущаемая температура: t<=10 — ветер-чилл; t>=27 && hum>=40 — жара-индекс; между — лёгкая поправка
-	if (t == null || hum == null || wind == null) return null;
-	t = Number(t); hum = Number(hum); wind = Number(wind);
-	if (isNaN(t) || isNaN(hum) || isNaN(wind)) return null;
+	// Ощущаемая температура: t<=10 — ветер-чилл (JAG/TI, км/ч); t>=27 && hum>=40 — жара-индекс; между — поправка
+	// humidity не нужна для холодовой ветки (Foreca/7timer её не отдают)
+	if (t == null || wind == null) return null;
+	t = Number(t); wind = Number(wind);
+	if (isNaN(t) || isNaN(wind)) return null;
+	hum = (hum == null) ? 50 : Number(hum);
+	if (isNaN(hum)) hum = 50;
 	if (t <= 10) {
-		var v16 = Math.pow(Math.max(wind, 1), 0.16);
-		var wc = 13.12 + 0.6215 * t - 11.37 * v16 + 0.3965 * t * v16;
-		return Math.round(wc);
+		var kmh = Math.max(wind * 3.6, 1); // м/с -> км/ч (формула определена для км/ч)
+		var v16 = Math.pow(kmh, 0.16);
+		return Math.round(13.12 + 0.6215 * t - 11.37 * v16 + 0.3965 * t * v16);
 	}
 	if (t >= 27 && hum >= 40) {
 		var tf = t * 9 / 5 + 32;
@@ -1853,7 +1853,7 @@ function render_weather(data) {
 		var feels2 = null;
 		if (data.fact.feels_like != null) feels2 = data.fact.feels_like;
 		else if (data.fact.temp != null && data.fact.humidity != null && data.fact.wind_speed != null) feels2 = calc_feels_like(data.fact.temp, data.fact.humidity, data.fact.wind_speed);
-		result.feels = (feels2 != null) ? ((feels2 > 0 ? '+' : '') + feels2) : '—';
+		result.feels = (feels2 != null) ? ((feels2 > 0 ? '+' : '') + feels2 + '°') : '—';
 
 		if (hourForecast.hasOwnProperty('wind_speed') && hourForecast.wind_speed != null) {
 			result.wind = hourForecast.wind_speed;
@@ -1899,7 +1899,7 @@ function render_weather(data) {
 		var feels = null;
 		if (data.fact.feels_like != null) feels = data.fact.feels_like;
 		else if (data.fact.temp != null && data.fact.humidity != null && data.fact.wind_speed != null) feels = calc_feels_like(data.fact.temp, data.fact.humidity, data.fact.wind_speed);
-		result.feels = (feels != null) ? ((feels > 0 ? '+' : '') + feels) : '—';
+		result.feels = (feels != null) ? ((feels > 0 ? '+' : '') + feels + '°') : '—';
 		if (data.fact.hasOwnProperty('wind_speed') && data.fact.wind_speed != null) {
 			result.wind = data.fact.wind_speed;
 			result.wind_progress = 'width: ' + (100 - Math.round(data.fact.wind_speed / wind_max * 100)) + '%';
@@ -2192,7 +2192,7 @@ body {
 	left: 0;
 	width: 35%;
 }
-#temperature::after, #feels::after, #forecast_temperature_0::after, #forecast_temperature_1::after, #temperature_alt::after, #min::after, #max::after {
+#temperature::after, #forecast_temperature_0::after, #forecast_temperature_1::after, #temperature_alt::after, #min::after, #max::after {
 	content: "\00B0";
 }
 #temperature {
@@ -2206,13 +2206,17 @@ body {
 	font-size: 5vw;
 }
 #temperature_sub .sector_feels {
-	text-align: center;
+	text-align: left;
 }
-#feels {
+#temperature_sub .sector_feels #feels {
 	color: var(--tc, #ffffff);
 }
-#feels_label {
+#temperature_sub .sub_label {
 	color: #999999;
+}
+#temperature_sub .sub_sep {
+	color: #999999;
+	padding: 0 0.4vw;
 }
 #temperature_sub div, #temperature_sub span {
 	white-space: nowrap;
