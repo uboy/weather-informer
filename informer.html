@@ -150,7 +150,6 @@ var pressure_max = 770; //Давление, максимум, мм рт ст
 	border: 0.2vw solid rgba(255, 255, 255, 0.3);
 	border-radius: 1vw;
 	padding: 2vw;
-	z-index: 300;
 	width: 60vw;
 }
 #key_dialog.key_dialog_open { display: block; }
@@ -935,7 +934,8 @@ var fetch_from_7timer_client = function(on_success, on_error) {
 				var BFT = [0, 0.8, 2.4, 4.3, 6.7, 9.3, 12.3, 15.5, 18.9, 22.6, 26.4, 30.5, 34.7];
 				var DIR7 = { N: 0, NNE: 22, NE: 45, ENE: 67, E: 90, ESE: 112, SE: 135, SSE: 157, S: 180, SSW: 202, SW: 225, WSW: 247, W: 270, WNW: 292, NW: 315, NNW: 337 };
 				function icon7(b, hour) {
-					var cc = parseInt(b.cloudcover, 10) || 0;
+					var cc = parseInt(b.cloudcover, 10);
+						if (isNaN(cc)) cc = 50;
 					var prec = String(b.prec_type || 'none').toLowerCase();
 					var base = 'bkn';
 					if (prec === 'rain' || prec === 'frzr') base = 'ovc_ra';
@@ -1340,19 +1340,23 @@ function run() {
 	var storedLastCall = parseInt(safe_get_item("weather_last_call", "0"), 10);
 	if (storedLastCall > lastcall) lastcall = storedLastCall;
 
-	if (lastcall < now - timeout * 1000 && (server_url.trim() !== '' || api != 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx')) {
-		get_data();
+	try {
+		if (lastcall < now - timeout * 1000 && (server_url.trim() !== '' || api != 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx')) {
+			get_data();
+		}
+
+		// Динамически пересчитываем прогноз и проверяем актуальность кэша каждую минуту
+		if (current_weather_data) {
+			render_weather(current_weather_data);
+		} else {
+			update_status_bar();
+		}
+
+		update(data);
+	} catch (e) {
+		console.error('run tick failed:', e);
 	}
 
-	// Динамически пересчитываем прогноз и проверяем актуальность кэша каждую минуту
-	if (current_weather_data) {
-		render_weather(current_weather_data);
-	} else {
-		update_status_bar();
-	}
-
-	update(data);
-	
 	interval = 60 * 1000;
 	timer = Math.ceil(now / interval) * interval + 1000 - now;
 	setTimeout(function(){run()}, timer);

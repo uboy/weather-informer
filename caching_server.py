@@ -213,6 +213,8 @@ def save_disk_cache(data):
 
 def _history_conn():
     conn = sqlite3.connect(FORECAST_DB)
+    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("""CREATE TABLE IF NOT EXISTS forecast_points (
         created TEXT NOT NULL, provider TEXT NOT NULL, loc TEXT NOT NULL, valid_at TEXT NOT NULL,
         temperature REAL, humidity REAL, pressure REAL, precip_prob REAL, precip_mm REAL)""")
@@ -367,9 +369,11 @@ def _decode_synop(msg):
         elif tok[0] == "4" and len(tok) == 5 and tok[1:].isdigit():
             val = int(tok[1:])
             out["pressure_sl"] = val / 10.0 + (1000.0 if val < 5000 else 0.0)
-        elif tok[0] == "6" and len(tok) == 5 and tok[1:].isdigit():
+        elif tok[0] == "6" and len(tok) == 5 and tok[1:].isdigit() and sec3:
             v = int(tok[1:4])
-            out["precip_mm"] = (v / 10.0 if v >= 991 else float(v))  # 991-999 = следы
+            # WMO табл. 4019: 001-988 = целые мм; 991-999 = следы 0.1-0.9 мм; 990 = нет
+            out["precip_mm"] = ((v - 990) / 10.0 if v >= 991 else
+                                None if v == 990 else float(v))
     return out
 
 
@@ -406,7 +410,11 @@ def collect_ogimet_synop(hours_back=30):
             except ValueError:
                 continue
             ts_utc_iso = ts_utc.isoformat(timespec="seconds") + "Z"
-            ts_local = (ts_utc + timedelta(hours=3)).isoformat(timespec="seconds")
+            try:
+                from zoneinfo import ZoneInfo
+                ts_local = ts_utc.astimezone(ZoneInfo("Europe/Moscow")).isoformat(timespec="seconds")
+            except Exception:
+                ts_local = (ts_utc + timedelta(hours=3)).isoformat(timespec="seconds")
             decoded = _decode_synop(raw_msg)
             conn.execute("INSERT OR REPLACE INTO synop_raw VALUES (?,?)",
                          (ts_utc_iso, raw_msg))
@@ -1421,8 +1429,7 @@ def main():
     # Биндим порт ДО старта фоновых потоков: вторая копия сервера умирает
     # здесь же мгновенно — без потоков и без запросов к источникам
     # (защита от дублей: ручные запуски поверх systemd-инстанса)
-    server = ThreadingHTTPServer(("0.0.0.0", port), WeatherHTTPHandler,
-                                daemon_threads=True)
+    server = ThreadingHTTPServer(("0.0.0.0", port), WeatherHTTPHandler)
     log.info("WeatherInformer Caching Proxy listening on port %d...", port)
 
     # Первичный запрос в фоне
