@@ -2142,11 +2142,11 @@ function riseset(rise, set) {
 	result.duration_minute = String(pad(duration - hour * 60));
 	result.duration_time = 'width: ' + Math.round((duration / (60 * 24) * 100)) + '%; left: ' + Math.round(rise / (60 * 24) * 100) + '%';
 	result.duration_progress = 'width: ' + Math.round(current / (60 * 24) * 100) + '%';
-	if (current > rise && current < set) {
+	if (current >= rise && current < set) {
 		minutes = set - current;
 		result.duration_left = period.day_day;
 	} else {
-		minutes = 60 * 24 - current + rise;
+		minutes = (current < rise) ? (rise - current) : (60 * 24 - current + rise);
 		result.duration_left = period.day_night;
 	}
 	hours = Math.floor(minutes / 60);

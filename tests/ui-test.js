@@ -110,6 +110,38 @@ if (renderMatch) {
     check('нет duration_hour=00 до astronomy', !beforeAstro.includes("duration_hour = '00'"));
 }
 
+// 3.3b riseset: длительность и обратный отсчёт дня/ночи (регрессия: ночь 29:50 после полуночи)
+const risesetMatch = html.match(/^function riseset[\s\S]*?^\}/m);
+check('riseset извлечена', !!risesetMatch);
+if (risesetMatch) {
+    const fn = eval('(function(){' +
+        'var value = {}, period = {day_day: "день", day_night: "ночь"}, date, pad = function(n){return n<10?"0"+n:n;};' +
+        'var lastResult = null, update = function(r){ lastResult = r; };' +
+        risesetMatch[0] + ';' +
+        'return function(riseStr, setStr, h, m) {' +
+            'date = { getHours: function() { return h; }, getMinutes: function() { return m; } };' +
+            'riseset(riseStr, setStr);' +
+            'return lastResult;' +
+        '};' +
+    '})()');
+
+    // День: 12:00, восход 06:00, закат 18:00 -> осталось дня 6ч
+    const dayRes = fn('06:00', '18:00', 12, 0);
+    check('riseset: день 12:00 -> день 06:00', dayRes && dayRes.duration_left === 'день 06:00', JSON.stringify(dayRes));
+
+    // Ночь до полуночи: 22:00, восход 06:00, закат 18:00 -> осталось ночи 8ч (2ч до 00:00 + 6ч до 06:00)
+    const nightEveRes = fn('06:00', '18:00', 22, 0);
+    check('riseset: ночь 22:00 -> ночь 08:00', nightEveRes && nightEveRes.duration_left === 'ночь 08:00', JSON.stringify(nightEveRes));
+
+    // Ночь после полуночи: 00:25, восход 06:15, закат 18:20 -> осталось ночи 5ч 50м (не 29:50!)
+    const nightMornRes = fn('06:15', '18:20', 0, 25);
+    check('riseset: ночь 00:25 -> ночь 05:50 (не 29:50)', nightMornRes && nightMornRes.duration_left === 'ночь 05:50', JSON.stringify(nightMornRes));
+
+    // Полночь ровно: 00:00, восход 06:00, закат 18:00 -> ночь 06:00
+    const midnightRes = fn('06:00', '18:00', 0, 0);
+    check('riseset: полночь 00:00 -> ночь 06:00', midnightRes && midnightRes.duration_left === 'ночь 06:00', JSON.stringify(midnightRes));
+}
+
 // 3.4 ES5-дисциплина (регрессия при добавлении фич)
 const es6 = [...html.matchAll(/\b(?:=>|`|\blet\s|\bconst\s|class\s+\w)/g)];
 check('ES5: нет стрелок/let/const/template', es6.length === 0,
