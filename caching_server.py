@@ -12,6 +12,7 @@ WeatherInformer Local Caching Proxy Server.
 import os
 import sys
 import json
+import sqlite3
 import time
 import threading
 import logging
@@ -23,6 +24,7 @@ import urllib.parse
 from urllib.parse import parse_qs, urlparse
 
 from gismeteo_provider import GismeteoProvider
+from foreca_provider import ForecaProvider
 
 logging.basicConfig(
     level=logging.INFO,
@@ -109,7 +111,11 @@ GISMETEO = GismeteoProvider(
     city_cache_path=os.path.join(SCRIPT_DIR, "gismeteo_cities.json"),
     logger=log,
 )
+
+
 STATS_FILE = os.path.join(SCRIPT_DIR, "weather_stats.csv")
+FORECAST_DB = os.path.join(SCRIPT_DIR, "forecast.db")
+HISTORY_DAYS = 90  # ротация истории: кольцо в 90 дней
 STATS_LOCK = threading.Lock()
 
 # Дефолтные параметры
@@ -122,6 +128,8 @@ DEFAULT_CONFIG = {
     "enable_openmeteo_fallback": True,
     "om_proxy": "",
     "enable_gismeteo_fallback": True,
+    "foreca_api_key": "",
+    "enable_foreca_fallback": True,
     "enable_wttr_fallback": True,
     "enable_7timer_fallback": True,
     "stats_enabled": True,
@@ -145,6 +153,15 @@ def load_config():
         except Exception as e:
             log.warning("Could not parse %s: %s (using defaults)", CONFIG_FILE, e)
     return cfg
+
+FORECA = ForecaProvider(
+    token=load_config().get("foreca_api_key", ""),
+    geocode_fn=geocode_search,
+    reverse_fn=reverse_geocode,
+    location_cache_path=os.path.join(SCRIPT_DIR, "foreca_locations.json"),
+    logger=log,
+)
+
 
 
 def normalize_weather_data(data):
@@ -191,6 +208,110 @@ def save_disk_cache(data):
         os.replace(tmp, CACHE_FILE)
     except Exception as e:
         log.warning("Could not save cache to disk: %s", e)
+
+
+def _history_conn():
+    conn = sqlite3.connect(FORECAST_DB)
+    conn.execute("""CREATE TABLE IF NOT EXISTS forecast_points (
+        created TEXT NOT NULL, provider TEXT NOT NULL, loc TEXT NOT NULL, valid_at TEXT NOT NULL,
+        temperature REAL, humidity REAL, pressure REAL, precip_prob REAL, precip_mm REAL)""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS observations (
+        ts TEXT NOT NULL, station TEXT NOT NULL, source TEXT NOT NULL,
+        temperature REAL, humidity REAL, pressure REAL, precip_mm REAL,
+        UNIQUE(ts, station, source))""")
+    return conn
+
+
+def record_forecast(provider, loc, data):
+    """Прогноз в forecast.db: факт (valid=now) + почасовые точки активного дня.
+    Поля, которых источник не отдаёт, пишутся как NULL (no fake data)."""
+    try:
+        now = datetime.now()
+        now_iso = now.isoformat(timespec="seconds")
+        f = data.get("fact") or {}
+        rows = [(now_iso, provider, loc, now_iso,
+                 f.get("temp"), f.get("humidity"), f.get("pressure_mm"),
+                 None, None)]
+        hours = ((data.get("forecasts") or [{}])[0].get("hours")) or []
+        cur_hour = now.hour
+        for h in hours:
+            try:
+                hh = int(h.get("hour", -1))
+            except (TypeError, ValueError):
+                continue
+            day = now.date() if hh >= cur_hour else (now + timedelta(days=1)).date()
+            valid_at = f"{day.isoformat()}T{hh:02d}:00:00"
+            rows.append((now_iso, provider, loc, valid_at,
+                         h.get("temp"), None, None, None, None))
+        conn = _history_conn()
+        try:
+            conn.executemany("INSERT INTO forecast_points VALUES (?,?,?,?,?,?,?,?,?)", rows)
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as e:
+        log.warning("history: forecast not recorded: %s", e)
+
+
+def rotate_stats_if_needed():
+    """Ротация статистики-рингбуфером: файл старше 90 дней -> weather_stats.csv.1"""
+    try:
+        if not os.path.isfile(STATS_FILE):
+            return
+        age_days = (time.time() - os.path.getmtime(STATS_FILE)) / 86400.0
+        if age_days > HISTORY_DAYS:
+            old = STATS_FILE + ".1"
+            if os.path.isfile(old):
+                os.remove(old)
+            os.replace(STATS_FILE, old)
+            log.info("stats: ротация рингбуфера (%.0f дней) -> %s", age_days, old)
+    except OSError as e:
+        log.warning("stats: ротация не удалась: %s", e)
+
+
+def prune_history():
+    """Удаление записей истории старше HISTORY_DAYS."""
+    try:
+        conn = _history_conn()
+        try:
+            conn.execute("DELETE FROM forecast_points WHERE created < datetime('now', ?)",
+                         (f"-{HISTORY_DAYS} days",))
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as e:
+        log.warning("history: prune failed: %s", e)
+
+
+def collect_foreca_observations():
+    """Наблюдения ближайших станций Foreca -> observations.db (ground truth)."""
+    if not load_config().get("foreca_api_key", ""):
+        return 0
+    try:
+        cfg = load_config()
+        lat, lon = cfg.get("lat", 56.317722), cfg.get("lon", 43.999303)
+        obs_list = FORECA.get_observations(latitude=lat, longitude=lon, stations=6)
+        conn = _history_conn()
+        n = 0
+        try:
+            for o in obs_list:
+                ts = o.get("time", "")
+                if "T" in ts:
+                    ts = ts[:19]  # нормализация naive локального времени
+                conn.execute(
+                    "INSERT OR REPLACE INTO observations VALUES (?,?,?,?,?,?,?)",
+                    (ts, o.get("station", ""), "foreca-obs",
+                     o.get("temperature"), o.get("relHumidity"),
+                     o.get("pressure"), o.get("precip_mm")))
+                n += 1
+            conn.commit()
+        finally:
+            conn.close()
+        log.info("observations: записано %d наблюдений Foreca", n)
+        return n
+    except Exception as e:
+        log.warning("observations: Foreca недоступен: %s", e)
+        return 0
 
 
 def stats_log_source(source, data):
@@ -249,6 +370,9 @@ def stats_collect_non_yandex(cfg):
 
 def stats_loop():
     time.sleep(120)
+    rotate_stats_if_needed()
+    prune_history()
+    collect_foreca_observations()
     while True:
         interval = 3600
         try:
@@ -258,6 +382,10 @@ def stats_loop():
                 interval = max(300, int(cfg.get("stats_interval_minutes", 60)) * 60)
         except Exception as e:
             log.error("stats loop error: %s", e)
+        rotate_stats_if_needed()
+        prune_history()
+        if time.localtime().tm_hour == 9 and time.localtime().tm_min < interval // 60:
+            collect_foreca_observations()
         time.sleep(interval)
 
 
@@ -828,6 +956,7 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
                     data["src"] = "Yandex"
                     _store_location_result(key, data, None)
                     stats_log_source("Yandex", data)
+                    record_forecast("Yandex", key, data)
                     log.info("Successfully fetched and cached Yandex weather (temp: %s°)", data["fact"].get("temp"))
                     return data
         except urllib.error.HTTPError as e:
@@ -846,6 +975,7 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
             owm_data["src"] = "OpenWeatherMap"
             _store_location_result(key, owm_data, "Active fallback: OpenWeatherMap (Yandex quota/error)")
             stats_log_source("OpenWeatherMap", owm_data)
+            record_forecast("OpenWeatherMap", key, owm_data)
             log.info("Successfully updated weather via OpenWeatherMap fallback (temp: %s°)", owm_data["fact"].get("temp"))
             return owm_data
         except Exception as e:
@@ -861,6 +991,7 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
             om_data["src"] = "Open-Meteo"
             _store_location_result(key, om_data, "Active fallback: Open-Meteo (Yandex quota/error)")
             stats_log_source("Open-Meteo", om_data)
+            record_forecast("Open-Meteo", key, om_data)
             log.info("Successfully updated weather via Open-Meteo fallback (temp: %s°)", om_data["fact"].get("temp"))
             return om_data
         except Exception as e:
@@ -873,11 +1004,26 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
             g_data = GISMETEO.get_weather(latitude=lat, longitude=lon)
             _store_location_result(key, g_data, "Active fallback: Gismeteo (Yandex/OWM/OM unavailable)")
             stats_log_source("Gismeteo", g_data)
+            record_forecast("Gismeteo", key, g_data)
             log.info("Successfully updated weather via Gismeteo fallback (temp: %s°)", g_data["fact"].get("temp"))
             return g_data
         except Exception as e:
             last_error_message = f"Gismeteo: {e}"
             log.error("Gismeteo fallback failed: %s", e)
+
+    # Fallback: Foreca (Bearer-токен в config: foreca_api_key)
+    if want("foreca") and load_config().get("enable_foreca_fallback", True) and load_config().get("foreca_api_key", ""):
+        log.info("Attempting fallback to Foreca...")
+        try:
+            fc_data = FORECA.get_weather(latitude=lat, longitude=lon)
+            _store_location_result(key, fc_data, "Active fallback: Foreca")
+            stats_log_source("Foreca", fc_data)
+            record_forecast("Foreca", key, fc_data)
+            log.info("Successfully updated weather via Foreca fallback (temp: %s°)", fc_data["fact"].get("temp"))
+            return fc_data
+        except Exception as e:
+            last_error_message = f"Foreca: {e}"
+            log.error("Foreca fallback failed: %s", e)
 
     # Fallback 2: wttr.in (без ключа)
     if want("wttr") and load_config().get("enable_wttr_fallback", True):
@@ -887,6 +1033,7 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
             wt_data["src"] = "wttr.in"
             _store_location_result(key, wt_data, "Active fallback: wttr.in (Yandex/OM unavailable)")
             stats_log_source("wttr.in", wt_data)
+            record_forecast("wttr.in", key, wt_data)
             log.info("Successfully updated weather via wttr.in fallback (temp: %s°)", wt_data["fact"].get("temp"))
             return wt_data
         except Exception as e:
@@ -900,6 +1047,7 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
             st_data["src"] = "7timer"
             _store_location_result(key, st_data, "Active fallback: 7timer (others unavailable)")
             stats_log_source("7timer", st_data)
+            record_forecast("7timer", key, st_data)
             log.info("Successfully updated weather via 7timer fallback (temp: %s°)", st_data["fact"].get("temp"))
             return st_data
         except Exception as e:
@@ -1008,6 +1156,63 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({"error": f"reverse failed: {e}"}).encode("utf-8"))
             return
 
+        if path == "/observations/fetch":
+            n = collect_foreca_observations()
+            self.send_response(200)
+            self.send_cors_headers()
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps({"fetched": n}).encode("utf-8"))
+            return
+
+        if path == "/accuracy":
+            qs = parse_qs(urlparse(self.path).query)
+            provider = (qs.get("provider", [""])[0] or "").strip()
+            try:
+                lead = int(qs.get("lead_hours", ["24"])[0])
+                days = int(qs.get("days", ["90"])[0])
+            except ValueError:
+                lead, days = 24, 90
+            if not provider or lead < 0:
+                self.send_response(400)
+                self.send_cors_headers()
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "provider and lead_hours required"}).encode("utf-8"))
+                return
+            try:
+                conn = _history_conn()
+                try:
+                    cur = conn.execute("""
+                        SELECT avg(abs(fp.temperature - o.temperature)), count(*)
+                        FROM forecast_points fp
+                        JOIN observations o
+                          ON o.ts = fp.valid_at AND o.temperature IS NOT NULL
+                        WHERE fp.provider = ? AND fp.temperature IS NOT NULL
+                          AND (julianday(fp.valid_at) - julianday(fp.created)) BETWEEN ? AND ?
+                          AND fp.created > datetime('now', ?)""",
+                        (provider, max(0, lead - 1), lead + 1, f"-{days} days"))
+                    mae, n = cur.fetchone()
+                finally:
+                    conn.close()
+                self.send_response(200)
+                self.send_cors_headers()
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    "provider": provider, "lead_hours": lead,
+                    "samples": n or 0,
+                    "mae_temp_c": (round(mae, 2) if mae is not None else None),
+                }, ensure_ascii=False).encode("utf-8"))
+            except Exception as e:
+                log.warning("accuracy failed: %s", e)
+                self.send_response(500)
+                self.send_cors_headers()
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": str(e)}).encode("utf-8"))
+            return
+
         # Любой погодный маршрут: /, /weather.json, /forecast.json, /v2/forecast
         # Координаты можно передать (?lat=&lon=) — выбор города на планшете;
         # без параметров отдаётся город по умолчанию из config.json
@@ -1035,7 +1240,9 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
                 log.warning("Rejected weather request with invalid coords: lat=%r lon=%r", lat_raw, lon_raw)
                 return
         src_filter = (qs.get("source", [""])[0] or "").strip().lower()
-        sources = ("gismeteo",) if src_filter == "gismeteo" else None
+        sources = None
+        if src_filter in ("gismeteo", "foreca"):
+            sources = (src_filter,)
         data = get_weather_for(q_lat, q_lon, force=False, sources=sources)
         if data:
             body = json.dumps(data, ensure_ascii=False)

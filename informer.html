@@ -139,6 +139,26 @@ var pressure_max = 770; //Давление, максимум, мм рт ст
 	content: "\25CF\00A0";
 	color: #9fd06a;
 }
+#key_dialog {
+	display: none;
+	position: fixed;
+	top: 50%;
+	left: 50%;
+	transform: translate(-50%, -50%);
+	background: rgba(10, 10, 10, 0.96);
+	border: 0.2vw solid rgba(255, 255, 255, 0.3);
+	border-radius: 1vw;
+	padding: 2vw;
+	z-index: 300;
+	width: 60vw;
+}
+#key_dialog.key_dialog_open { display: block; }
+#key_dialog_title {
+	font-size: 2.4vw;
+	color: var(--tc, #fff);
+	padding: 0.5vw 0 1vw 0;
+	word-break: break-all;
+}
 #city_search_input {
 	background: rgba(255, 255, 255, 0.10);
 	border: 0.15vw solid rgba(255, 255, 255, 0.25);
@@ -532,6 +552,32 @@ function init_menu() {
 		apply_text_color(c);
 		render_color();
 	});
+	function show_key_dialog(title, lsKey, onSave, onDelete) {
+		var cur = safe_get_item(lsKey, "");
+		$("#key_dialog_title").text(title + (cur ? " — ключ сохранён: " + cur.substring(0, 16) + "…" : ""));
+		$("#key_dialog_input").val("");
+		$("#key_delete").toggle(!!cur);
+		$("#key_dialog").addClass("key_dialog_open");
+		$("#key_save").off("click").on("click", function(e) {
+			e.stopPropagation();
+			var v = $("#key_dialog_input").val().trim();
+			if (!v) return;
+			safe_set_item(lsKey, v);
+			$("#key_dialog").removeClass("key_dialog_open");
+			if (onSave) onSave();
+		});
+		$("#key_delete").off("click").on("click", function(e) {
+			e.stopPropagation();
+			try { localStorage.removeItem(lsKey); } catch (err) {}
+			$("#key_dialog").removeClass("key_dialog_open");
+			if (onDelete) onDelete();
+		});
+		$("#key_cancel").off("click").on("click", function(e) {
+			e.stopPropagation();
+			$("#key_dialog").removeClass("key_dialog_open");
+		});
+		$("#key_dialog_input").on("click", function(e) { e.stopPropagation(); });
+	}
 	function render_city() {
 		var n = current_city_name();
 		$("#city_current").text("Город: " + (n ? n : "не задан"));
@@ -631,6 +677,7 @@ function init_menu() {
 
 var server_url = ""; // Локальный сервер кэширования (если задан)
 var city_name_cfg = ""; // Город из config.json (для статус-бара)
+var foreca_api_key_cfg = ""; // Ключ Foreca из config.json планшета (опционально)
 var owm_key = ""; // Ключ OpenWeatherMap для клиентского фолбэка
 
 function apply_text_color(c) {
@@ -652,6 +699,7 @@ function load_config(callback) {
 			base_lon = lon;
 			if (cfg.server_url !== undefined) server_url = cfg.server_url;
 			if (cfg.city_name !== undefined) city_name_cfg = String(cfg.city_name);
+			if (cfg.foreca_api_key !== undefined) foreca_api_key_cfg = String(cfg.foreca_api_key);
 			if (cfg.openweathermap_api_key !== undefined) owm_key = cfg.openweathermap_api_key;
 			var storedColor = safe_get_item("weather_text_color", "");
 			apply_text_color(storedColor || cfg.text_color || "");
@@ -946,6 +994,122 @@ var fetch_from_7timer_client = function(on_success, on_error) {
 			on_error(xhr, status, err);
 		});
 };
+
+function fetch_from_foreca_client(on_success, on_error) {
+		var fkey = safe_get_item("foreca_api_key", "") || foreca_api_key_cfg;
+		if (!fkey) { on_error(null, "no_foreca_key", "нет ключа Foreca"); return; }
+		var cname = safe_get_item("city_name", "") || city_name_cfg;
+		if (!cname) { on_error(null, "no_city", "не задан город для Foreca"); return; }
+		var hdr = { "Authorization": "Bearer " + fkey };
+		$.ajax({
+			url: 'https://weatherapi.foreca.net/api/v1/location/search/' + encodeURIComponent(cname) + '?lang=ru',
+			headers: hdr, dataType: 'json', timeout: 15000
+		}).done(function(sr) {
+			var locs = sr.locations || [];
+			if (!locs.length) { on_error(null, "no_location", "Foreca: локейшен не найден"); return; }
+			var loc = locs[0];
+			$.ajax({
+				url: 'https://weatherapi.foreca.net/api/v1/forecast/hourly/' + loc.id +
+					'?periods=49&tz=' + encodeURIComponent(loc.timezone || 'Europe/Moscow') +
+					'&tempunit=C&windunit=MS&rounding=0',
+				headers: hdr, dataType: 'json', timeout: 15000
+			}).done(function(fd) {
+				try { on_success(convert_foreca(fd)); }
+				catch (ex) { console.error('Foreca parse error:', ex); on_error(null, 'parse_error', ex && ex.message); }
+			}).fail(function(x, st, e) { on_error(x, st, e); });
+		}).fail(function(x, st, e) { on_error(x, st, e); });
+	};
+
+	function convert_foreca(fd) {
+		var periods = fd.forecast || [];
+		var now = new Date();
+		var today = now.getFullYear() + '-' + ('0' + (now.getMonth() + 1)).slice(-2) + '-' + ('0' + now.getDate()).slice(-2);
+		var pts = [];
+		periods.forEach(function(it) {
+			if (!it.time) return;
+			points_push(pts, {
+				_dt: new Date(it.time.slice(0, 19)),
+				valid: it.time.slice(0, 19),
+				temperature: it.temperature,
+				wind_speed: it.windSpeed,
+				wind_direction: it.windDir,
+				precip_prob: it.precipProb,
+				precip_mm: it.precipAccum,
+				symbol: it.symbol || ''
+			});
+		});
+		var horizon = new Date(now.getTime() + 48 * 3600 * 1000);
+		points_filter(pts, horizon);
+		if (!pts.length) throw new Error('Foreca: пустой прогноз');
+		var cur = pts[0];
+		var hours = [];
+		points_each_day(pts, today, now.getHours(), function(p, hh) {
+			hours.push({ hour: String(hh), temp: (p.temperature != null ? Math.round(p.temperature) : null) });
+		});
+		var bands = { morning: [], day: [], evening: [], night: [] };
+		points_each(pts, today, function(p) {
+			var h = p._dt.getHours();
+			var slot = (h >= 6 && h < 12) ? bands.morning : (h >= 12 && h < 18) ? bands.day : (h >= 18) ? bands.evening : bands.night;
+			slot.push(p);
+		});
+		var parts = {};
+		['morning', 'day', 'evening', 'night'].forEach(function(name) {
+			var arr = bands[name];
+			var mid = arr.length ? arr[Math.floor(arr.length / 2)] : null;
+			var temps = arr.map(function(p) { return p.temperature; }).filter(function(t) { return t != null; });
+			var winds = arr.map(function(p) { return p.wind_speed; }).filter(function(w) { return w != null; });
+			parts[name] = {
+				temp_avg: temps.length ? Math.round(temps.reduce(function(a, b) { return a + b; }, 0) / temps.length) : null,
+				icon: mid ? foreca_icon(mid, mid._dt.getHours()) : 'bkn_d',
+				wind_speed: winds.length ? Math.round(winds.reduce(function(a, b) { return a + b; }, 0) / winds.length * 10) / 10 : null,
+				wind_angle: mid ? mid.wind_direction : null
+			};
+		});
+		var curTemp = cur.temperature;
+		return {
+			src: 'Foreca',
+			fact: {
+				temp: (curTemp != null ? Math.round(curTemp) : null),
+				icon: foreca_icon(cur, now.getHours()),
+				wind_speed: cur.wind_speed,
+				wind_angle: cur.wind_direction,
+				humidity: null,
+				pressure_mm: null,
+				condition: ''
+			},
+			forecasts: [{ sunrise: null, sunset: null, moon_code: moonPhaseCode(), hours: hours, parts: parts }, { parts: parts }],
+			foreca_points: pts.map(function(p) { delete p._dt; return p; })
+		};
+	}
+	function points_push(arr, p) { arr.push(p); }
+	function points_filter(arr, horizon) {
+		for (var i = arr.length - 1; i >= 0; i--) { if (arr[i]._dt > horizon) arr.splice(i, 1); }
+	}
+	function points_each(arr, today, fn) {
+		arr.forEach(function(p) { if (p._dt.getFullYear() + '-' + ('0' + (p._dt.getMonth() + 1)).slice(-2) + '-' + ('0' + p._dt.getDate()).slice(-2) === today) fn(p); });
+	}
+	function points_each_day(arr, today, minHour, fn) {
+		arr.forEach(function(p) {
+			var ds = p._dt.getFullYear() + '-' + ('0' + (p._dt.getMonth() + 1)).slice(-2) + '-' + ('0' + p._dt.getDate()).slice(-2);
+			if (ds === today && p._dt.getHours() >= minHour) fn(p, p._dt.getHours());
+		});
+	}
+	function foreca_icon(p, localHour) {
+		var sym = String(p.symbol || '');
+		var prob = p.precip_prob || 0;
+		var accum = p.precip_mm || 0;
+		var first = sym.charAt(0);
+		var suffix = (first === 'n') ? '_n' : '_d';
+		if (first === 't' || sym.indexOf('thunder') >= 0) return 'ovc_ts';
+		if (first === 's' && sym.charAt(1) !== 'k') return 'ovc_sn';
+		if (first === 'r') return 'ovc_ra';
+		if ((prob >= 40) || (accum && accum > 0.1)) return 'ovc_ra';
+		var digits = sym.replace(/[^0-9]/g, '');
+		var code = digits ? parseInt(digits.substring(0, 3), 10) : 100;
+		if (code === 0) return 'skc' + suffix;
+		if (code <= 200) return 'bkn' + suffix;
+		return 'ovc';
+	}
 
 function fetch_from_wttr(on_success, on_error) {
 	var wt_url = 'https://wttr.in/' + lat + ',' + lon + '?format=j1';
@@ -1250,6 +1414,28 @@ function get_data() {
 		});
 		return;
 	}
+	if (source_pref === "foreca") {
+		var fkey = safe_get_item("foreca_api_key", "");
+		if (!fkey) {
+			show_key_dialog("Ключ Foreca (Bearer)", "foreca_api_key", function() { get_data(); });
+			return;
+		}
+		console.log("get_data: source pref = Foreca (direct)");
+		fetch_from_foreca_client(function(d) {
+			current_weather_data = d;
+			try {
+				localStorage.setItem('weather_cache_data', JSON.stringify(d));
+				localStorage.setItem('weather_cache_time', String(Date.now()));
+				localStorage.setItem('weather_cache_source', 'Foreca');
+				localStorage.removeItem('weather_last_attempt_error');
+			} catch (e) {}
+			render_weather(d);
+			update_status_bar();
+		}, function(ox, os, oe) {
+			show_error(ox, os, oe, "Foreca");
+		});
+		return;
+	}
 	if (source_pref === "7timer") {
 		console.log("get_data: source pref = 7timer (direct)");
 		fetch_from_7timer_client(function(d) {
@@ -1269,8 +1455,13 @@ function get_data() {
 	}
 	if (source_pref === "yandex") {
 		if (!allow_direct_yandex) { show_error(null, "source_disabled", "прямой Яндекс отключён конфигом"); return; }
+		var effKey = safe_get_item("yandex_api_key", "") || api;
+		if (!effKey || effKey === 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx') {
+			show_key_dialog("Ключ Яндекс.Погоды (прямой)", "yandex_api_key", function() { get_data(); });
+			return;
+		}
 		console.log("get_data: source pref = Yandex (direct)");
-		fetch_url('https://api.weather.yandex.ru/v2/forecast?lat=' + lat + '&lon=' + lon, {'X-Yandex-Weather-Key': api}, true);
+		fetch_url('https://api.weather.yandex.ru/v2/forecast?lat=' + lat + '&lon=' + lon, {'X-Yandex-Weather-Key': effKey}, true);
 		return;
 	}
 
@@ -1383,11 +1574,12 @@ function get_data() {
 		if (enable_wttr_fallback) {
 			chain.push({ name: 'wttr.in', run: function(ok, fail) { fetch_from_wttr(ok, fail); } });
 		}
-		if (allow_direct_yandex && api && api !== 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx') {
+		var effFallbackKey = safe_get_item("yandex_api_key", "") || api;
+		if (allow_direct_yandex && effFallbackKey && effFallbackKey !== 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx') {
 			chain.push({ name: 'Яндекс.Погода', run: function(ok, fail) {
 				$.ajax({
 					url: 'https://api.weather.yandex.ru/v2/forecast?lat=' + lat + '&lon=' + lon,
-					headers: { 'X-Yandex-Weather-Key': api },
+					headers: { 'X-Yandex-Weather-Key': effFallbackKey },
 					dataType: 'json',
 					timeout: 25 * 1000
 				}).done(function(d) { ok(d, 'Яндекс.Погода'); })
@@ -2539,6 +2731,7 @@ body {
 		<div class="menu_item menu_src" data-src="owm">OpenWeatherMap</div>
 		<div class="menu_item menu_src" data-src="om">Open-Meteo</div>
 		<div class="menu_item menu_src" data-src="gismeteo">Gismeteo</div>
+		<div class="menu_item menu_src" data-src="foreca">Foreca</div>
 		<div class="menu_item menu_src" data-src="7timer">7timer</div>
 		<div class="menu_item menu_src" data-src="wttr">wttr.in</div>
 		<div class="menu_item menu_src" data-src="yandex" style="display:none">Яндекс (прямой)</div>
@@ -2556,6 +2749,13 @@ body {
 		<div class="menu_item menu_color" data-color="#4FC3F7">Голубой</div>
 		<div class="menu_item menu_color" data-color="#FF6EC7">Розовый</div>
 		<div class="menu_close" id="menu_close">Закрыть</div>
+	</div>
+	<div id="key_dialog">
+		<div id="key_dialog_title"></div>
+		<input type="text" id="key_dialog_input" placeholder="Вставьте ключ…" autocomplete="off">
+		<div class="menu_item" id="key_save">Сохранить</div>
+		<div class="menu_item" id="key_delete" style="display:none">Удалить ключ</div>
+		<div class="menu_item" id="key_cancel">Отмена</div>
 	</div>
 	<div id="status_bar"></div>
 </body>
