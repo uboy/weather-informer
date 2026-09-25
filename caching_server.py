@@ -239,7 +239,7 @@ def record_forecast(provider, loc, data):
                 hh = int(h.get("hour", -1))
             except (TypeError, ValueError):
                 continue
-            day = now.date() if hh >= cur_hour else (now + timedelta(days=1)).date()
+            day = now.date()  # hours — активный (текущий) день у всех конвертеров
             valid_at = f"{day.isoformat()}T{hh:02d}:00:00"
             rows.append((now_iso, provider, loc, valid_at,
                          h.get("temp"), None, None, None, None))
@@ -258,7 +258,22 @@ def rotate_stats_if_needed():
     try:
         if not os.path.isfile(STATS_FILE):
             return
-        age_days = (time.time() - os.path.getmtime(STATS_FILE)) / 86400.0
+        # возраст по ПЕРВОЙ записи файла (mtime освежается каждым append)
+        first_ts = None
+        try:
+            with open(STATS_FILE, "r", encoding="utf-8") as f:
+                f.readline()  # заголовок
+                line = f.readline().strip()
+            if line:
+                first_ts = line.split(",")[0]
+        except OSError:
+            pass
+        age_days = 0
+        if first_ts:
+            try:
+                age_days = (datetime.now() - datetime.fromisoformat(first_ts)).total_seconds() / 86400.0
+            except ValueError:
+                age_days = 0
         if age_days > HISTORY_DAYS:
             old = STATS_FILE + ".1"
             if os.path.isfile(old):
@@ -1187,7 +1202,8 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
                         SELECT avg(abs(fp.temperature - o.temperature)), count(*)
                         FROM forecast_points fp
                         JOIN observations o
-                          ON o.ts = fp.valid_at AND o.temperature IS NOT NULL
+                          ON abs(julianday(o.ts) - julianday(fp.valid_at)) <= 1.0/24
+                         AND o.temperature IS NOT NULL
                         WHERE fp.provider = ? AND fp.temperature IS NOT NULL
                           AND (julianday(fp.valid_at) - julianday(fp.created)) BETWEEN ? AND ?
                           AND fp.created > datetime('now', ?)""",

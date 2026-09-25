@@ -507,7 +507,7 @@ function init_menu() {
 	var menu = $("#weather_menu");
 	function render_src() {
 		var pref = safe_get_item("weather_source_pref", "default");
-		if (pref !== "server" && pref !== "wttr" && pref !== "owm" && pref !== "om" && pref !== "7timer" && pref !== "yandex" && pref !== "gismeteo") pref = "default";
+		if (pref !== "server" && pref !== "wttr" && pref !== "owm" && pref !== "om" && pref !== "7timer" && pref !== "yandex" && pref !== "gismeteo" && pref !== "foreca") pref = "default";
 		$(".menu_src").each(function() {
 			var src = $(this).attr("data-src");
 			if (src === "yandex" && !allow_direct_yandex) { $(this).hide(); return; }
@@ -1100,12 +1100,13 @@ function fetch_from_foreca_client(on_success, on_error) {
 		var accum = p.precip_mm || 0;
 		var first = sym.charAt(0);
 		var suffix = (first === 'n') ? '_n' : '_d';
-		if (first === 't' || sym.indexOf('thunder') >= 0) return 'ovc_ts';
-		if (first === 's' && sym.charAt(1) !== 'k') return 'ovc_sn';
-		if (first === 'r') return 'ovc_ra';
-		if ((prob >= 40) || (accum && accum > 0.1)) return 'ovc_ra';
 		var digits = sym.replace(/[^0-9]/g, '');
 		var code = digits ? parseInt(digits.substring(0, 3), 10) : 100;
+		if (code >= 700 && code < 800) return 'ovc_ts';
+		if (code >= 600 && code < 700) return 'ovc_sn';
+		if (code >= 410 && code < 500) return 'ovc_ra';
+		if (code >= 500 && code < 600) return 'ovc_ra';
+		if ((prob >= 40) || (accum && accum > 0.1)) return 'ovc_ra';
 		if (code === 0) return 'skc' + suffix;
 		if (code <= 200) return 'bkn' + suffix;
 		return 'ovc';
@@ -1376,7 +1377,7 @@ function get_data() {
 
 	// Выбор источника из меню (localStorage weather_source_pref): default = обычная цепочка
 	var source_pref = safe_get_item("weather_source_pref", "default");
-	if (source_pref !== "server" && source_pref !== "wttr" && source_pref !== "owm" && source_pref !== "om" && source_pref !== "7timer" && source_pref !== "yandex" && source_pref !== "gismeteo") source_pref = "default";
+	if (source_pref !== "server" && source_pref !== "wttr" && source_pref !== "owm" && source_pref !== "om" && source_pref !== "7timer" && source_pref !== "yandex" && source_pref !== "gismeteo" && source_pref !== "foreca") source_pref = "default";
 	var only_server = (source_pref === "server");
 
 	if (source_pref === "owm") {

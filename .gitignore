@@ -6,3 +6,7 @@ weather_cache.json
 weather_stats.csv
 __pycache__/
 *.pyc
+forecast.db
+foreca_locations.json
+gismeteo_cities.json
+weather_stats.csv.1
