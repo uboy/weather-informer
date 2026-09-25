@@ -16,7 +16,7 @@ import sqlite3
 import time
 import threading
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 import urllib.request
 import urllib.error
@@ -298,6 +298,10 @@ def prune_history():
         try:
             conn.execute("DELETE FROM forecast_points WHERE created < datetime('now', ?)",
                          (f"-{HISTORY_DAYS} days",))
+            conn.execute("DELETE FROM observations WHERE ts < datetime('now', ?)",
+                         (f"-{HISTORY_DAYS} days",))
+            conn.execute("DELETE FROM synop_raw WHERE ts_utc < datetime('now', ?)",
+                         (f"-{HISTORY_DAYS} days",))
             conn.commit()
         finally:
             conn.close()
@@ -380,7 +384,7 @@ def _decode_synop(msg):
 def collect_ogimet_synop(hours_back=30):
     """SYNOP станции WMO 27459 через OGIMET -> observations.db (raw + разбор)."""
     import urllib.parse as up
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     begin = (now - timedelta(hours=hours_back)).strftime("%Y%m%d%H%M")
     end = (now + timedelta(minutes=10)).strftime("%Y%m%d%H%M")
     url = ("https://www.ogimet.com/cgi-bin/getsynop?block=27459"
@@ -918,7 +922,7 @@ _7TIMER_DIR_DEG = {"N": 0, "NNE": 22, "NE": 45, "ENE": 67, "E": 90, "ESE": 112,
 def fetch_from_7timer(lat, lon):
     """Last-resort источник 7timer civil (JSON, без ключа) -> формат Яндекса"""
     url = (f"https://www.7timer.info/bin/civil.php?lon={lon}&lat={lat}"
-           f"&ac=0&unit=metric&output=json&tzshift=0")
+           f"&ac=0&unit=metric&output=json&tzshift=3")
     st = json.loads(fetch_url_via(url, None, 25))
     ds = st.get("dataseries") or []
     init = st.get("init", "")
@@ -1356,7 +1360,7 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
                 self.send_cors_headers()
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.end_headers()
-                self.wfile.write(json.dumps({"error": str(e)}).encode("utf-8"))
+                self.wfile.write(json.dumps({"error": "internal error"}).encode("utf-8"))
             return
 
         # Погодные маршруты — только известные: остальное 404,
