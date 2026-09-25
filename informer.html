@@ -146,6 +146,8 @@ body.px-shift-2 { transform: translate(0, 1px); }
 body.px-shift-3 { transform: translate(-1px, 0); }
 body.px-shift-4 { transform: translate(0, -1px); }
 body.night-dim #wrapper { opacity: 0.8; transition: opacity 5s; }
+body.night-dim #menu_btn { opacity: 0.3; }
+body.night-dim #status_bar { opacity: 0.5; }
 
 #key_dialog {
 	display: none;
@@ -463,7 +465,7 @@ function startBurnInProtection() {
 
 function applyNightDim() {
 	var h = new Date().getHours();
-	var dim = (h >= 23 || h < 6);
+	var dim = (h >= night_dim_start || h < night_dim_end);
 	var has = document.body.className.indexOf('night-dim') >= 0;
 	if (dim && !has) document.body.className += ' night-dim';
 	else if (!dim && has) document.body.className = document.body.className.replace(/\s*night-dim/g, '');
@@ -782,6 +784,8 @@ function init_menu() {
 
 var server_url = ""; // Локальный сервер кэширования (если задан)
 var city_name_cfg = ""; // Город из config.json (для статус-бара)
+var night_dim_start = 23;
+var night_dim_end = 6;
 var foreca_api_key_cfg = ""; // Ключ Foreca из config.json планшета (опционально)
 var owm_key = ""; // Ключ OpenWeatherMap для клиентского фолбэка
 
@@ -804,6 +808,8 @@ function load_config(callback) {
 			base_lon = lon;
 			if (cfg.server_url !== undefined) server_url = cfg.server_url;
 			if (cfg.city_name !== undefined) city_name_cfg = String(cfg.city_name);
+			if (cfg.night_dim_start_hour !== undefined) night_dim_start = parseInt(cfg.night_dim_start_hour, 10) || 23;
+			if (cfg.night_dim_end_hour !== undefined) night_dim_end = parseInt(cfg.night_dim_end_hour, 10) || 6;
 			if (cfg.foreca_api_key !== undefined) foreca_api_key_cfg = String(cfg.foreca_api_key);
 			if (cfg.openweathermap_api_key !== undefined) owm_key = cfg.openweathermap_api_key;
 			var storedColor = safe_get_item("weather_text_color", "");
@@ -1543,6 +1549,8 @@ function run() {
 		var _curPref = safe_get_item("weather_source_pref", "default");
 		var _isDirect = ["owm", "om", "7timer", "wttr", "yandex", "foreca"].indexOf(_curPref) >= 0;
 		var _effTimeout = (_isDirect ? direct_timeout : timeout) * 1000;
+		applyNightDim();
+
 		if (lastcall < now - _effTimeout && (server_url.trim() !== '' || api != 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx')) {
 			get_data();
 		}
