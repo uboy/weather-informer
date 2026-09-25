@@ -210,6 +210,7 @@ var pressure_max = 770; //Давление, максимум, мм рт ст
 					<div id="icon" class="value sector_icon" data-type="class"></div>
 					<div id="temperature_block">
 						<div id="temperature" class="value sector_temperature"></div>
+						<div id="feels_row"><span id="feels_label">ощущается</span> <span id="feels" class="value"></span></div>
 						<div id="temperature_sub">
 							<div class="sector_min">
 								<span id="min" class="value"></span>
@@ -388,6 +389,29 @@ function normalize_icon(name) {
 	var m = n.match(/^(.*)_([dn])$/);
 	if (m && ICON_ALIAS.hasOwnProperty(m[1])) return ICON_ALIAS[m[1]] + '_' + m[2];
 	return n;
+}
+
+function calc_feels_like(t, hum, wind) {
+	// Ощущаемая температура: t<=10 — ветер-чилл; t>=27 && hum>=40 — жара-индекс; между — лёгкая поправка
+	if (t == null || hum == null || wind == null) return null;
+	t = Number(t); hum = Number(hum); wind = Number(wind);
+	if (isNaN(t) || isNaN(hum) || isNaN(wind)) return null;
+	if (t <= 10) {
+		var v16 = Math.pow(Math.max(wind, 1), 0.16);
+		var wc = 13.12 + 0.6215 * t - 11.37 * v16 + 0.3965 * t * v16;
+		return Math.round(wc);
+	}
+	if (t >= 27 && hum >= 40) {
+		var tf = t * 9 / 5 + 32;
+		var hi = -42.379 + 2.04901523 * tf + 10.14333127 * hum - 0.22475541 * tf * hum
+			- 6.83783e-3 * tf * tf - 5.481717e-2 * hum * hum + 1.22874e-3 * tf * tf * hum
+			+ 8.5282e-4 * tf * hum * hum - 1.99e-6 * tf * tf * hum * hum;
+		return Math.round((hi - 32) * 5 / 9);
+	}
+	var adj = 0;
+	if (hum > 70) adj = (t > 20 ? 1 : 0);
+	if (wind > 5) adj -= 1;
+	return Math.round(t + adj);
 }
 
 function astro_sun(lat, lon, dateObj) {
@@ -1823,6 +1847,10 @@ function render_weather(data) {
 		if (hourForecast.hasOwnProperty('temp') && hourForecast.temp != null) result.temperature = (hourForecast.temp > 0 ? '+' : '') + hourForecast.temp;
 		else if (data.fact.hasOwnProperty('temp') && data.fact.temp != null) result.temperature = (data.fact.temp > 0 ? '+' : '') + data.fact.temp;
 		else result.temperature = '—';
+		var feels2 = null;
+		if (data.fact.feels_like != null) feels2 = data.fact.feels_like;
+		else if (data.fact.temp != null && data.fact.humidity != null && data.fact.wind_speed != null) feels2 = calc_feels_like(data.fact.temp, data.fact.humidity, data.fact.wind_speed);
+		result.feels = (feels2 != null) ? ((feels2 > 0 ? '+' : '') + feels2 + '°') : '—';
 
 		if (hourForecast.hasOwnProperty('wind_speed') && hourForecast.wind_speed != null) {
 			result.wind = hourForecast.wind_speed;
@@ -1865,6 +1893,10 @@ function render_weather(data) {
 		} else {
 			result.temperature = '—';
 		}
+		var feels = null;
+		if (data.fact.feels_like != null) feels = data.fact.feels_like;
+		else if (data.fact.temp != null && data.fact.humidity != null && data.fact.wind_speed != null) feels = calc_feels_like(data.fact.temp, data.fact.humidity, data.fact.wind_speed);
+		result.feels = (feels != null) ? ((feels > 0 ? '+' : '') + feels + '°') : '—';
 		if (data.fact.hasOwnProperty('wind_speed') && data.fact.wind_speed != null) {
 			result.wind = data.fact.wind_speed;
 			result.wind_progress = 'width: ' + (100 - Math.round(data.fact.wind_speed / wind_max * 100)) + '%';
@@ -2162,6 +2194,16 @@ body {
 }
 #temperature {
 	font-size: 21vw;
+}
+#feels_row {
+	font-size: 2.2vw;
+	color: #999999;
+	padding: 0.2vw 0 0.4vw 0;
+	min-height: 2.8vw;
+}
+#feels_row #feels {
+	color: var(--tc, #ffffff);
+	font-weight: bold;
 }
 #temperature_sub {
 	display: flex;
