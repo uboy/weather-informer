@@ -290,11 +290,12 @@ class GismeteoProvider:
                 continue
             if dt_utc < today_start_utc or dt_utc > horizon:
                 continue  # чужие сутки и горизонт >48ч — отсекаем
+            dt_local = dt_utc
             raw_points.append({
-                "_dt_utc": dt_utc,
-                "_dt_local": dt_utc + tz,
-                "valid_utc": dt_utc.strftime("%Y-%m-%dT%H:%M:%S"),
-                "valid_local": (dt_utc + tz).strftime("%Y-%m-%dT%H:%M:%S"),
+                "_dt_utc": dt_utc - tz,
+                "_dt_local": dt_local,
+                "valid_utc": (dt_utc - tz).strftime("%Y-%m-%dT%H:%M:%S"),
+                "valid_local": dt_local.strftime("%Y-%m-%dT%H:%M:%S"),
                 "temperature": self._f(p.get("t")),
                 "pressure_mm": self._f(p.get("p")),
                 "humidity": self._i(p.get("hum")),
@@ -315,7 +316,7 @@ class GismeteoProvider:
         fvals = parsed["fact"] or {}
         cur = raw_points[0]
         try:
-            fact_hour = (parse_valid_dt(fvals["valid"]) + tz).hour
+            fact_hour = parse_valid_dt(fvals["valid"]).hour  # valid — локальное
         except (KeyError, ValueError):
             fact_hour = cur["_dt_local"].hour
         fact = {

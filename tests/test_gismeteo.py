@@ -4,7 +4,7 @@
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -22,7 +22,9 @@ CITIES_XML = (
 
 CITIES_EMPTY = '<document></document>'
 
-NOW_UTC = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
+# valid в XML — ЛОКАЛЬНОЕ время города (живая верификация 25.09: UTC-трактовка
+# давала сдвиг parts/hours на +3ч). Фикстура генерирует точки сразу в локальном МСК.
+NOW_UTC = (datetime.now(timezone.utc) + timedelta(hours=3)).replace(minute=0, second=0, microsecond=0, tzinfo=None)
 
 
 def _pts():
@@ -156,12 +158,12 @@ class GismeteoTests(unittest.TestCase):
             data = p.get_weather(latitude=56.3269, longitude=44.0059)
         pts = data["gismeteo_points"]
         self.assertGreater(len(pts), 8)
-        now = datetime.utcnow()
-        today_start_utc = (now + timedelta(minutes=180)).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(minutes=180)
+        now = NOW_UTC  # локальное МСК
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         for pt in pts:
-            dt = datetime.strptime(pt["valid_utc"], "%Y-%m-%dT%H:%M:%S")
+            dt = datetime.strptime(pt["valid_local"], "%Y-%m-%dT%H:%M:%S")
             self.assertLessEqual(dt, now + timedelta(hours=48, minutes=1))
-            self.assertGreaterEqual(dt, today_start_utc)
+            self.assertGreaterEqual(dt, today_start)
             self.assertFalse(pt["interpolated"])
             self.assertEqual(pt["source"], "gismeteo")
         # вечером части «днём/утром» не заглушки: содержат реальные дневные температуры
@@ -169,7 +171,7 @@ class GismeteoTests(unittest.TestCase):
         self.assertNotEqual(parts["day"]["temp_avg"], 0)
 
     def test_7_timezone(self):
-        """tzone учитывается: локальное время точки = UTC + tzone (мин)."""
+        """valid в XML — ЛОКАЛЬНОЕ; valid_utc = valid_local − tz."""
         p = make_provider("/tmp/opencode")
         with FakeHttp(p, default_handler):
             data = p.get_weather(latitude=56.3269, longitude=44.0059)
@@ -177,7 +179,7 @@ class GismeteoTests(unittest.TestCase):
         utc_dt = datetime.strptime(pt["valid_utc"], "%Y-%m-%dT%H:%M:%S")
         loc_dt = datetime.strptime(pt["valid_local"], "%Y-%m-%dT%H:%M:%S")
         delta = (loc_dt - utc_dt).total_seconds()
-        self.assertEqual(int(delta), 180 * 60)
+        self.assertEqual(int(delta), 180 * 60, "valid_local = valid_utc + tz (utc = local - 3h)")
         # и восход из risem (минуты) конвертирован в строку
         self.assertRegex(data["forecasts"][0]["sunrise"], r"^\d{2}:\d{2}$")
 
