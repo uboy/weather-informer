@@ -948,7 +948,7 @@ var fetch_from_7timer_client = function(on_success, on_error) {
 				}
 				var b0 = ds[0] || {};
 				(function() {
-					var idDate = new Date(parseInt(init.substring(0, 4), 10), parseInt(init.substring(4, 6), 10) - 1, parseInt(init.substring(6, 8), 10), initH, 0, 0, 0);
+					var idDate = new Date(Date.UTC(parseInt(init.substring(0, 4), 10), parseInt(init.substring(4, 6), 10) - 1, parseInt(init.substring(6, 8), 10), initH, 0, 0, 0));
 					var nowMs = Date.now(), bestDiff = Infinity;
 					for (var bi = 0; bi < ds.length; bi++) {
 						var bdiff = Math.abs(idDate.getTime() + (ds[bi].timepoint || 0) * 3600000 - nowMs);
@@ -968,14 +968,15 @@ var fetch_from_7timer_client = function(on_success, on_error) {
 				};
 				var hours_list = [];
 				var byRange = { morning: [], day: [], evening: [], night: [] };
-				var initDate = new Date(parseInt(init.substring(0, 4), 10),
+				var initDate = new Date(Date.UTC(parseInt(init.substring(0, 4), 10),
 					parseInt(init.substring(4, 6), 10) - 1, parseInt(init.substring(6, 8), 10),
-					initH, 0, 0, 0);
+					initH, 0, 0, 0));
+				var nowD = new Date();
+				var todayStr = nowD.getFullYear() + '-' + ('0' + (nowD.getMonth() + 1)).slice(-2) + '-' + ('0' + nowD.getDate()).slice(-2);
 				for (var i = 0; i < ds.length; i++) {
 					var ptDate = new Date(initDate.getTime() + (ds[i].timepoint || 0) * 3600000);
-					var todayStr = initDate.getFullYear() + '-' + ('0' + (initDate.getMonth() + 1)).slice(-2) + '-' + ('0' + initDate.getDate()).slice(-2);
 					var ptStr = ptDate.getFullYear() + '-' + ('0' + (ptDate.getMonth() + 1)).slice(-2) + '-' + ('0' + ptDate.getDate()).slice(-2);
-					if (ptStr !== todayStr) continue; // только сегодняшние точки (как на сервере)
+					if (ptStr !== todayStr) continue; // только сегодняшние по устройству
 					var hh = ptDate.getHours();
 					var icon = icon7(ds[i], hh);
 					var w = ds[i].wind10m || {};

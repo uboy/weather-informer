@@ -246,7 +246,9 @@ def record_forecast(provider, loc, data):
                 hh = int(h.get("hour", -1))
             except (TypeError, ValueError):
                 continue
-            day = now.date()  # hours — активный (текущий) день у всех конвертеров
+            if hh < cur_hour:
+                continue  # прошедшие часы активного дня — мусор для lead-метрик
+            day = now.date()
             valid_at = f"{day.isoformat()}T{hh:02d}:00:00"
             rows.append((now_iso, provider, loc, valid_at,
                          h.get("temp"), None, None, None, None))
@@ -926,7 +928,8 @@ def fetch_from_7timer(lat, lon):
     st = json.loads(fetch_url_via(url, None, 25))
     ds = st.get("dataseries") or []
     init = st.get("init", "")
-    init_hour = int(init[8:10]) if len(init) >= 10 else 12
+    # init 7timer — UTC (параметр tzshift API игнорирует): приводим к локальному МСК
+    init_hour = (int(init[8:10]) + 3) % 24 if len(init) >= 10 else 12
 
     def block_at(local_hour):
         best, best_delta = None, 999
@@ -1254,7 +1257,7 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
                 self.send_cors_headers()
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.end_headers()
-                self.wfile.write(json.dumps({"error": f"geocode failed: {e}"}).encode("utf-8"))
+                self.wfile.write(json.dumps({"error": "geocode failed"}).encode("utf-8"))
             return
 
         if path == "/reverse":
@@ -1282,7 +1285,7 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
                 self.send_cors_headers()
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.end_headers()
-                self.wfile.write(json.dumps({"error": f"reverse failed: {e}"}).encode("utf-8"))
+                self.wfile.write(json.dumps({"error": "reverse failed"}).encode("utf-8"))
             return
 
         if path == "/observations/fetch":
@@ -1336,7 +1339,7 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
                         JOIN observations o
                           ON abs(julianday(o.ts) - julianday(fp.valid_at)) <= ? / 24.0
                          AND o.temperature IS NOT NULL
-                        WHERE fp.provider = ? AND fp.temperature IS NOT NULL
+                        WHERE lower(fp.provider) = lower(?) AND fp.temperature IS NOT NULL
                           AND (? = '' OR o.phys_station = ?)
                           AND (julianday(fp.valid_at) - julianday(fp.created)) * 24 BETWEEN ? AND ?
                           AND fp.created > datetime('now', ?)""",
