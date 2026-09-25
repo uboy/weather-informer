@@ -412,7 +412,8 @@ def collect_ogimet_synop(hours_back=30):
             ts_utc_iso = ts_utc.isoformat(timespec="seconds") + "Z"
             try:
                 from zoneinfo import ZoneInfo
-                ts_local = ts_utc.astimezone(ZoneInfo("Europe/Moscow")).isoformat(timespec="seconds")
+                # naive локальное МСК: офсет в строке ломает julianday-сравнения
+                ts_local = ts_utc.astimezone(ZoneInfo("Europe/Moscow")).replace(tzinfo=None).isoformat(timespec="seconds")
             except Exception:
                 ts_local = (ts_utc + timedelta(hours=3)).isoformat(timespec="seconds")
             decoded = _decode_synop(raw_msg)
