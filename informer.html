@@ -1889,15 +1889,6 @@ function render_weather(data) {
 	}
 
 	// Нет данных -> "—", полосы сбрасываем, чтобы не оставались значения чужого источника
-	if (result.rise === undefined || result.rise === null) {
-		result.rise = '—';
-		result.set = '—';
-		result.duration_hour = '00';
-		result.duration_minute = '00';
-		result.duration_time = 'width: 0%; left: 0%';
-		result.duration_progress = 'width: 0%';
-		result.duration_left = '—';
-	}
 	if ((result.min === undefined || result.min === null)) {
 		result.min = '—';
 		result.min_date = '';
@@ -2014,6 +2005,11 @@ function render_weather(data) {
 		} else {
 			result.rise = '—';
 			result.set = '—';
+			result.duration_hour = '00';
+			result.duration_minute = '00';
+			result.duration_time = 'width: 0%; left: 0%';
+			result.duration_progress = 'width: 0%';
+			result.duration_left = '—';
 		}
 	}
 
