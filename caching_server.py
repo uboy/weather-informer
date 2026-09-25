@@ -1402,8 +1402,18 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
                 log.warning("Rejected weather request with invalid coords: lat=%r lon=%r", lat_raw, lon_raw)
                 return
         src_filter = (qs.get("source", [""])[0] or "").strip().lower()
+        valid_sources = ("yandex", "owm", "om", "gismeteo", "foreca", "wttr", "7timer")
         sources = None
-        if src_filter in ("gismeteo", "foreca"):
+        if src_filter:
+            if src_filter not in valid_sources:
+                self.send_response(400)
+                self.send_cors_headers()
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    "error": "unknown source",
+                    "valid": list(valid_sources)}).encode("utf-8"))
+                return
             sources = (src_filter,)
         data = get_weather_for(q_lat, q_lon, force=False, sources=sources)
         if data:

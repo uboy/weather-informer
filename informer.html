@@ -319,6 +319,7 @@ var lastcall = 0;
 var current_weather_data = null;
 
 function icon_daynight(icon, sunrise, sunset) {
+	icon = normalize_icon(icon);
 	// Дневной/ночной вариант значка (_d/_n) по фактическому времени суток
 	try {
 		if (!icon) return icon;
@@ -366,6 +367,20 @@ function format_error_reason(xhr, status, err, source_name) {
 	} else {
 		return "ошибка сети (" + (status || err || "неизвестно") + ")";
 	}
+}
+
+var ICON_ALIAS = {
+	fg: 'ovc', mist: 'ovc', haze: 'ovc',
+	'ovc_+_ra': 'ovc_ra', 'ovc_+_sn': 'ovc_sn',
+	'ovc_+ra': 'ovc_ra', 'ovc_+sn': 'ovc_sn',
+	'ovc_ts_sm': 'ovc_ts', 'ovc_ts_ra': 'ovc_ts',
+	'ovc_+ts_ra': 'ovc_ts'
+};
+function normalize_icon(name) {
+	// Имена Яндекса вне нашего CSS-вокабуляра -> ближайшие существующие классы
+	if (name == null) return name;
+	var n = String(name);
+	return ICON_ALIAS.hasOwnProperty(n) ? ICON_ALIAS[n] : n;
 }
 
 function moonPhaseCode() {
@@ -782,6 +797,15 @@ var fetch_from_owm = function(on_success, on_error) {
 					else byName.night.push(b);
 				}
 				var factB = blocks.length ? blocks[0] : null;
+				var tomorrow = new Date(Date.now() + 86400000);
+				var tomorrowStr = tomorrow.getFullYear() + '-' + ('0' + (tomorrow.getMonth() + 1)).slice(-2) + '-' + ('0' + tomorrow.getDate()).slice(-2);
+				var byTmrw = { night: [], morning: [] };
+				for (var ti = 0; ti < blocks.length; ti++) {
+					var tb = blocks[ti];
+					if (tb.date !== tomorrowStr) continue;
+					if (tb.hour < 6) byTmrw.night.push(tb);
+					else if (tb.hour < 12) byTmrw.morning.push(tb);
+				}
 				var parts = {};
 				['morning', 'day', 'evening', 'night'].forEach(function(name) {
 					var arr = byName[name];
@@ -793,6 +817,17 @@ var fetch_from_owm = function(on_success, on_error) {
 						wind_angle: (b && b.wind_angle != null) ? b.wind_angle : null
 					};
 				});
+				var parts2 = {};
+				['night', 'morning'].forEach(function(name) {
+					var arr = byTmrw[name];
+					var b = arr.length ? arr[Math.floor(arr.length / 2)] : null;
+					parts2[name] = b ? {
+						temp_avg: b.temp, icon: b.icon,
+						wind_speed: b.wind_speed,
+						wind_angle: (b.wind_angle != null ? b.wind_angle : null)
+					} : parts[name];
+				});
+				parts2.day = parts.day; parts2.evening = parts.evening;
 				var city = om.city || {};
 				var sr = new Date((city.sunrise || 0) * 1000);
 				var ss = new Date((city.sunset || 0) * 1000);
@@ -810,7 +845,7 @@ var fetch_from_owm = function(on_success, on_error) {
 						sunrise: fH(sr), sunset: fH(ss), moon_code: moonPhaseCode(),
 						hours: blocks.filter(function(b) { return b.date === today; }).map(function(b) { return { hour: String(b.hour), temp: b.temp }; }),
 						parts: parts
-					}, { parts: parts }]
+					}, { parts: parts2 }]
 				};
 				on_success(converted);
 			} catch (ex) {
@@ -858,6 +893,8 @@ var fetch_from_om_client = function(on_success, on_error) {
 				var byName = { morning: [], day: [], evening: [], night: [] };
 				var hours_list = [];
 				var today = (ht[0] || '').substring(0, 10);
+				var tomorrowStrOm = null;
+				var tmrwOm = { night: [], morning: [] };
 				for (var i = 0; i < ht.length; i++) {
 					var hh = parseInt(ht[i].substring(11, 13), 10) || 0;
 					var code = hc[i] || 0;
@@ -866,14 +903,19 @@ var fetch_from_om_client = function(on_success, on_error) {
 					if (mNow < srM || mNow >= ssM) dayM = 0;
 					var icon = base(code) + (dayM ? '_d' : '_n');
 					if (base(code) === 'ovc' || base(code) === 'ovc_ra' || base(code) === 'ovc_sn' || base(code) === 'ovc_ts') icon = base(code);
-					if (ht[i].substring(0, 10) === today) {
+					var dayStr = ht[i].substring(0, 10);
+					if (dayStr === today) {
 						hours_list.push({ hour: String(hh), temp: (tmp[i] != null ? Math.round(tmp[i]) : null) });
 						if (hh >= 6 && hh < 12) byName.morning.push(icon);
 						else if (hh >= 12 && hh < 18) byName.day.push(icon);
 						else if (hh >= 18) byName.evening.push(icon);
 						else byName.night.push(icon);
-					} else if (hh < 6) {
-						byName.night.push(icon);
+					} else if (!tomorrowStrOm) {
+						tomorrowStrOm = dayStr;
+					}
+					if (tomorrowStrOm && dayStr === tomorrowStrOm) {
+						if (hh < 6) tmrwOm.night.push({ temp: tmp[i], icon: icon });
+						else if (hh < 12) tmrwOm.morning.push({ temp: tmp[i], icon: icon });
 					}
 				}
 				function dominant(arr) {
@@ -900,6 +942,18 @@ var fetch_from_om_client = function(on_success, on_error) {
 					evening: (function() { var w = partWind(18, 24); return { temp_avg: (tmp[20] != null ? Math.round(tmp[20]) : null), icon: dominant(byName.evening), wind_speed: w.wind_speed, wind_angle: w.wind_angle }; })(),
 					night: (function() { var w = partWind(0, 6); return { temp_avg: (tmp[2] != null ? Math.round(tmp[2]) : null), icon: dominant(byName.night), wind_speed: w.wind_speed, wind_angle: w.wind_angle }; })()
 				};
+				function tmrwPart(name, fbIcon) {
+					var arr = tmrwOm[name];
+					if (!arr.length) return parts[name];
+					var tt = arr.map(function(x) { return x.temp; }).filter(function(t) { return t != null; });
+					return {
+						temp_avg: tt.length ? Math.round(tt.reduce(function(a, b) { return a + b; }, 0) / tt.length) : null,
+						icon: arr[Math.floor(arr.length / 2)].icon || fbIcon,
+						wind_speed: null, wind_angle: null
+					};
+				}
+				var parts2 = { night: tmrwPart('night', 'bkn_n'), morning: tmrwPart('morning', 'bkn_d') };
+				parts2.day = parts.day; parts2.evening = parts.evening;
 				var converted = {
 					fact: {
 						temp: (cw.temperature != null ? Math.round(cw.temperature) : null),
@@ -909,7 +963,7 @@ var fetch_from_om_client = function(on_success, on_error) {
 						humidity: (rh[hIdx] != null ? Math.round(rh[hIdx]) : null),
 						pressure_mm: (pr[hIdx] != null ? Math.round(pr[hIdx] * 0.750062) : null)
 					},
-					forecasts: [{ sunrise: sr, sunset: ss, moon_code: moonPhaseCode(), hours: hours_list, parts: parts }, { parts: parts }]
+					forecasts: [{ sunrise: sr, sunset: ss, moon_code: moonPhaseCode(), hours: hours_list, parts: parts }, { parts: parts2 }]
 				};
 				on_success(converted);
 			} catch (ex) {
@@ -1000,9 +1054,31 @@ var fetch_from_7timer_client = function(on_success, on_error) {
 					evening: part('evening', 'bkn_n'),
 					night: part('night', 'skc_n')
 				};
+				var tmr7 = { night: null, morning: null };
+				var tmrDate = new Date(nowD.getTime() + 86400000);
+				var tmrStr = tmrDate.getFullYear() + '-' + ('0' + (tmrDate.getMonth() + 1)).slice(-2) + '-' + ('0' + tmrDate.getDate()).slice(-2);
+				var tn = [], tmo = [];
+				for (var t7 = 0; t7 < ds.length; t7++) {
+					var pd7 = new Date(initDate.getTime() + (ds[t7].timepoint || 0) * 3600000);
+					var ps7 = pd7.getFullYear() + '-' + ('0' + (pd7.getMonth() + 1)).slice(-2) + '-' + ('0' + pd7.getDate()).slice(-2);
+					if (ps7 !== tmrStr) continue;
+					var ph7 = pd7.getHours();
+					if (ph7 < 6) tn.push(ds[t7]);
+					else if (ph7 < 12) tmo.push(ds[t7]);
+				}
+				function t7part(arr, fb) {
+					if (!arr.length) return null;
+					var m7 = arr[Math.floor(arr.length / 2)];
+					var w7 = m7.wind10m || {};
+					var bf7 = parseInt(w7.speed, 10);
+					return { temp_avg: (m7.temp2m != null ? Math.round(m7.temp2m) : null), icon: icon7(m7, 8), wind_speed: (isNaN(bf7) ? null : BFT[Math.min(12, bf7)]), wind_angle: (DIR7[w7.direction] != null ? DIR7[w7.direction] : null) };
+				}
+				tmr7.night = t7part(tn, 'bkn_n') || parts.night;
+				tmr7.morning = t7part(tmo, 'bkn_d') || parts.morning;
+				tmr7.day = parts.day; tmr7.evening = parts.evening;
 				var converted = {
 					fact: fact,
-					forecasts: [{ sunrise: null, sunset: null, moon_code: moonPhaseCode(), hours: hours_list, parts: parts }, { parts: parts }]
+					forecasts: [{ sunrise: null, sunset: null, moon_code: moonPhaseCode(), hours: hours_list, parts: parts }, { parts: tmr7 }]
 				};
 				on_success(converted);
 			} catch (ex) {
@@ -1073,6 +1149,29 @@ function fetch_from_foreca_client(on_success, on_error) {
 			var slot = (h >= 6 && h < 12) ? bands.morning : (h >= 12 && h < 18) ? bands.day : (h >= 18) ? bands.evening : bands.night;
 			slot.push(p);
 		});
+		var tmrD = new Date(now.getTime() + 86400000);
+		var tomorrowF = tmrD.getFullYear() + '-' + ('0' + (tmrD.getMonth() + 1)).slice(-2) + '-' + ('0' + tmrD.getDate()).slice(-2);
+		var bandsT = { night: [], morning: [] };
+		points_each(pts, tomorrowF, function(p) {
+			var h = p._dt.getHours();
+			if (h < 6) bandsT.night.push(p);
+			else if (h < 12) bandsT.morning.push(p);
+		});
+		function fpart2(name, fb) {
+			var arr = bandsT[name];
+			if (!arr.length) return parts[name];
+			var mid = arr[Math.floor(arr.length / 2)];
+			var tt = arr.map(function(p) { return p.temperature; }).filter(function(t) { return t != null; });
+			var ww = arr.map(function(p) { return p.wind_speed; }).filter(function(w) { return w != null; });
+			return {
+				temp_avg: tt.length ? Math.round(tt.reduce(function(a, b) { return a + b; }, 0) / tt.length) : null,
+				icon: foreca_icon(mid, mid._dt.getHours()) || fb,
+				wind_speed: ww.length ? Math.round(ww.reduce(function(a, b) { return a + b; }, 0) / ww.length * 10) / 10 : null,
+				wind_angle: mid.wind_direction
+			};
+		}
+		var parts2 = { night: fpart2('night', 'bkn_n'), morning: fpart2('morning', 'bkn_d') };
+		parts2.day = parts.day; parts2.evening = parts.evening;
 		var parts = {};
 		['morning', 'day', 'evening', 'night'].forEach(function(name) {
 			var arr = bands[name];
@@ -1098,7 +1197,7 @@ function fetch_from_foreca_client(on_success, on_error) {
 				pressure_mm: null,
 				condition: ''
 			},
-			forecasts: [{ sunrise: null, sunset: null, moon_code: moonPhaseCode(), hours: hours, parts: parts }, { parts: parts }],
+			forecasts: [{ sunrise: null, sunset: null, moon_code: moonPhaseCode(), hours: hours, parts: parts }, { parts: parts2 }],
 			foreca_points: pts.map(function(p) { delete p._dt; return p; })
 		};
 	}
@@ -1837,7 +1936,7 @@ function render_weather(data) {
 		if (fObj && fObj.hasOwnProperty('parts') && fObj.parts.hasOwnProperty(targetPeriod)) { 
 			result['forecast_title_' + pid] = period[targetPeriod];
 			if (fObj.parts[targetPeriod].hasOwnProperty('icon')) {
-				result['forecast_icon_' + pid] = fObj.parts[targetPeriod].icon;
+				result['forecast_icon_' + pid] = normalize_icon(fObj.parts[targetPeriod].icon);
 			}
 			if (fObj.parts[targetPeriod].hasOwnProperty('temp_avg') && fObj.parts[targetPeriod].temp_avg != null) {
 				var t = fObj.parts[targetPeriod].temp_avg;

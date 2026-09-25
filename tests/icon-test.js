@@ -33,6 +33,7 @@ check('парность _d/_n (нет одиночек, кроме легити�
 
 // --- 3. icon_daynight: поведение по времени суток (мок часов) ---
 // вырезаем функцию из html и исполняем с подменёнными Date.getHours/getMinutes
+const aliasSrc = (html.match(/var ICON_ALIAS = \{[\s\S]*?\};[\s\S]*?function normalize_icon[\s\S]*?\n\}/) || [])[0];
 const fnSrc = (html.match(/function icon_daynight[\s\S]*?\n\}/) || [])[0];
 check('icon_daynight присутствует', !!fnSrc);
 
@@ -75,7 +76,7 @@ const cases = [
 if (fnSrc) {
     for (const [h, m, input, expected] of cases) {
         withClock(h, m, () => {
-            const fn = new Function('return (' + fnSrc + ')')();
+            const fn = new Function(aliasSrc + '\nreturn (' + fnSrc + ')')();
             const got = fn(input, '05:52', '17:59');
             check(`icon_daynight ${JSON.stringify(input)} @ ${h}:${String(m).padStart(2, '0')} → ${expected}`,
                   got === expected, 'получено ' + got);
