@@ -1,0 +1,11 @@
+#!/bin/bash
+# Единый прогон всех тестов. ОБЯЗАТЕЛЕН перед деплоем (deploy/all-tablets.sh вызывает).
+set -e
+cd "$(dirname "$0")/.."
+echo "=== node icon-test ==="; node tests/icon-test.js | tail -1
+echo "=== node converters-test ==="; node tests/converters-test.js | tail -1
+echo "=== python gismeteo ==="; python3 tests/test_gismeteo.py 2>&1 | tail -1
+echo "=== python foreca ==="; python3 tests/test_foreca_provider.py 2>&1 | tail -1
+echo "=== python synop ==="; python3 tests/test_synop.py 2>&1 | tail -1
+echo "=== python accuracy ==="; python3 tests/test_accuracy.py 2>&1 | tail -1
+echo "=== ВСЁ ЗЕЛЁНОЕ ==="

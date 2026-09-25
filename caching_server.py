@@ -366,7 +366,7 @@ def _decode_synop(msg):
             continue
         if tok in ("AAXX", "BBXX") or not tok:
             continue
-        if tok[0] == "1" and len(tok) == 5 and tok[1] in "01" and tok[2:].isdigit():
+        if tok[0] == "1" and len(tok) == 5 and tok[1] in "01" and tok[2:].isdigit() and not sec3:
             sign = -1.0 if tok[1] == "1" else 1.0
             out["temperature"] = sign * int(tok[2:]) / 10.0
         elif tok[0] == "3" and len(tok) == 5 and tok[1:].isdigit() and not sec3:
@@ -440,6 +440,28 @@ def collect_ogimet_synop(hours_back=30):
         conn.close()
     log.info("observations: OGIMET SYNOP 27459 — %d сообщений", n)
     return n
+
+
+def accuracy_query(provider, lead, days, phys="", window=1.0):
+    """MAE температуры прогнозов против наблюдений (тестируемая функция /accuracy)."""
+    conn = _history_conn()
+    try:
+        cur = conn.execute("""
+                        SELECT avg(abs(fp.temperature - o.temperature)), count(*)
+                        FROM forecast_points fp
+                        JOIN observations o
+                          ON abs(julianday(o.ts) - julianday(fp.valid_at)) <= ? / 24.0
+                         AND o.temperature IS NOT NULL
+                        WHERE lower(fp.provider) = lower(?) AND fp.temperature IS NOT NULL
+                          AND (? = '' OR o.phys_station = ?)
+                          AND (julianday(fp.valid_at) - julianday(fp.created)) * 24 BETWEEN ? AND ?
+                          AND fp.created > datetime('now', ?)""",
+                        (window, provider, phys, phys,
+                         max(0, lead - 1), lead + 1, f"-{days} days"))
+        mae, n = cur.fetchone()
+        return (round(mae, 2) if mae is not None else None), (n or 0)
+    finally:
+        conn.close()
 
 
 def stats_log_source(source, data):
@@ -1331,23 +1353,7 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({"error": "provider and lead_hours required"}).encode("utf-8"))
                 return
             try:
-                conn = _history_conn()
-                try:
-                    cur = conn.execute("""
-                        SELECT avg(abs(fp.temperature - o.temperature)), count(*)
-                        FROM forecast_points fp
-                        JOIN observations o
-                          ON abs(julianday(o.ts) - julianday(fp.valid_at)) <= ? / 24.0
-                         AND o.temperature IS NOT NULL
-                        WHERE lower(fp.provider) = lower(?) AND fp.temperature IS NOT NULL
-                          AND (? = '' OR o.phys_station = ?)
-                          AND (julianday(fp.valid_at) - julianday(fp.created)) * 24 BETWEEN ? AND ?
-                          AND fp.created > datetime('now', ?)""",
-                        (window, provider, phys, phys,
-                         max(0, lead - 1), lead + 1, f"-{days} days"))
-                    mae, n = cur.fetchone()
-                finally:
-                    conn.close()
+                mae, n = accuracy_query(provider, lead, days, phys, window)
                 self.send_response(200)
                 self.send_cors_headers()
                 self.send_header("Content-Type", "application/json; charset=utf-8")

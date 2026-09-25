@@ -374,7 +374,9 @@ var ICON_ALIAS = {
 	'ovc_+_ra': 'ovc_ra', 'ovc_+_sn': 'ovc_sn',
 	'ovc_+ra': 'ovc_ra', 'ovc_+sn': 'ovc_sn',
 	'ovc_ts_sm': 'ovc_ts', 'ovc_ts_ra': 'ovc_ts',
-	'ovc_+ts_ra': 'ovc_ts'
+	'ovc_+ts_ra': 'ovc_ts',
+	'ovc_+_ra_sn': 'ovc_ra_sn', 'ovc_+_sn_ra': 'ovc_ra_sn',
+	'bkn_+ra': 'bkn_-ra', 'bkn_+sn': 'bkn_-sn'
 };
 function normalize_icon(name) {
 	// Имена Яндекса вне нашего CSS-вокабуляра -> ближайшие существующие классы
@@ -797,8 +799,10 @@ var fetch_from_owm = function(on_success, on_error) {
 					else byName.night.push(b);
 				}
 				var factB = blocks.length ? blocks[0] : null;
-				var tomorrow = new Date(Date.now() + 86400000);
-				var tomorrowStr = tomorrow.getFullYear() + '-' + ('0' + (tomorrow.getMonth() + 1)).slice(-2) + '-' + ('0' + tomorrow.getDate()).slice(-2);
+				var tomorrowStr = null;
+				for (var qi = 0; qi < blocks.length; qi++) {
+					if (blocks[qi].date !== today) { tomorrowStr = blocks[qi].date; break; }
+				}
 				var byTmrw = { night: [], morning: [] };
 				for (var ti = 0; ti < blocks.length; ti++) {
 					var tb = blocks[ti];
@@ -1071,7 +1075,7 @@ var fetch_from_7timer_client = function(on_success, on_error) {
 					var m7 = arr[Math.floor(arr.length / 2)];
 					var w7 = m7.wind10m || {};
 					var bf7 = parseInt(w7.speed, 10);
-					return { temp_avg: (m7.temp2m != null ? Math.round(m7.temp2m) : null), icon: icon7(m7, 8), wind_speed: (isNaN(bf7) ? null : BFT[Math.min(12, bf7)]), wind_angle: (DIR7[w7.direction] != null ? DIR7[w7.direction] : null) };
+					return { temp_avg: (m7.temp2m != null ? Math.round(m7.temp2m) : null), icon: icon7(m7, (function() { for (var q7 = 0; q7 < ds.length; q7++) { if (ds[q7] === m7) { var qd7 = new Date(initDate.getTime() + (ds[q7].timepoint || 0) * 3600000); return qd7.getHours(); } } return 8; })()), wind_speed: (isNaN(bf7) ? null : BFT[Math.min(12, bf7)]), wind_angle: (DIR7[w7.direction] != null ? DIR7[w7.direction] : null) };
 				}
 				tmr7.night = t7part(tn, 'bkn_n') || parts.night;
 				tmr7.morning = t7part(tmo, 'bkn_d') || parts.morning;
@@ -1149,6 +1153,20 @@ function fetch_from_foreca_client(on_success, on_error) {
 			var slot = (h >= 6 && h < 12) ? bands.morning : (h >= 12 && h < 18) ? bands.day : (h >= 18) ? bands.evening : bands.night;
 			slot.push(p);
 		});
+
+		var parts = {};
+		['morning', 'day', 'evening', 'night'].forEach(function(name) {
+			var arr = bands[name];
+			var mid = arr.length ? arr[Math.floor(arr.length / 2)] : null;
+			var temps = arr.map(function(p) { return p.temperature; }).filter(function(t) { return t != null; });
+			var winds = arr.map(function(p) { return p.wind_speed; }).filter(function(w) { return w != null; });
+			parts[name] = {
+				temp_avg: temps.length ? Math.round(temps.reduce(function(a, b) { return a + b; }, 0) / temps.length) : null,
+				icon: mid ? foreca_icon(mid, mid._dt.getHours()) : 'bkn_d',
+				wind_speed: winds.length ? Math.round(winds.reduce(function(a, b) { return a + b; }, 0) / winds.length * 10) / 10 : null,
+				wind_angle: mid ? mid.wind_direction : null
+			};
+		});
 		var tmrD = new Date(now.getTime() + 86400000);
 		var tomorrowF = tmrD.getFullYear() + '-' + ('0' + (tmrD.getMonth() + 1)).slice(-2) + '-' + ('0' + tmrD.getDate()).slice(-2);
 		var bandsT = { night: [], morning: [] };
@@ -1172,19 +1190,6 @@ function fetch_from_foreca_client(on_success, on_error) {
 		}
 		var parts2 = { night: fpart2('night', 'bkn_n'), morning: fpart2('morning', 'bkn_d') };
 		parts2.day = parts.day; parts2.evening = parts.evening;
-		var parts = {};
-		['morning', 'day', 'evening', 'night'].forEach(function(name) {
-			var arr = bands[name];
-			var mid = arr.length ? arr[Math.floor(arr.length / 2)] : null;
-			var temps = arr.map(function(p) { return p.temperature; }).filter(function(t) { return t != null; });
-			var winds = arr.map(function(p) { return p.wind_speed; }).filter(function(w) { return w != null; });
-			parts[name] = {
-				temp_avg: temps.length ? Math.round(temps.reduce(function(a, b) { return a + b; }, 0) / temps.length) : null,
-				icon: mid ? foreca_icon(mid, mid._dt.getHours()) : 'bkn_d',
-				wind_speed: winds.length ? Math.round(winds.reduce(function(a, b) { return a + b; }, 0) / winds.length * 10) / 10 : null,
-				wind_angle: mid ? mid.wind_direction : null
-			};
-		});
 		var curTemp = cur.temperature;
 		return {
 			src: 'Foreca',

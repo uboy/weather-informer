@@ -17,6 +17,7 @@ import logging
 import os
 import time
 import urllib.error
+import urllib.parse
 from datetime import datetime
 
 log = logging.getLogger("WeatherCache")

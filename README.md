@@ -155,6 +155,23 @@ stop adbd; start adbd
 
 Обратный геокодинг для GPS: `GET /reverse?lat=&lon=` (тот же Nominatim). Кэш сервера ведётся на каждую точку отдельно (до 8 городов), интервал обновления общий.
 
+## Тесты (обязательный прогон перед деплоем)
+
+```bash
+bash tests/run-all.sh
+```
+
+| Файл | Что покрывает |
+|---|---|
+| `tests/icon-test.js` | icon_daynight, парность _d/_n, вокабуляр иконок ⊆ CSS |
+| `tests/converters-test.js` | **энд-ту-енд клиентские конвертеры** на фикстурах API (OWM/OM/7timer/wttr/Foreca): структура, завтрашние parts, ночные иконки, честные null; все регрессии раундов ревью здесь как векторы (wttr OOB, Foreca TDZ, tzshift-скос, дневная иконка ночи) |
+| `tests/test_gismeteo.py` | GismeteoProvider: парсинг XML, хост-фолбэк, кэши, 48ч-фильтр |
+| `tests/test_foreca_provider.py` | ForecaProvider: конвертация, иконки по symbol, кэш локейшенов, observations |
+| `tests/test_synop.py` | SYNOP-декодер: температура/давление/шкала осадков WMO, ветряные группы ≠ осадки, секция 3 |
+| `tests/test_accuracy.py` | accuracy_query: lead в ЧАСАХ, окно ловит METAR :30, регистр, phys-фильтр, negative-lead |
+
+**Правило (вывод из 7 раундов ревью): каждый раунд ловил регрессию в непротестированном коде.** Новый источник = фиксстура + векторы в converters-test; правка конвертера/декодера = прогон run-all; `deploy/all-tablets.sh` гоняет тесты перед деплоем и падает при красном.
+
 ## Эксплуатация
 
 - Здоровье: `curl http://<сервер>:8085/status` → `{"status":"ok","cache_age_minutes":N}`
