@@ -210,11 +210,14 @@ var pressure_max = 770; //Давление, максимум, мм рт ст
 					<div id="icon" class="value sector_icon" data-type="class"></div>
 					<div id="temperature_block">
 						<div id="temperature" class="value sector_temperature"></div>
-						<div id="feels_row"><span id="feels_label">ощущается</span> <span id="feels" class="value"></span></div>
 						<div id="temperature_sub">
 							<div class="sector_min">
 								<span id="min" class="value"></span>
 								<span id="min_date" class="value"></span>
+							</div>
+							<div class="sector_feels">
+								<span id="feels" class="value"></span>
+								<span id="feels_label">ощущается</span>
 							</div>
 							<div class="sector_max">
 								<span id="max" class="value"></span>
@@ -1850,7 +1853,7 @@ function render_weather(data) {
 		var feels2 = null;
 		if (data.fact.feels_like != null) feels2 = data.fact.feels_like;
 		else if (data.fact.temp != null && data.fact.humidity != null && data.fact.wind_speed != null) feels2 = calc_feels_like(data.fact.temp, data.fact.humidity, data.fact.wind_speed);
-		result.feels = (feels2 != null) ? ((feels2 > 0 ? '+' : '') + feels2 + '°') : '—';
+		result.feels = (feels2 != null) ? ((feels2 > 0 ? '+' : '') + feels2) : '—';
 
 		if (hourForecast.hasOwnProperty('wind_speed') && hourForecast.wind_speed != null) {
 			result.wind = hourForecast.wind_speed;
@@ -1896,7 +1899,7 @@ function render_weather(data) {
 		var feels = null;
 		if (data.fact.feels_like != null) feels = data.fact.feels_like;
 		else if (data.fact.temp != null && data.fact.humidity != null && data.fact.wind_speed != null) feels = calc_feels_like(data.fact.temp, data.fact.humidity, data.fact.wind_speed);
-		result.feels = (feels != null) ? ((feels > 0 ? '+' : '') + feels + '°') : '—';
+		result.feels = (feels != null) ? ((feels > 0 ? '+' : '') + feels) : '—';
 		if (data.fact.hasOwnProperty('wind_speed') && data.fact.wind_speed != null) {
 			result.wind = data.fact.wind_speed;
 			result.wind_progress = 'width: ' + (100 - Math.round(data.fact.wind_speed / wind_max * 100)) + '%';
@@ -2195,22 +2198,19 @@ body {
 #temperature {
 	font-size: 21vw;
 }
-#feels_row {
-	font-size: 2.2vw;
-	color: #999999;
-	padding: 0.2vw 0 0.4vw 0;
-	min-height: 2.8vw;
-}
-#feels_row #feels {
-	color: var(--tc, #ffffff);
-	font-weight: bold;
-}
-#temperature_sub {
-	display: flex;
-}
 #temperature_sub div {
-	width: 50%;
+	width: 33%;
 	font-size: 5vw;
+}
+#temperature_sub .sector_feels {
+	text-align: center;
+}
+#feels {
+	color: var(--tc, #ffffff);
+}
+#feels_label {
+	font-size: 2.0vw;
+	color: #999999;
 }
 #minmax_first {
 	text-align: left;
