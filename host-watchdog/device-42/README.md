@@ -11,3 +11,11 @@
   keyevent 82 + wm dismiss-keyguard). Демон до first-unlock не срабатывает
   (SELinux/окружение) — после загрузки нужен один ручной dismiss, дальше
   держит сам. Страховка владельца: экран блокировки выключен в настройках.
+
+## informer_autostart.sh (на ВСЕХ планшетах)
+
+Владельческий автостарт: ждёт boot_completed, затем
+`settings put global stay_on_while_plugged_in 7` + `svc power stayon true`
+(не гасить экран при питании). С 2026-09-25 развёрнут на все 5 планшетов.
+На .20/.30/.31/t5(.23) — root без Magisk: каталог service.d создан вручную;
+основная гарантия — глобальная настройка stay_on_while_plugged_in=7 (переживает ребут).
