@@ -15,6 +15,7 @@ import json
 import sqlite3
 import time
 import threading
+import math
 import logging
 from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -39,6 +40,7 @@ CACHE_FILE = os.path.join(SCRIPT_DIR, "weather_cache.json")
 
 # Кэш погоды по точкам (выбор города на планшете): ключ "lat:lon" с точностью 0.01°
 LOCATION_CACHE = {}
+LOCATION_CACHE_LOCK = threading.Lock()
 KEY_LOCKS = {}
 MAX_LOCATIONS = 8
 NOMINATIM = "https://nominatim.openstreetmap.org"
@@ -252,17 +254,27 @@ def record_forecast(provider, loc, data):
             valid_at = f"{day.isoformat()}T{hh:02d}:00:00"
             rows.append((now_iso, provider, loc, valid_at,
                          h.get("temp"), None, None, None, None))
-        # завтрашние часы (forecasts[1].hours есть у Яндекса) — оживляет lead 23-46ч
+        # завтрашние часы (forecasts[1].hours) — оживляет lead 23-46ч
         f1_hours = ((data.get("forecasts") or [{}, {}])[1:2] or [{}])[0].get("hours") or []
         tomorrow = now.date() + timedelta(days=1)
-        for h in f1_hours:
-            try:
-                hh = int(h.get("hour", -1))
-            except (TypeError, ValueError):
-                continue
-            valid_at = f"{tomorrow.isoformat()}T{hh:02d}:00:00"
-            rows.append((now_iso, provider, loc, valid_at,
-                         h.get("temp"), None, None, None, None))
+        if f1_hours:
+            for h in f1_hours:
+                try:
+                    hh = int(h.get("hour", -1))
+                except (TypeError, ValueError):
+                    continue
+                valid_at = f"{tomorrow.isoformat()}T{hh:02d}:00:00"
+                rows.append((now_iso, provider, loc, valid_at,
+                             h.get("temp"), None, None, None, None))
+        else:
+            parts = ((data.get("forecasts") or [{}, {}])[1:2] or [{}])[0].get("parts") or {}
+            part_hours = {"night": 2, "morning": 8, "day": 14, "evening": 20}
+            for pname, phour in part_hours.items():
+                pdata = parts.get(pname)
+                if isinstance(pdata, dict) and pdata.get("temp_avg") is not None:
+                    valid_at = f"{tomorrow.isoformat()}T{phour:02d}:00:00"
+                    rows.append((now_iso, provider, loc, valid_at,
+                                 pdata.get("temp_avg"), None, None, None, None))
         conn = _history_conn()
         try:
             conn.executemany("INSERT INTO forecast_points VALUES (?,?,?,?,?,?,?,?,?)", rows)
@@ -383,7 +395,7 @@ def _decode_synop(msg):
         elif tok[0] == "3" and len(tok) == 5 and tok[1:].isdigit() and not sec3:
             val = int(tok[1:])
             out["pressure"] = val / 10.0 + (1000.0 if val < 5000 else 0.0)
-        elif tok[0] == "4" and len(tok) == 5 and tok[1:].isdigit():
+        elif tok[0] == "4" and len(tok) == 5 and tok[1:].isdigit() and not sec3:
             val = int(tok[1:])
             out["pressure_sl"] = val / 10.0 + (1000.0 if val < 5000 else 0.0)
         elif tok[0] == "6" and len(tok) == 5 and tok[1:].isdigit() and sec3:
@@ -764,22 +776,35 @@ def fetch_from_openmeteo(lat, lon, proxy=None):
     max_t = round(daily.get("temperature_2m_max", [temp])[0])
     min_t = round(daily.get("temperature_2m_min", [temp])[0])
 
+    today_str = times[0][:10] if times else ""
+
     def part_wind(h0, h1):
-        """Средний ветер по часам [h0, h1) из hourly; None если данных нет"""
+        """Средний ветер по часам [h0, h1) из hourly активного дня; None если данных нет"""
         vals = hourly.get("windspeed_10m", []) or []
         dirs = hourly.get("winddirection_10m", []) or []
-        picked = []
+        picked_v = []
+        sin_sum, cos_sum = 0.0, 0.0
+        da = 0
         for i, tstr in enumerate(times):
             try:
-                if h0 <= int(tstr[11:13]) < h1 and i < len(vals) and vals[i] is not None:
-                    picked.append((vals[i], dirs[i] if i < len(dirs) and dirs[i] is not None else None))
+                if tstr[:10] == today_str and h0 <= int(tstr[11:13]) < h1:
+                    if i < len(vals) and vals[i] is not None:
+                        picked_v.append(vals[i])
+                    if i < len(dirs) and dirs[i] is not None:
+                        rad = math.radians(dirs[i])
+                        sin_sum += math.sin(rad)
+                        cos_sum += math.cos(rad)
+                        da += 1
             except (ValueError, IndexError):
                 continue
-        if not picked:
+        if not picked_v:
             return None, None
-        avg_dir = [d for _, d in picked if d is not None]
-        return round(sum(v for v, _ in picked) / len(picked) / 3.6, 1), \
-            (round(sum(avg_dir) / len(avg_dir)) if avg_dir else None)
+        avg_speed = round(sum(picked_v) / len(picked_v) / 3.6, 1)
+        avg_angle = None
+        if da > 0:
+            deg = round(math.degrees(math.atan2(sin_sum / da, cos_sum / da)))
+            avg_angle = (deg % 360 + 360) % 360
+        return avg_speed, avg_angle
 
     def _pw(h0, h1):
         w, a = part_wind(h0, h1)
@@ -791,6 +816,12 @@ def fetch_from_openmeteo(lat, lon, proxy=None):
         "evening": dict({"temp_avg": round(temps[20] if len(temps) > 20 else temp), "icon": part_icon(19)}, **_pw(18, 24)),
         "night": dict({"temp_avg": min_t, "icon": part_icon(2)}, **_pw(0, 6))
     }
+
+    hours_list_1 = []
+    if len(temps) >= 48:
+        for h in range(24):
+            t = temps[24 + h]
+            hours_list_1.append({"hour": str(h), "temp": round(t) if t is not None else None})
 
     return {
         "fact": {
@@ -810,6 +841,7 @@ def fetch_from_openmeteo(lat, lon, proxy=None):
                 "parts": parts
             },
             {
+                "hours": hours_list_1,
                 "parts": parts
             }
         ]
@@ -1058,13 +1090,16 @@ def get_weather_for(lat, lon, force=False, sources=None):
     sources: None (вся цепочка) или кортеж имён источников-фильтр."""
     key = loc_key(lat, lon) + (":" + ",".join(sorted(sources)) if sources else "")
     interval = load_config().get("cache_interval_minutes", 90) * 60
-    entry = LOCATION_CACHE.get(key)
-    if not force and entry and entry.get("data") and (time.time() - entry["ts"] < interval):
-        return entry["data"]
+    with LOCATION_CACHE_LOCK:
+        entry = LOCATION_CACHE.get(key)
+        if not force and entry and entry.get("data") and (time.time() - entry["ts"] < interval):
+            return entry["data"]
     lock = KEY_LOCKS.setdefault(key, threading.Lock())
     if not lock.acquire(blocking=False):
         # другой поток уже обновляет эту точку — отдаём что есть (может быть None)
-        return entry["data"] if entry else None
+        with LOCATION_CACHE_LOCK:
+            entry = LOCATION_CACHE.get(key)
+            return entry["data"] if entry else None
     try:
         return _fetch_weather_locked(force, lat, lon, sources, key)
     finally:
@@ -1075,13 +1110,14 @@ def _store_location_result(key, data, note=None):
     """Сохранение результата фетча; для города по умолчанию — ещё глобальный кэш и диск."""
     global cached_data, last_fetch_time, last_error_message
     ts = time.time()
-    LOCATION_CACHE[key] = {"data": data, "ts": ts}
     cfg = load_config()
     defk = loc_key(cfg.get("lat", 56.317722), cfg.get("lon", 43.999303))
-    if len(LOCATION_CACHE) > MAX_LOCATIONS:
-        for k in sorted(LOCATION_CACHE, key=lambda k: LOCATION_CACHE[k]["ts"])[:-MAX_LOCATIONS]:
-            if k != key and k != defk:  # дефолтный город не эвиктим — иначе внеплановый расход квоты
-                LOCATION_CACHE.pop(k, None)
+    with LOCATION_CACHE_LOCK:
+        LOCATION_CACHE[key] = {"data": data, "ts": ts}
+        if len(LOCATION_CACHE) > MAX_LOCATIONS:
+            for k in sorted(LOCATION_CACHE, key=lambda k: LOCATION_CACHE[k]["ts"])[:-MAX_LOCATIONS]:
+                if k != key and k != defk:  # дефолтный город не эвиктим — иначе внеплановый расход квоты
+                    LOCATION_CACHE.pop(k, None)
     if key == defk:
         cached_data = data
         last_fetch_time = ts
@@ -1095,9 +1131,10 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
         key = loc_key(lat, lon)
     interval = load_config().get("cache_interval_minutes", 90) * 60
     now = time.time()
-    entry = LOCATION_CACHE.get(key)
-    if not force and entry and entry.get("data") and (now - entry["ts"] < interval):
-        return entry["data"]
+    with LOCATION_CACHE_LOCK:
+        entry = LOCATION_CACHE.get(key)
+        if not force and entry and entry.get("data") and (now - entry["ts"] < interval):
+            return entry["data"]
 
     def want(name):
         return sources is None or name in sources
@@ -1221,16 +1258,18 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
     # Тотальный фейл всех источников: считаем попытку израсходованной,
     # чтобы не долбить источники на каждом тике; старые данные оставляем
     ts = time.time()
-    if entry is not None:
-        entry["ts"] = ts
-    else:
-        LOCATION_CACHE[key] = {"data": None, "ts": ts}
+    with LOCATION_CACHE_LOCK:
+        if entry is not None:
+            entry["ts"] = ts
+        else:
+            LOCATION_CACHE[key] = {"data": None, "ts": ts}
+        res_data = LOCATION_CACHE[key]["data"]
     cfg = load_config()
     defk = loc_key(cfg.get("lat", 56.317722), cfg.get("lon", 43.999303))
     if key == defk:
         global last_fetch_time
         last_fetch_time = ts
-    return LOCATION_CACHE[key]["data"]
+    return res_data
 
 
 class WeatherHTTPHandler(BaseHTTPRequestHandler):

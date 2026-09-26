@@ -47,7 +47,7 @@ function srcOf(name) {
     }
     return html.slice(start, j + 1);
 }
-const fnNames = ['safe_get_item', 'safe_set_item', 'moonPhaseCode', 'normalize_icon',
+const fnNames = ['safe_get_item', 'safe_set_item', 'moonPhaseCode', 'normalize_icon', 'calc_feels_like',
     'fetch_from_owm', 'fetch_from_om_client', 'fetch_from_7timer_client',
     'fetch_from_wttr', 'fetch_from_foreca_client', 'convert_foreca',
     'points_push', 'points_filter', 'points_each', 'points_each_day', 'foreca_icon'];
@@ -190,8 +190,18 @@ function hoursSane(hours) {
         if (i >= 24 && i < 30) t = 7;   // завтра 0-6ч
         else if (i >= 30 && i < 36) t = 9; // завтра 6-12ч
         H.temperature_2m.push(t);
+        let ws = 3.6 * (1 + i % 4);
+        let wd = 90 + i;
+        if (i >= 12 && i < 18) {
+            ws = 18.0; // 5.0 m/s
+            wd = (i % 2 === 0) ? 350 : 10;
+        }
+        if (i >= 24) {
+            ws = 180.0; // 50 m/s storm tomorrow!
+            wd = 180;
+        }
         H.relativehumidity_2m.push(60); H.surface_pressure.push(1005);
-        H.windspeed_10m.push(3.6 * (1 + i % 4)); H.winddirection_10m.push(90 + i);
+        H.windspeed_10m.push(ws); H.winddirection_10m.push(wd);
     }
     const om = {
         current_weather: { temperature: 12.4, windspeed: 7.2, winddirection: 123, weathercode: 1, is_day: 1, time: tstr(new Date(Math.floor(now.getTime() / 3600000) * 3600000)) },
@@ -205,6 +215,8 @@ function hoursSane(hours) {
     if (r.result) {
         check('OM: fact temp = current_weather', r.result.fact.temp === 12, JSON.stringify(r.result.fact));
         check('OM: humidity из hourly (не null при данных)', r.result.fact.humidity === 60, JSON.stringify(r.result.fact.humidity));
+        check('OM: partWind фильтрует только сегодня (шторм завтра не влияет)', r.result.forecasts[0].parts.day.wind_speed === 5, JSON.stringify(r.result.forecasts[0].parts.day));
+        check('OM: partWind векторное среднее углов (350 и 10 -> 0)', r.result.forecasts[0].parts.day.wind_angle === 0, JSON.stringify(r.result.forecasts[0].parts.day));
         check('OM: forecasts[1].parts.night завтра', r.result.forecasts[1] && r.result.forecasts[1].parts && r.result.forecasts[1].parts.night);
         check('OM: завтра-ночь temp = 7', r.result.forecasts[1].parts.night.temp_avg === 7, JSON.stringify(r.result.forecasts[1].parts.night));
         check('OM: завтра-утро temp = 9', r.result.forecasts[1].parts.morning.temp_avg === 9, JSON.stringify(r.result.forecasts[1].parts.morning));
@@ -289,6 +301,8 @@ function hoursSane(hours) {
     check('Foreca: конвертация без ошибок (TDZ-регрессия 6e6343f)', !r.error && r.result, r.error || (r.threw ? 'THROW:' + r.threw.message : ''));
     if (r.result) {
         check('Foreca: humidity/pressure null (API не отдаёт)', r.result.fact.humidity === null && r.result.fact.pressure_mm === null);
+        const cflFn = eval('(function(){' + srcOf('calc_feels_like') + '; return calc_feels_like;})()');
+        check('Foreca: calc_feels_like работает при null humidity', cflFn(r.result.fact.temp, r.result.fact.humidity, r.result.fact.wind_speed) != null);
         check('Foreca: forecasts[1].parts.night завтра', r.result.forecasts[1] && r.result.forecasts[1].parts && r.result.forecasts[1].parts.night);
         check('Foreca: завтра-ночь temp = 7', r.result.forecasts[1].parts.night.temp_avg === 7, JSON.stringify(r.result.forecasts[1].parts.night));
         check('Foreca: завтра-утро temp = 9', r.result.forecasts[1].parts.morning.temp_avg === 9, JSON.stringify(r.result.forecasts[1].parts.morning));

@@ -43,8 +43,8 @@ const zMenu = zIdx('#weather_menu');
 const zStatus = zIdx('#status_bar');
 check('z-index: key_dialog (' + zDialog + ') > weather_menu (' + zMenu + ')',
     zDialog !== null && zMenu !== null && zDialog > zMenu);
-check('z-index: status_bar (' + zStatus + ') > weather_menu (' + zMenu + ')',
-    zStatus !== null && zMenu !== null && zStatus > zMenu);
+check('z-index: weather_menu (' + zMenu + ') > status_bar (' + zStatus + ')',
+    zStatus !== null && zMenu !== null && zMenu > zStatus);
 
 // 2.3 один градус (::after) на feels, temperature, min, max — не в JS
 const feelsLines = html.split('\n').filter(l => l.includes('result.feels'));
@@ -115,7 +115,7 @@ const risesetMatch = html.match(/^function riseset[\s\S]*?^\}/m);
 check('riseset извлечена', !!risesetMatch);
 if (risesetMatch) {
     const fn = eval('(function(){' +
-        'var value = {}, period = {day_day: "день", day_night: "ночь"}, date, pad = function(n){return n<10?"0"+n:n;};' +
+        'var value = {}, period = {day_day: "до заката", day_night: "до рассвета"}, date, pad = function(n){return n<10?"0"+n:n;};' +
         'var lastResult = null, update = function(r){ lastResult = r; };' +
         risesetMatch[0] + ';' +
         'return function(riseStr, setStr, h, m) {' +
@@ -125,21 +125,29 @@ if (risesetMatch) {
         '};' +
     '})()');
 
-    // День: 12:00, восход 06:00, закат 18:00 -> осталось дня 6ч
+    // День: 12:00, восход 06:00, закат 18:00 -> осталось дня 6ч, длина дня 12:00
     const dayRes = fn('06:00', '18:00', 12, 0);
-    check('riseset: день 12:00 -> день 06:00', dayRes && dayRes.duration_left === 'день 06:00', JSON.stringify(dayRes));
+    check('riseset: день 12:00 -> до заката 06:00', dayRes && dayRes.duration_left === 'до заката 06:00', JSON.stringify(dayRes));
+    check('riseset: день 12:00 -> длительность дня 12:00', dayRes && dayRes.duration_hour === '12' && dayRes.duration_minute === '00', JSON.stringify(dayRes));
 
-    // Ночь до полуночи: 22:00, восход 06:00, закат 18:00 -> осталось ночи 8ч (2ч до 00:00 + 6ч до 06:00)
-    const nightEveRes = fn('06:00', '18:00', 22, 0);
-    check('riseset: ночь 22:00 -> ночь 08:00', nightEveRes && nightEveRes.duration_left === 'ночь 08:00', JSON.stringify(nightEveRes));
+    // День асимметричный: 10:00, восход 05:56, закат 17:54 -> длительность дня 11ч 58мин
+    const dayAsym = fn('05:56', '17:54', 10, 0);
+    check('riseset: день 10:00 -> длительность дня 11ч 58мин', dayAsym && dayAsym.duration_hour === '11' && dayAsym.duration_minute === '58', JSON.stringify(dayAsym));
 
-    // Ночь после полуночи: 00:25, восход 06:15, закат 18:20 -> осталось ночи 5ч 50м (не 29:50!)
+    // Ночь асимметричная до полуночи: 22:00, восход 05:56, закат 17:54 -> длительность ночи 12ч 02мин (24:00 - 11:58)
+    const nightEveAsym = fn('05:56', '17:54', 22, 0);
+    check('riseset: ночь 22:00 -> длительность ночи 12ч 02мин', nightEveAsym && nightEveAsym.duration_hour === '12' && nightEveAsym.duration_minute === '02', JSON.stringify(nightEveAsym));
+    check('riseset: ночь 22:00 -> duration_time сохраняет дневную ширину (50%)', nightEveAsym && nightEveAsym.duration_time.includes('width: 50%'), JSON.stringify(nightEveAsym));
+
+    // Ночь после полуночи: 00:25, восход 06:15, закат 18:20 -> осталось ночи 5ч 50м, длина ночи 11ч 55м (день 12:05)
     const nightMornRes = fn('06:15', '18:20', 0, 25);
-    check('riseset: ночь 00:25 -> ночь 05:50 (не 29:50)', nightMornRes && nightMornRes.duration_left === 'ночь 05:50', JSON.stringify(nightMornRes));
+    check('riseset: ночь 00:25 -> до рассвета 05:50 (не 29:50)', nightMornRes && nightMornRes.duration_left === 'до рассвета 05:50', JSON.stringify(nightMornRes));
+    check('riseset: ночь 00:25 -> длительность ночи 11ч 55мин', nightMornRes && nightMornRes.duration_hour === '11' && nightMornRes.duration_minute === '55', JSON.stringify(nightMornRes));
 
-    // Полночь ровно: 00:00, восход 06:00, закат 18:00 -> ночь 06:00
+    // Полночь ровно: 00:00, восход 06:00, закат 18:00 -> до рассвета 06:00
     const midnightRes = fn('06:00', '18:00', 0, 0);
-    check('riseset: полночь 00:00 -> ночь 06:00', midnightRes && midnightRes.duration_left === 'ночь 06:00', JSON.stringify(midnightRes));
+    check('riseset: полночь 00:00 -> до рассвета 06:00', midnightRes && midnightRes.duration_left === 'до рассвета 06:00', JSON.stringify(midnightRes));
+    check('riseset: полночь 00:00 -> длительность ночи 12:00', midnightRes && midnightRes.duration_hour === '12' && midnightRes.duration_minute === '00', JSON.stringify(midnightRes));
 }
 
 // 3.4 ES5-дисциплина (регрессия при добавлении фич)

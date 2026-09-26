@@ -52,6 +52,12 @@ class SynopDecodeTests(unittest.TestCase):
         d = _decode_synop(msg)
         self.assertEqual(d["temperature"], 15.1)
 
+    def test_sec3_snow_not_overwrite_pressure(self):
+        # 333 4E'sss (снежный покров, например 40015 = 15 см снега) не должен перезаписывать pressure_sl
+        msg = "AAXX 1 27459 40226 333 40015"
+        d = _decode_synop(msg)
+        self.assertEqual(d["pressure_sl"], 1022.6, "группа 4E'sss в секции 3 не должна парситься как давление")
+
     def test_real_message_27459(self):
         # реальное сообщение из synop_raw (24.09 09:00 UTC): t=17.6, p=1002.8, slp=1021.2
         msg = ("AAXX 24091 27459 42970 71202 10238 20103 30030 40212 52006 80002 "
