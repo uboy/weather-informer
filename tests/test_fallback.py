@@ -39,8 +39,14 @@ class TestFallbackHierarchyAndProbe(unittest.TestCase):
         caching_server.cached_data = None
         caching_server.last_fetch_time = 0
         caching_server.last_error_message = None
+        self._save_disk_patcher = patch("caching_server.save_disk_cache")
+        self._save_disk_patcher.start()
 
     def tearDown(self):
+        try:
+            self._save_disk_patcher.stop()
+        except Exception:
+            pass
         caching_server.LOCATION_CACHE.clear()
         caching_server.cached_data = None
         caching_server.last_fetch_time = 0
