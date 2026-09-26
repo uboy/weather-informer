@@ -671,6 +671,187 @@ class TestFallbackHierarchyAndProbe(unittest.TestCase):
                 self.assertEqual(body_json.get("error"), "Weather data unavailable")
                 self.assertEqual(body_json.get("details"), "Mock upstream outage")
 
+    def test_sanitize_secrets_in_errors_and_status(self):
+        """API-ключи и токены никогда не утекают в last_error_message, /status, /health или 503"""
+        secret_yandex = "0d7e54ed-6215-48f0-916f-e234a36cb032"
+        secret_owm = "1bb5226ac7cc4c180f487affc89eb7a7"
+        secret_foreca = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.supersecrettoken"
+
+        cfg = {
+            "api": secret_yandex,
+            "openweathermap_api_key": secret_owm,
+            "foreca_api_key": secret_foreca,
+        }
+        with patch("caching_server.load_config", return_value=cfg):
+            # 1. Прямая санитизация значений и URL
+            raw_err = f"Failed url: https://api.openweathermap.org/data/2.5/weather?lat=56.32&lon=44.0&appid={secret_owm} with key {secret_yandex} and Bearer {secret_foreca}"
+            sanitized = caching_server.sanitize_secrets(raw_err)
+            self.assertNotIn(secret_yandex, sanitized)
+            self.assertNotIn(secret_owm, sanitized)
+            self.assertNotIn(secret_foreca, sanitized)
+            self.assertIn("appid=******", sanitized)
+            self.assertIn("Bearer ******", sanitized)
+
+            # 2. Проверка выдачи /status и /health
+            from io import BytesIO
+            class FakeSocket:
+                def __init__(self, data=b""):
+                    self._rfile = BytesIO(data)
+                    self._wfile = BytesIO()
+                def settimeout(self, timeout): pass
+                def sendall(self, data): self._wfile.write(data)
+                def makefile(self, mode, *args, **kwargs):
+                    return self._rfile if "r" in mode else self._wfile
+
+            caching_server.last_error_message = raw_err
+            req = FakeSocket(b"GET /status HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            handler = caching_server.WeatherHTTPHandler(req, ("127.0.0.1", 12345), None)
+            body = req._wfile.getvalue().decode("utf-8")
+            self.assertNotIn(secret_yandex, body)
+            self.assertNotIn(secret_owm, body)
+            self.assertNotIn(secret_foreca, body)
+
+    def test_owm_secret_not_leaked_on_network_error(self):
+        """При сетевых и HTTP-ошибках OpenWeatherMap API-ключ не попадает в текст исключения"""
+        secret_owm = "secret_owm_api_key_12345"
+        with patch.object(urllib.request, "urlopen", side_effect=urllib.error.HTTPError(
+            url=f"https://api.openweathermap.org/data/2.5/weather?appid={secret_owm}",
+            code=401,
+            msg="Unauthorized",
+            hdrs={},
+            fp=None
+        )):
+            with self.assertRaises(RuntimeError) as cm:
+                caching_server.fetch_from_openweathermap(56.32, 44.0, secret_owm)
+            self.assertNotIn(secret_owm, str(cm.exception))
+            self.assertIn("OWM HTTP 401", str(cm.exception))
+
+    def test_fallback_ttl_and_background_refresher_probe(self):
+        """На фоллбеке TTL равен fallback_interval_minutes (15 мин), после чего происходит попытка возврата на Яндекс"""
+        cfg = {
+            "api": "test-key",
+            "enable_gismeteo_fallback": True,
+            "cache_interval_minutes": 60,
+            "fallback_interval_minutes": 15,
+            "lat": 56.317722,
+            "lon": 43.999303,
+        }
+        with patch("caching_server.load_config", return_value=cfg):
+            # 1. Яндекс сбоит -> Gismeteo отдаёт данные
+            with patch.object(urllib.request, "urlopen", side_effect=urllib.error.URLError("Network down")):
+                with patch.object(caching_server.GISMETEO, "get_weather", return_value={"src": "Gismeteo", "fact": {"temp": 15}, "forecasts": [{"parts": {}}]}):
+                    res = caching_server.fetch_weather(force=True)
+                    self.assertEqual(res.get("src"), "Gismeteo")
+                    key = caching_server.loc_key(56.317722, 43.999303)
+                    entry = caching_server.LOCATION_CACHE.get(key)
+                    self.assertIsNotNone(entry)
+                    self.assertEqual(entry.get("ttl"), 15 * 60)
+
+                    # 2. Прошло 10 минут (< 15 мин): повторный вызов fetch_weather не трогает сеть
+                    with patch.object(caching_server, "_fetch_weather_locked") as mock_locked:
+                        entry["ts"] = time.time() - 600  # 10 мин
+                        res2 = caching_server.fetch_weather(force=False)
+                        self.assertEqual(res2.get("src"), "Gismeteo")
+                        mock_locked.assert_not_called()
+
+                    # 3. Прошло 16 минут (>= 15 мин): fetch_weather инициирует probe
+                    with patch.object(caching_server, "_fetch_weather_locked", return_value={"src": "Yandex"}) as mock_locked:
+                        entry["ts"] = time.time() - 960  # 16 мин
+                        res3 = caching_server.fetch_weather(force=False)
+                        self.assertEqual(res3.get("src"), "Yandex")
+                        mock_locked.assert_called_once()
+
+    def test_cache_pollution_prevention_on_default_city(self):
+        """Запрос конкретного источника (?source=wttr) для координат дефолтного города не загрязняет основной кэш дефолтного города"""
+        cfg = {
+            "lat": 56.317722,
+            "lon": 43.999303,
+            "cache_interval_minutes": 60,
+        }
+        defk = caching_server.loc_key(56.317722, 43.999303)
+        caching_server.LOCATION_CACHE[defk] = {
+            "data": {"src": "Yandex", "fact": {"temp": 20}},
+            "ts": time.time(),
+            "ttl": 3600
+        }
+        caching_server.cached_data = caching_server.LOCATION_CACHE[defk]["data"]
+
+        with patch("caching_server.load_config", return_value=cfg):
+            # Запрос ?source=wttr
+            with patch("caching_server.fetch_from_wttr", return_value={"src": "wttr.in", "fact": {"temp": 12}}):
+                res = caching_server.get_weather_for(56.317722, 43.999303, force=True, sources=("wttr",))
+                self.assertEqual(res.get("src"), "wttr.in")
+
+                # Основной кэш дефолтного города НЕ должен быть перезаписан wttr!
+                self.assertEqual(caching_server.cached_data.get("src"), "Yandex")
+                self.assertEqual(caching_server.LOCATION_CACHE[defk]["data"].get("src"), "Yandex")
+                # wttr сохранился под своим изолированным ключом
+                self.assertEqual(caching_server.LOCATION_CACHE[defk + ":wttr"]["data"].get("src"), "wttr.in")
+
+    def test_boundary_and_invalid_coordinates(self):
+        """Экстремальные и невалидные координаты (nan, inf, -inf, -0.0, переполнение) корректно валидируются"""
+        # 1. Нормализация -0.0
+        self.assertEqual(caching_server.loc_key(-0.0, 0.0), "0.0:0.0")
+        self.assertEqual(caching_server.loc_key(0.0, -0.0), "0.0:0.0")
+
+        from io import BytesIO
+        class FakeSocket:
+            def __init__(self, data=b""):
+                self._rfile = BytesIO(data)
+                self._wfile = BytesIO()
+            def settimeout(self, timeout): pass
+            def sendall(self, data): self._wfile.write(data)
+            def makefile(self, mode, *args, **kwargs):
+                return self._rfile if "r" in mode else self._wfile
+
+        invalid_coords = [
+            "lat=nan&lon=44.0",
+            "lat=inf&lon=44.0",
+            "lat=-inf&lon=44.0",
+            "lat=95.0&lon=44.0",
+            "lat=56.0&lon=190.0",
+        ]
+        for query in invalid_coords:
+            # Weather endpoint
+            req = FakeSocket(f"GET /weather.json?{query} HTTP/1.1\r\nHost: localhost\r\n\r\n".encode("utf-8"))
+            handler = caching_server.WeatherHTTPHandler(req, ("127.0.0.1", 12345), None)
+            resp = req._wfile.getvalue().decode("utf-8")
+            self.assertIn("HTTP/1.0 400", resp, f"Coords {query} must return 400 on weather endpoint")
+
+            # Reverse endpoint
+            req_rev = FakeSocket(f"GET /reverse?{query} HTTP/1.1\r\nHost: localhost\r\n\r\n".encode("utf-8"))
+            handler_rev = caching_server.WeatherHTTPHandler(req_rev, ("127.0.0.1", 12345), None)
+            resp_rev = req_rev._wfile.getvalue().decode("utf-8")
+            self.assertIn("HTTP/1.0 400", resp_rev, f"Coords {query} must return 400 on reverse endpoint")
+
+    def test_source_filter_case_insensitivity_and_aliases(self):
+        """Фильтр source регистронезависим и поддерживает псевдонимы (open-meteo -> om)"""
+        from io import BytesIO
+        class FakeSocket:
+            def __init__(self, data=b""):
+                self._rfile = BytesIO(data)
+                self._wfile = BytesIO()
+            def settimeout(self, timeout): pass
+            def sendall(self, data): self._wfile.write(data)
+            def makefile(self, mode, *args, **kwargs):
+                return self._rfile if "r" in mode else self._wfile
+
+        with patch("caching_server.get_weather_for", return_value={"src": "Matched", "fact": {}}) as mock_gw:
+            # 1. Регистр: YANDEX
+            req = FakeSocket(b"GET /weather.json?source=YANDEX HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            handler = caching_server.WeatherHTTPHandler(req, ("127.0.0.1", 12345), None)
+            self.assertEqual(mock_gw.call_args[1]["sources"], ("yandex",))
+
+            # 2. Алиас: open-meteo -> om
+            req = FakeSocket(b"GET /weather.json?source=open-meteo HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            handler = caching_server.WeatherHTTPHandler(req, ("127.0.0.1", 12345), None)
+            self.assertEqual(mock_gw.call_args[1]["sources"], ("om",))
+
+            # 3. Алиас: openweathermap -> owm
+            req = FakeSocket(b"GET /weather.json?source=OpenWeatherMap HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            handler = caching_server.WeatherHTTPHandler(req, ("127.0.0.1", 12345), None)
+            self.assertEqual(mock_gw.call_args[1]["sources"], ("owm",))
+
 
 if __name__ == "__main__":
     unittest.main()

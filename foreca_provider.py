@@ -144,6 +144,12 @@ class ForecaProvider:
     # ------------------------------------------------------------------ #
     # HTTP
     # ------------------------------------------------------------------ #
+    def _mask_token(self, text) -> str:
+        s = str(text)
+        if self._token and len(self._token) > 4:
+            s = s.replace(self._token, "******")
+        return s
+
     def _get(self, path: str, params: dict) -> dict:
         qs = urllib.parse.urlencode(params)
         url = f"{self.API}{path}?{qs}"
@@ -156,11 +162,11 @@ class ForecaProvider:
                     raise  # токен/лимит — повтор бессмысленен
                 last_exc = e
             except (urllib.error.URLError, TimeoutError, OSError, ValueError) as e:
-                last_exc = e
-                self.log.warning("Foreca: попытка %d/%d не удалась: %s", attempt, self.RETRIES, e)
+                last_exc = self._mask_token(e)
+                self.log.warning("Foreca: попытка %d/%d не удалась: %s", attempt, self.RETRIES, last_exc)
                 if attempt < self.RETRIES:
                     time.sleep(1)
-        raise ForecaError(f"Foreca недоступен: {last_exc}")
+        raise ForecaError(f"Foreca недоступен: {self._mask_token(last_exc)}")
 
     def _http_get(self, url: str, timeout: float) -> bytes:
         """Изолированный GET с Bearer-токеном; переопределяется в тестах."""

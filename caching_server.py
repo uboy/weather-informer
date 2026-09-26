@@ -17,6 +17,7 @@ import time
 import threading
 import math
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 import urllib.request
@@ -59,7 +60,9 @@ def moon_phase_code(dt=None):
 
 
 def loc_key(lat, lon):
-    return f"{round(float(lat), 2)}:{round(float(lon), 2)}"
+    r_lat = round(float(lat), 2) + 0.0
+    r_lon = round(float(lon), 2) + 0.0
+    return f"{r_lat}:{r_lon}"
 
 
 def _nominatim_get(path, params, timeout=8):
@@ -160,6 +163,28 @@ def load_config():
         except Exception as e:
             log.warning("Could not parse %s: %s (using defaults)", CONFIG_FILE, e)
     return cfg
+
+
+def sanitize_secrets(text):
+    if text is None:
+        return None
+    s = str(text)
+    try:
+        cfg = load_config()
+    except Exception:
+        cfg = {}
+    secrets = []
+    for k in ("api", "foreca_api_key", "openweathermap_api_key"):
+        v = cfg.get(k)
+        if v and isinstance(v, str) and len(v.strip()) > 4 and v.strip() != "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx":
+            secrets.append(v.strip())
+    for sec in secrets:
+        s = s.replace(sec, "******")
+    s = re.sub(r'([?&](?:appid|api_key|apikey|key|token)=)[^&\s]+', r'\1******', s, flags=re.IGNORECASE)
+    s = re.sub(r'(Bearer\s+)[A-Za-z0-9_\-\.~+/=]+', r'\1******', s, flags=re.IGNORECASE)
+    s = re.sub(r'(X-Yandex-Weather-Key[:=]\s*)[^\s]+', r'\1******', s, flags=re.IGNORECASE)
+    return s
+
 
 FORECA = ForecaProvider(
     token=load_config().get("foreca_api_key", ""),
@@ -296,30 +321,31 @@ def record_forecast(provider, loc, data):
 def rotate_stats_if_needed():
     """Ротация статистики-рингбуфером: файл старше 90 дней -> weather_stats.csv.1"""
     try:
-        if not os.path.isfile(STATS_FILE):
-            return
-        # возраст по ПЕРВОЙ записи файла (mtime освежается каждым append)
-        first_ts = None
-        try:
-            with open(STATS_FILE, "r", encoding="utf-8") as f:
-                f.readline()  # заголовок
-                line = f.readline().strip()
-            if line:
-                first_ts = line.split(",")[0]
-        except OSError:
-            pass
-        age_days = 0
-        if first_ts:
+        with STATS_LOCK:
+            if not os.path.isfile(STATS_FILE):
+                return
+            # возраст по ПЕРВОЙ записи файла (mtime освежается каждым append)
+            first_ts = None
             try:
-                age_days = (datetime.now() - datetime.fromisoformat(first_ts)).total_seconds() / 86400.0
-            except ValueError:
-                age_days = 0
-        if age_days > HISTORY_DAYS:
-            old = STATS_FILE + ".1"
-            if os.path.isfile(old):
-                os.remove(old)
-            os.replace(STATS_FILE, old)
-            log.info("stats: ротация рингбуфера (%.0f дней) -> %s", age_days, old)
+                with open(STATS_FILE, "r", encoding="utf-8") as f:
+                    f.readline()  # заголовок
+                    line = f.readline().strip()
+                if line:
+                    first_ts = line.split(",")[0]
+            except OSError:
+                pass
+            age_days = 0
+            if first_ts:
+                try:
+                    age_days = (datetime.now() - datetime.fromisoformat(first_ts)).total_seconds() / 86400.0
+                except ValueError:
+                    age_days = 0
+            if age_days > HISTORY_DAYS:
+                old = STATS_FILE + ".1"
+                if os.path.isfile(old):
+                    os.remove(old)
+                os.replace(STATS_FILE, old)
+                log.info("stats: ротация рингбуфера (%.0f дней) -> %s", age_days, old)
     except OSError as e:
         log.warning("stats: ротация не удалась: %s", e)
 
@@ -580,8 +606,13 @@ def fetch_from_openweathermap(lat, lon, api_key):
         url = (f"https://api.openweathermap.org/data/2.5/{path}"
                f"?lat={lat}&lon={lon}&units=metric&appid={api_key}")
         req = urllib.request.Request(url, headers={"User-Agent": "WeatherInformerLocal/1.0"})
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(f"OWM HTTP {e.code}: {e.reason}") from None
+        except Exception as e:
+            raise RuntimeError(f"OWM request failed: {sanitize_secrets(e)}") from None
 
     cur = _get("weather")
     fc = _get("forecast")
@@ -1164,11 +1195,11 @@ def _store_location_result(key, data, note=None, ttl=None):
                     if lk and not lk.locked():
                         KEY_LOCKS.pop(k, None)
 
-        if key == defk or base_key == defk or (key == defk + ":yandex" and data and data.get("src") == "Yandex"):
+        if key == defk or (base_key == defk and data and data.get("src") == "Yandex"):
             LOCATION_CACHE[defk] = {"data": data, "ts": ts, "ttl": entry_ttl}
             cached_data = data
             last_fetch_time = ts
-            last_error_message = note
+            last_error_message = sanitize_secrets(note)
             should_save_disk = True
 
         with KEY_LOCKS_LOCK:
@@ -1240,7 +1271,7 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
                     last_error_message = "Yandex returned incomplete payload (missing fact or forecasts)"
                     log.warning("Yandex returned payload missing fact/forecasts: %s", list(data.keys()) if isinstance(data, dict) else type(data))
         except urllib.error.HTTPError as e:
-            last_error_message = f"Yandex HTTP {e.code}: {e.reason}"
+            last_error_message = sanitize_secrets(f"Yandex HTTP {e.code}: {e.reason}")
             if e.code in (401, 402, 403, 429):
                 yandex_quota_blocked = True
                 log.warning("Yandex API quota/auth error HTTP %s: %s (keeping standard %d min cooldown, will not hammer)",
@@ -1248,8 +1279,8 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
             else:
                 log.warning("Yandex API returned HTTP %s: %s", e.code, e.reason)
         except Exception as e:
-            last_error_message = f"Yandex request error: {e}"
-            log.warning("Yandex request failed: %s", e)
+            last_error_message = sanitize_secrets(f"Yandex request error: {e}")
+            log.warning("Yandex request failed: %s", sanitize_secrets(e))
 
     # При сбое Яндекса: если 403/429/401 — ждем полный интервал (не долбим квоту);
     # если временный сбой сети/DNS/таймаут — используем укороченный probe TTL (15 мин),
@@ -1269,8 +1300,8 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
                      g_data["fact"].get("temp"), fallback_ttl / 60)
             return g_data
         except Exception as e:
-            last_error_message = f"Gismeteo: {e}"
-            log.error("Gismeteo fallback failed: %s", e)
+            last_error_message = sanitize_secrets(f"Gismeteo: {e}")
+            log.error("Gismeteo fallback failed: %s", sanitize_secrets(e))
 
     # 3. Foreca (второй резерв: модель ECMWF, высокая точность, официальный Bearer-токен)
     if want("foreca") and cfg.get("enable_foreca_fallback", True) and cfg.get("foreca_api_key", ""):
@@ -1284,8 +1315,8 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
                      fc_data["fact"].get("temp"), fallback_ttl / 60)
             return fc_data
         except Exception as e:
-            last_error_message = f"Foreca: {e}"
-            log.error("Foreca fallback failed: %s", e)
+            last_error_message = sanitize_secrets(f"Foreca: {e}")
+            log.error("Foreca fallback failed: %s", sanitize_secrets(e))
 
     # 4. Open-Meteo (третий резерв: гидрометеомодели DWD/ICON, через om_proxy)
     if want("om") and cfg.get("enable_openmeteo_fallback", True):
@@ -1302,8 +1333,8 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
                      om_data["fact"].get("temp"), fallback_ttl / 60)
             return om_data
         except Exception as e:
-            last_error_message = f"Open-Meteo: {e}"
-            log.error("Open-Meteo fallback also failed: %s", e)
+            last_error_message = sanitize_secrets(f"Open-Meteo: {e}")
+            log.error("Open-Meteo fallback also failed: %s", sanitize_secrets(e))
 
     # 5. OpenWeatherMap (четвертый резерв: глобальный коммерческий API, 3ч-сетка)
     if want("owm") and cfg.get("enable_openweathermap_fallback", True) and cfg.get("openweathermap_api_key", ""):
@@ -1319,8 +1350,8 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
                      owm_data["fact"].get("temp"), fallback_ttl / 60)
             return owm_data
         except Exception as e:
-            last_error_message = f"OpenWeatherMap: {e}"
-            log.error("OpenWeatherMap fallback failed: %s", e)
+            last_error_message = sanitize_secrets(f"OpenWeatherMap: {e}")
+            log.error("OpenWeatherMap fallback failed: %s", sanitize_secrets(e))
 
     # 6. 7timer (пятый резерв: астрономический прогноз NOAA GFS, без ключа)
     if want("7timer") and cfg.get("enable_7timer_fallback", True):
@@ -1335,8 +1366,8 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
                      st_data["fact"].get("temp"), fallback_ttl / 60)
             return st_data
         except Exception as e:
-            last_error_message = f"7timer: {e}"
-            log.error("7timer fallback failed: %s", e)
+            last_error_message = sanitize_secrets(f"7timer: {e}")
+            log.error("7timer fallback failed: %s", sanitize_secrets(e))
 
     # 7. wttr.in (крайний рубеж: консольный бэкенд WWO)
     if want("wttr") and cfg.get("enable_wttr_fallback", True):
@@ -1351,8 +1382,8 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
                      wt_data["fact"].get("temp"), fallback_ttl / 60)
             return wt_data
         except Exception as e:
-            last_error_message = f"wttr.in: {e}"
-            log.error("wttr.in fallback also failed: %s", e)
+            last_error_message = sanitize_secrets(f"wttr.in: {e}")
+            log.error("wttr.in fallback also failed: %s", sanitize_secrets(e))
 
     # Тотальный фейл всех источников: считаем попытку израсходованной,
     # чтобы не долбить источники на каждом тике; старые данные оставляем
@@ -1388,7 +1419,7 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
                     if lk and not lk.locked():
                         KEY_LOCKS.pop(k, None)
 
-        if key == defk or base_key == defk or key == defk + ":yandex":
+        if key == defk or key == defk + ":yandex":
             last_fetch_time = ts
 
         with KEY_LOCKS_LOCK:
@@ -1429,25 +1460,31 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
             status_body = json.dumps({
                 "status": "ok" if cd else "no_cache",
                 "cache_age_minutes": round(age_min, 1),
-                "last_error": lem,
+                "last_error": sanitize_secrets(lem),
                 "has_weather_data": cd is not None
             }, indent=2)
-            self.send_response(200)
-            self.send_cors_headers()
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(status_body.encode("utf-8"))
+            try:
+                self.send_response(200)
+                self.send_cors_headers()
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(status_body.encode("utf-8"))
+            except (BrokenPipeError, ConnectionResetError):
+                pass
             return
 
         if path == "/geocode":
             qs = parse_qs(urlparse(self.path).query)
             q = (qs.get("q", [""])[0] or "").strip()
             if len(q) < 2:
-                self.send_response(400)
-                self.send_cors_headers()
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.end_headers()
-                self.wfile.write(json.dumps({"error": "query too short"}).encode("utf-8"))
+                try:
+                    self.send_response(400)
+                    self.send_cors_headers()
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": "query too short"}).encode("utf-8"))
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
                 return
             try:
                 results = geocode_search(q)
@@ -1456,13 +1493,18 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.end_headers()
                 self.wfile.write(json.dumps(results, ensure_ascii=False).encode("utf-8"))
+            except (BrokenPipeError, ConnectionResetError):
+                pass
             except Exception as e:
-                log.warning("geocode failed: %s", e)
-                self.send_response(502)
-                self.send_cors_headers()
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.end_headers()
-                self.wfile.write(json.dumps({"error": "geocode failed"}).encode("utf-8"))
+                log.warning("geocode failed: %s", sanitize_secrets(e))
+                try:
+                    self.send_response(502)
+                    self.send_cors_headers()
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": "geocode failed"}).encode("utf-8"))
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
             return
 
         if path == "/reverse":
@@ -1471,11 +1513,19 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
                 r_lat = float(qs["lat"][0])
                 r_lon = float(qs["lon"][0])
             except (KeyError, ValueError, IndexError):
-                self.send_response(400)
-                self.send_cors_headers()
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.end_headers()
-                self.wfile.write(json.dumps({"error": "lat/lon required"}).encode("utf-8"))
+                r_lat = r_lon = None
+            if (r_lat is None or r_lon is None or
+                math.isnan(r_lat) or math.isnan(r_lon) or
+                math.isinf(r_lat) or math.isinf(r_lon) or
+                not (-90.0 <= r_lat <= 90.0 and -180.0 <= r_lon <= 180.0)):
+                try:
+                    self.send_response(400)
+                    self.send_cors_headers()
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": "lat/lon required and must be valid coordinates"}).encode("utf-8"))
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
                 return
             try:
                 place = reverse_geocode(r_lat, r_lon)
@@ -1484,35 +1534,46 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.end_headers()
                 self.wfile.write(json.dumps(place, ensure_ascii=False).encode("utf-8"))
+            except (BrokenPipeError, ConnectionResetError):
+                pass
             except Exception as e:
-                log.warning("reverse geocode failed: %s", e)
-                self.send_response(502)
-                self.send_cors_headers()
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.end_headers()
-                self.wfile.write(json.dumps({"error": "reverse failed"}).encode("utf-8"))
+                log.warning("reverse geocode failed: %s", sanitize_secrets(e))
+                try:
+                    self.send_response(502)
+                    self.send_cors_headers()
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": "reverse failed"}).encode("utf-8"))
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
             return
 
         if path == "/observations/fetch":
             global last_obs_fetch
             if time.time() - last_obs_fetch < 600:
-                self.send_response(429)
-                self.send_cors_headers()
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.end_headers()
-                self.wfile.write(json.dumps({"error": "too soon"}).encode("utf-8"))
+                try:
+                    self.send_response(429)
+                    self.send_cors_headers()
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": "too soon"}).encode("utf-8"))
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
                 return
             last_obs_fetch = time.time()
             n = collect_foreca_observations()
             try:
                 n += collect_ogimet_synop(hours_back=30)
             except Exception as e:
-                log.warning("observations: ogimet failed: %s", e)
-            self.send_response(200)
-            self.send_cors_headers()
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(json.dumps({"fetched": n}).encode("utf-8"))
+                log.warning("observations: ogimet failed: %s", sanitize_secrets(e))
+            try:
+                self.send_response(200)
+                self.send_cors_headers()
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps({"fetched": n}).encode("utf-8"))
+            except (BrokenPipeError, ConnectionResetError):
+                pass
             return
 
         if path == "/accuracy":
@@ -1529,11 +1590,14 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
             except ValueError:
                 lead, days = 24, 90
             if not provider or lead < 0:
-                self.send_response(400)
-                self.send_cors_headers()
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.end_headers()
-                self.wfile.write(json.dumps({"error": "provider and lead_hours required"}).encode("utf-8"))
+                try:
+                    self.send_response(400)
+                    self.send_cors_headers()
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": "provider and lead_hours required"}).encode("utf-8"))
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
                 return
             try:
                 mae, n = accuracy_query(provider, lead, days, phys, window)
@@ -1546,23 +1610,31 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
                     "samples": n or 0,
                     "mae_temp_c": (round(mae, 2) if mae is not None else None),
                 }, ensure_ascii=False).encode("utf-8"))
+            except (BrokenPipeError, ConnectionResetError):
+                pass
             except Exception as e:
-                log.warning("accuracy failed: %s", e)
-                self.send_response(500)
-                self.send_cors_headers()
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.end_headers()
-                self.wfile.write(json.dumps({"error": "internal error"}).encode("utf-8"))
+                log.warning("accuracy failed: %s", sanitize_secrets(e))
+                try:
+                    self.send_response(500)
+                    self.send_cors_headers()
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": "internal error"}).encode("utf-8"))
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
             return
 
         # Погодные маршруты — только известные: остальное 404,
         # чтобы сканеры/favicon не запускали фетчи и не жгли квоту
         if path not in ("/", "/weather.json", "/forecast.json", "/v2/forecast"):
-            self.send_response(404)
-            self.send_cors_headers()
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(json.dumps({"error": "not found"}).encode("utf-8"))
+            try:
+                self.send_response(404)
+                self.send_cors_headers()
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "not found"}).encode("utf-8"))
+            except (BrokenPipeError, ConnectionResetError):
+                pass
             return
 
         # Координаты можно передать (?lat=&lon=) — выбор города на планшете;
@@ -1582,45 +1654,63 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
                 q_lon = float(lon_raw)
             except (TypeError, ValueError):
                 q_lat = q_lon = None
-            if q_lat is None or not (-90.0 <= q_lat <= 90.0 and -180.0 <= q_lon <= 180.0):
-                self.send_response(400)
-                self.send_cors_headers()
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.end_headers()
-                self.wfile.write(json.dumps({"error": "invalid lat/lon"}).encode("utf-8"))
+            if (q_lat is None or q_lon is None or
+                math.isnan(q_lat) or math.isnan(q_lon) or
+                math.isinf(q_lat) or math.isinf(q_lon) or
+                not (-90.0 <= q_lat <= 90.0 and -180.0 <= q_lon <= 180.0)):
+                try:
+                    self.send_response(400)
+                    self.send_cors_headers()
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": "invalid lat/lon"}).encode("utf-8"))
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
                 log.warning("Rejected weather request with invalid coords: lat=%r lon=%r", lat_raw, lon_raw)
                 return
         src_filter = (qs.get("source", [""])[0] or "").strip().lower()
+        SOURCE_ALIASES = {
+            "open-meteo": "om",
+            "openmeteo": "om",
+            "openweathermap": "owm",
+        }
+        src_filter = SOURCE_ALIASES.get(src_filter, src_filter)
         valid_sources = ("yandex", "gismeteo", "foreca", "om", "owm", "7timer", "wttr")
         sources = None
         if src_filter:
             if src_filter not in valid_sources:
-                self.send_response(400)
-                self.send_cors_headers()
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.end_headers()
-                self.wfile.write(json.dumps({
-                    "error": "unknown source",
-                    "valid": list(valid_sources)}).encode("utf-8"))
+                try:
+                    self.send_response(400)
+                    self.send_cors_headers()
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({
+                        "error": "unknown source",
+                        "valid": list(valid_sources)}).encode("utf-8"))
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
                 return
             sources = (src_filter,)
         data = get_weather_for(q_lat, q_lon, force=False, sources=sources)
-        if data:
-            body = json.dumps(data, ensure_ascii=False)
-            self.send_response(200)
-            self.send_cors_headers()
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(body.encode("utf-8"))
-        else:
-            self.send_response(503)
-            self.send_cors_headers()
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.end_headers()
-            with LOCATION_CACHE_LOCK:
-                lem = last_error_message
-            err = json.dumps({"error": "Weather data unavailable", "details": lem})
-            self.wfile.write(err.encode("utf-8"))
+        try:
+            if data:
+                body = json.dumps(data, ensure_ascii=False)
+                self.send_response(200)
+                self.send_cors_headers()
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(body.encode("utf-8"))
+            else:
+                self.send_response(503)
+                self.send_cors_headers()
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                with LOCATION_CACHE_LOCK:
+                    lem = last_error_message
+                err = json.dumps({"error": "Weather data unavailable", "details": sanitize_secrets(lem)})
+                self.wfile.write(err.encode("utf-8"))
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def log_message(self, format, *args):
         # Компактный лог HTTP-запросов
@@ -1633,7 +1723,7 @@ def background_refresher():
         try:
             fetch_weather(force=False)
         except Exception as e:
-            log.error("Background refresher error: %s", e)
+            log.error("Background refresher error: %s", sanitize_secrets(e))
         time.sleep(60)
 
 
