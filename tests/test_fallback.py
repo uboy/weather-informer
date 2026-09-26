@@ -71,7 +71,7 @@ class TestFallbackHierarchyAndProbe(unittest.TestCase):
                             self.assertEqual(res.get("src"), "Foreca")
 
     def test_2_network_error_sets_short_probe_ttl(self):
-        """Временный сетевой сбой Яндекса (URLError) дает укороченный TTL (10 мин) для быстрого возврата"""
+        """Временный сетевой сбой Яндекса (URLError) дает укороченный TTL (15 мин) для быстрого возврата"""
         def fake_yandex(*args, **kwargs):
             raise urllib.error.URLError("Temporary failure in name resolution")
 
@@ -88,15 +88,15 @@ class TestFallbackHierarchyAndProbe(unittest.TestCase):
                     "api": "test-key",
                     "enable_gismeteo_fallback": True,
                     "cache_interval_minutes": 60,
-                    "fallback_interval_minutes": 10,
+                    "fallback_interval_minutes": 15,
                 }):
                     key = caching_server.loc_key(56.32, 44.0)
                     res = caching_server._fetch_weather_locked(force=True, lat=56.32, lon=44.0, key=key)
                     self.assertEqual(res.get("src"), "Gismeteo")
                     entry = caching_server.LOCATION_CACHE.get(key)
                     self.assertIsNotNone(entry)
-                    # TTL должен быть 10 минут (600 с), а не 60 минут
-                    self.assertEqual(entry.get("ttl"), 10 * 60)
+                    # TTL должен быть 15 минут (900 с), а не 60 минут
+                    self.assertEqual(entry.get("ttl"), 15 * 60)
 
     def test_3_quota_403_does_not_hammer(self):
         """Ошибка квоты 403 не включает быстрый опрос — сохраняется полный интервал (60 мин)"""
@@ -116,7 +116,7 @@ class TestFallbackHierarchyAndProbe(unittest.TestCase):
                     "api": "test-key",
                     "enable_gismeteo_fallback": True,
                     "cache_interval_minutes": 60,
-                    "fallback_interval_minutes": 10,
+                    "fallback_interval_minutes": 15,
                 }):
                     key = caching_server.loc_key(56.32, 44.0)
                     res = caching_server._fetch_weather_locked(force=True, lat=56.32, lon=44.0, key=key)
@@ -138,18 +138,18 @@ class TestFallbackHierarchyAndProbe(unittest.TestCase):
         mock_resp.__enter__.return_value = mock_resp
 
         key = caching_server.loc_key(56.32, 44.0)
-        # Имитируем старый фоллбек-кэш 11 минут назад (превысил 10-мин probe TTL)
+        # Имитируем старый фоллбек-кэш 16 минут назад (превысил 15-мин probe TTL)
         caching_server.LOCATION_CACHE[key] = {
             "data": {"src": "Gismeteo", "fact": {"temp": 15}},
-            "ts": time.time() - 660,
-            "ttl": 600
+            "ts": time.time() - 960,
+            "ttl": 900
         }
 
         with patch.object(urllib.request, "urlopen", return_value=mock_resp):
             with patch("caching_server.load_config", return_value={
                 "api": "test-key",
                 "cache_interval_minutes": 60,
-                "fallback_interval_minutes": 10,
+                "fallback_interval_minutes": 15,
             }):
                 res = caching_server.get_weather_for(56.32, 44.0, force=False)
                 self.assertEqual(res.get("src"), "Yandex")

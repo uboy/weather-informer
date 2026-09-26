@@ -125,7 +125,7 @@ STATS_LOCK = threading.Lock()
 DEFAULT_CONFIG = {
     "port": 8085,
     "cache_interval_minutes": 60,  # 24 запроса в сутки (квота 30/день)
-    "fallback_interval_minutes": 10,  # опрос при возврате на основной источник (если не 403)
+    "fallback_interval_minutes": 15,  # опрос при возврате на основной источник (если не 403)
     "api": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
     "lat": 56.317722,
     "lon": 43.999303,
@@ -200,7 +200,7 @@ def load_disk_cache():
                     cfg0 = load_config()
                     dk = loc_key(cfg0.get("lat", 56.317722), cfg0.get("lon", 43.999303))
                     is_fallback = cached_data.get("src") != "Yandex"
-                    disk_ttl = (cfg0.get("fallback_interval_minutes", 10) * 60) if is_fallback else (cfg0.get("cache_interval_minutes", 60) * 60)
+                    disk_ttl = (cfg0.get("fallback_interval_minutes", 15) * 60) if is_fallback else (cfg0.get("cache_interval_minutes", 60) * 60)
                     LOCATION_CACHE[dk] = {"data": cached_data, "ts": last_fetch_time, "ttl": disk_ttl}
                     log.info("Restored cache from disk (%s), age: %.1f min (src=%s, ttl=%.1f min)",
                              CACHE_FILE, (time.time() - last_fetch_time) / 60,
@@ -1189,9 +1189,9 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
             log.warning("Yandex request failed: %s", e)
 
     # При сбое Яндекса: если 403/429/401 — ждем полный интервал (не долбим квоту);
-    # если временный сбой сети/DNS/таймаут — используем укороченный probe TTL (10 мин),
+    # если временный сбой сети/DNS/таймаут — используем укороченный probe TTL (15 мин),
     # чтобы быстро вернуться на Яндекс, как только связь восстановится.
-    probe_interval = load_config().get("fallback_interval_minutes", 10) * 60
+    probe_interval = load_config().get("fallback_interval_minutes", 15) * 60
     fallback_ttl = interval if yandex_quota_blocked else probe_interval
 
     # 2. Gismeteo (первый резерв для РФ: богатая локальная модель, без токена)
