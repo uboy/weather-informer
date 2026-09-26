@@ -201,7 +201,8 @@ def load_disk_cache():
                     dk = loc_key(cfg0.get("lat", 56.317722), cfg0.get("lon", 43.999303))
                     is_fallback = cached_data.get("src") != "Yandex"
                     disk_ttl = (cfg0.get("fallback_interval_minutes", 15) * 60) if is_fallback else (cfg0.get("cache_interval_minutes", 60) * 60)
-                    LOCATION_CACHE[dk] = {"data": cached_data, "ts": last_fetch_time, "ttl": disk_ttl}
+                    with LOCATION_CACHE_LOCK:
+                        LOCATION_CACHE[dk] = {"data": cached_data, "ts": last_fetch_time, "ttl": disk_ttl}
                     log.info("Restored cache from disk (%s), age: %.1f min (src=%s, ttl=%.1f min)",
                              CACHE_FILE, (time.time() - last_fetch_time) / 60,
                              cached_data.get("src"), disk_ttl / 60)
@@ -1098,10 +1099,10 @@ def get_weather_for(lat, lon, force=False, sources=None):
     interval = load_config().get("cache_interval_minutes", 60) * 60
     with LOCATION_CACHE_LOCK:
         entry = LOCATION_CACHE.get(key)
-        if not force and entry and entry.get("data"):
+        if not force and entry:
             cache_ttl = entry.get("ttl", interval)
-            if time.time() - entry["ts"] < cache_ttl:
-                return entry["data"]
+            if time.time() - entry.get("ts", 0) < cache_ttl:
+                return entry.get("data")
     lock = KEY_LOCKS.setdefault(key, threading.Lock())
     if not lock.acquire(blocking=False):
         # другой поток уже обновляет эту точку — отдаём что есть (может быть None)
@@ -1125,7 +1126,7 @@ def _store_location_result(key, data, note=None, ttl=None):
     with LOCATION_CACHE_LOCK:
         LOCATION_CACHE[key] = {"data": data, "ts": ts, "ttl": entry_ttl}
         if len(LOCATION_CACHE) > MAX_LOCATIONS:
-            for k in sorted(LOCATION_CACHE, key=lambda k: LOCATION_CACHE[k]["ts"])[:-MAX_LOCATIONS]:
+            for k in sorted(LOCATION_CACHE, key=lambda k: LOCATION_CACHE[k].get("ts", 0))[:-MAX_LOCATIONS]:
                 if k != key and k != defk:  # дефолтный город не эвиктим — иначе внеплановый расход квоты
                     LOCATION_CACHE.pop(k, None)
         if key == defk or (key == defk + ":yandex" and data and data.get("src") == "Yandex"):
@@ -1145,10 +1146,10 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
     now = time.time()
     with LOCATION_CACHE_LOCK:
         entry = LOCATION_CACHE.get(key)
-        if not force and entry and entry.get("data"):
+        if not force and entry:
             cache_ttl = entry.get("ttl", interval)
-            if now - entry["ts"] < cache_ttl:
-                return entry["data"]
+            if now - entry.get("ts", 0) < cache_ttl:
+                return entry.get("data")
 
     def want(name):
         return sources is None or name in sources
@@ -1169,7 +1170,7 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
         try:
             with urllib.request.urlopen(req, timeout=20) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
-                if "fact" in data and "forecasts" in data:
+                if isinstance(data, dict) and "fact" in data and "forecasts" in data:
                     data = normalize_weather_data(data)
                     data["src"] = "Yandex"
                     _store_location_result(key, data, None, ttl=interval)
@@ -1177,6 +1178,9 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
                     record_forecast("Yandex", key, data)
                     log.info("Successfully fetched and cached Yandex weather (temp: %s°)", data["fact"].get("temp"))
                     return data
+                else:
+                    last_error_message = "Yandex returned incomplete payload (missing fact or forecasts)"
+                    log.warning("Yandex returned payload missing fact/forecasts: %s", list(data.keys()) if isinstance(data, dict) else type(data))
         except urllib.error.HTTPError as e:
             last_error_message = f"Yandex HTTP {e.code}: {e.reason}"
             if e.code in (401, 402, 403, 429):
@@ -1291,15 +1295,29 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
     # Тотальный фейл всех источников: считаем попытку израсходованной,
     # чтобы не долбить источники на каждом тике; старые данные оставляем
     ts = time.time()
+    defk = loc_key(cfg.get("lat", 56.317722), cfg.get("lon", 43.999303))
     with LOCATION_CACHE_LOCK:
         fail_ttl = interval if yandex_quota_blocked else probe_interval
-        if entry is not None:
+        cur_entry = LOCATION_CACHE.get(key)
+        if cur_entry is not None:
+            cur_entry["ts"] = ts
+            cur_entry["ttl"] = fail_ttl
+            res_data = cur_entry.get("data")
+        elif entry is not None and entry.get("data"):
+            # entry существовал до фетча, но мог быть эвиктирован другим потоком
             entry["ts"] = ts
             entry["ttl"] = fail_ttl
+            LOCATION_CACHE[key] = entry
+            res_data = entry.get("data")
         else:
             LOCATION_CACHE[key] = {"data": None, "ts": ts, "ttl": fail_ttl}
-        res_data = entry.get("data") if entry is not None else LOCATION_CACHE.get(key, {}).get("data")
-    defk = loc_key(cfg.get("lat", 56.317722), cfg.get("lon", 43.999303))
+            res_data = None
+
+        if len(LOCATION_CACHE) > MAX_LOCATIONS:
+            for k in sorted(LOCATION_CACHE, key=lambda k: LOCATION_CACHE[k].get("ts", 0))[:-MAX_LOCATIONS]:
+                if k != key and k != defk:
+                    LOCATION_CACHE.pop(k, None)
+
     if key == defk:
         global last_fetch_time
         last_fetch_time = ts
