@@ -1095,7 +1095,7 @@ def get_weather_for(lat, lon, force=False, sources=None):
     устаревший — фетч с неблокирующим локом на точку.
     sources: None (вся цепочка) или кортеж имён источников-фильтр."""
     key = loc_key(lat, lon) + (":" + ",".join(sorted(sources)) if sources else "")
-    interval = load_config().get("cache_interval_minutes", 90) * 60
+    interval = load_config().get("cache_interval_minutes", 60) * 60
     with LOCATION_CACHE_LOCK:
         entry = LOCATION_CACHE.get(key)
         if not force and entry and entry.get("data"):
@@ -1119,7 +1119,7 @@ def _store_location_result(key, data, note=None, ttl=None):
     global cached_data, last_fetch_time, last_error_message
     ts = time.time()
     cfg = load_config()
-    interval = cfg.get("cache_interval_minutes", 90) * 60
+    interval = cfg.get("cache_interval_minutes", 60) * 60
     entry_ttl = ttl if ttl is not None else interval
     defk = loc_key(cfg.get("lat", 56.317722), cfg.get("lon", 43.999303))
     with LOCATION_CACHE_LOCK:
@@ -1140,7 +1140,8 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
     global last_error_message
     if key is None:
         key = loc_key(lat, lon)
-    interval = load_config().get("cache_interval_minutes", 90) * 60
+    cfg = load_config()
+    interval = cfg.get("cache_interval_minutes", 60) * 60
     now = time.time()
     with LOCATION_CACHE_LOCK:
         entry = LOCATION_CACHE.get(key)
@@ -1152,7 +1153,7 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
     def want(name):
         return sources is None or name in sources
 
-    api_key = load_config().get("api", "")
+    api_key = cfg.get("api", "")
     yandex_quota_blocked = False
 
     # 1. Яндекс.Погода (основной доверенный источник)
@@ -1191,11 +1192,11 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
     # При сбое Яндекса: если 403/429/401 — ждем полный интервал (не долбим квоту);
     # если временный сбой сети/DNS/таймаут — используем укороченный probe TTL (15 мин),
     # чтобы быстро вернуться на Яндекс, как только связь восстановится.
-    probe_interval = load_config().get("fallback_interval_minutes", 15) * 60
+    probe_interval = cfg.get("fallback_interval_minutes", 15) * 60
     fallback_ttl = interval if yandex_quota_blocked else probe_interval
 
     # 2. Gismeteo (первый резерв для РФ: богатая локальная модель, без токена)
-    if want("gismeteo") and load_config().get("enable_gismeteo_fallback", True):
+    if want("gismeteo") and cfg.get("enable_gismeteo_fallback", True):
         log.info("Attempting fallback to Gismeteo...")
         try:
             g_data = GISMETEO.get_weather(latitude=lat, longitude=lon)
@@ -1210,7 +1211,7 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
             log.error("Gismeteo fallback failed: %s", e)
 
     # 3. Foreca (второй резерв: модель ECMWF, высокая точность, официальный Bearer-токен)
-    if want("foreca") and load_config().get("enable_foreca_fallback", True) and load_config().get("foreca_api_key", ""):
+    if want("foreca") and cfg.get("enable_foreca_fallback", True) and cfg.get("foreca_api_key", ""):
         log.info("Attempting fallback to Foreca...")
         try:
             fc_data = FORECA.get_weather(latitude=lat, longitude=lon)
@@ -1225,8 +1226,8 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
             log.error("Foreca fallback failed: %s", e)
 
     # 4. Open-Meteo (третий резерв: гидрометеомодели DWD/ICON, через om_proxy)
-    if want("om") and load_config().get("enable_openmeteo_fallback", True):
-        proxy = load_config().get("om_proxy", "") or None
+    if want("om") and cfg.get("enable_openmeteo_fallback", True):
+        proxy = cfg.get("om_proxy", "") or None
         log.info("Attempting fallback to Open-Meteo%s...",
                  " via proxy" if proxy else "")
         try:
@@ -1242,8 +1243,8 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
             log.error("Open-Meteo fallback also failed: %s", e)
 
     # 5. OpenWeatherMap (четвертый резерв: глобальный коммерческий API, 3ч-сетка)
-    if want("owm") and load_config().get("enable_openweathermap_fallback", True) and load_config().get("openweathermap_api_key", ""):
-        owm_key = load_config().get("openweathermap_api_key", "")
+    if want("owm") and cfg.get("enable_openweathermap_fallback", True) and cfg.get("openweathermap_api_key", ""):
+        owm_key = cfg.get("openweathermap_api_key", "")
         log.info("Attempting fallback to OpenWeatherMap...")
         try:
             owm_data = fetch_from_openweathermap(lat, lon, owm_key)
@@ -1258,7 +1259,7 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
             log.error("OpenWeatherMap fallback failed: %s", e)
 
     # 6. 7timer (пятый резерв: астрономический прогноз NOAA GFS, без ключа)
-    if want("7timer") and load_config().get("enable_7timer_fallback", True):
+    if want("7timer") and cfg.get("enable_7timer_fallback", True):
         log.info("Attempting fallback to 7timer...")
         try:
             st_data = fetch_from_7timer(lat, lon)
@@ -1273,7 +1274,7 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
             log.error("7timer fallback failed: %s", e)
 
     # 7. wttr.in (крайний рубеж: консольный бэкенд WWO)
-    if want("wttr") and load_config().get("enable_wttr_fallback", True):
+    if want("wttr") and cfg.get("enable_wttr_fallback", True):
         log.info("Attempting fallback to wttr.in...")
         try:
             wt_data = fetch_from_wttr(lat, lon)
@@ -1297,8 +1298,7 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
             entry["ttl"] = fail_ttl
         else:
             LOCATION_CACHE[key] = {"data": None, "ts": ts, "ttl": fail_ttl}
-        res_data = LOCATION_CACHE[key]["data"]
-    cfg = load_config()
+        res_data = entry.get("data") if entry is not None else LOCATION_CACHE.get(key, {}).get("data")
     defk = loc_key(cfg.get("lat", 56.317722), cfg.get("lon", 43.999303))
     if key == defk:
         global last_fetch_time
