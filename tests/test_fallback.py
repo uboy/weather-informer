@@ -36,6 +36,7 @@ import caching_server
 class TestFallbackHierarchyAndProbe(unittest.TestCase):
     def setUp(self):
         caching_server.LOCATION_CACHE.clear()
+        caching_server.KEY_LOCKS.clear()
         caching_server.cached_data = None
         caching_server.last_fetch_time = 0
         caching_server.last_error_message = None
@@ -48,6 +49,7 @@ class TestFallbackHierarchyAndProbe(unittest.TestCase):
         except Exception:
             pass
         caching_server.LOCATION_CACHE.clear()
+        caching_server.KEY_LOCKS.clear()
         caching_server.cached_data = None
         caching_server.last_fetch_time = 0
         caching_server.last_error_message = None
@@ -433,7 +435,7 @@ class TestFallbackHierarchyAndProbe(unittest.TestCase):
             caching_server._store_location_result(new_key, {"src": "Foreca"}, ttl=900)
 
             # Проверяем размер кэша и сохранность ключевых элементов
-            self.assertLessEqual(len(caching_server.LOCATION_CACHE), caching_server.MAX_LOCATIONS + 1)
+            self.assertLessEqual(len(caching_server.LOCATION_CACHE), caching_server.MAX_LOCATIONS)
             self.assertIn(defk, caching_server.LOCATION_CACHE, "Дефолтный город никогда не должен эвиктиться")
             self.assertIn(new_key, caching_server.LOCATION_CACHE, "Только что записанный ключ должен остаться")
 
@@ -539,6 +541,135 @@ class TestFallbackHierarchyAndProbe(unittest.TestCase):
                 self.assertEqual(res.get("src"), "Yandex")
                 entry = caching_server.LOCATION_CACHE.get(key)
                 self.assertEqual(entry.get("ttl"), 60 * 60)
+
+    def test_ttl_none_and_ttl_zero_handling(self):
+        """ttl=None не приводит к TypeError при сравнении времени, а ttl=0 сразу экспайрит запись"""
+        key = caching_server.loc_key(56.32, 44.0)
+        # 1. ttl=None: должен использовать интервал по умолчанию (60 мин) без падения
+        caching_server.LOCATION_CACHE[key] = {
+            "data": {"src": "Yandex", "fact": {"temp": 20}},
+            "ts": time.time() - 100,
+            "ttl": None
+        }
+        with patch.object(caching_server, "_fetch_weather_locked") as mock_fetch:
+            res = caching_server.get_weather_for(56.32, 44.0, force=False)
+            self.assertIsNotNone(res)
+            self.assertEqual(res.get("src"), "Yandex")
+            mock_fetch.assert_not_called()
+
+        # 2. ttl=0: считается сразу истекшим
+        caching_server.LOCATION_CACHE[key] = {
+            "data": {"src": "Yandex", "fact": {"temp": 20}},
+            "ts": time.time(),
+            "ttl": 0
+        }
+        with patch.object(caching_server, "_fetch_weather_locked", return_value={"src": "Refreshed"}) as mock_fetch:
+            res = caching_server.get_weather_for(56.32, 44.0, force=False)
+            self.assertEqual(res.get("src"), "Refreshed")
+            mock_fetch.assert_called_once()
+
+    def test_clock_skew_backward_does_not_freeze_cache(self):
+        """Перевод системного времени назад (ts в будущем) не замораживает кэш, а экспайрит его"""
+        key = caching_server.loc_key(56.32, 44.0)
+        caching_server.LOCATION_CACHE[key] = {
+            "data": {"src": "OldData"},
+            "ts": time.time() + 3600,  # таймстемп на час в будущем (часы перевели назад)
+            "ttl": 3600
+        }
+        with patch.object(caching_server, "_fetch_weather_locked", return_value={"src": "FreshData"}) as mock_fetch:
+            res = caching_server.get_weather_for(56.32, 44.0, force=False)
+            self.assertEqual(res.get("src"), "FreshData")
+            mock_fetch.assert_called_once()
+
+    def test_key_locks_bounded_and_evicted(self):
+        """KEY_LOCKS не разрастается бесконечно при запросах разных координат"""
+        cfg = {"lat": 56.317722, "lon": 43.999303, "cache_interval_minutes": 60}
+        with patch("caching_server.load_config", return_value=cfg):
+            for i in range(40):
+                lat = 50.0 + i * 0.1
+                lon = 30.0 + i * 0.1
+                k = caching_server.loc_key(lat, lon)
+                caching_server._store_location_result(k, {"src": "OM"}, ttl=60)
+            self.assertLessEqual(len(caching_server.KEY_LOCKS), 32)
+
+    def test_cache_sharing_between_loc_and_loc_yandex(self):
+        """Ответ Яндекса по общему ключу дефолтного города автоматически удовлетворяет запрос ?source=yandex без повторного API-запроса"""
+        yandex_mock = MagicMock()
+        yandex_mock.read.return_value = b'{"fact":{"temp":21},"forecasts":[{"parts":{}}]}'
+        yandex_mock.__enter__.return_value = yandex_mock
+
+        with patch.object(urllib.request, "urlopen", return_value=yandex_mock) as mock_url:
+            with patch("caching_server.load_config", return_value={"api": "test-key", "cache_interval_minutes": 60}):
+                # 1. Запрос общего ключа
+                res1 = caching_server.get_weather_for(56.32, 44.0, force=False, sources=None)
+                self.assertEqual(res1.get("src"), "Yandex")
+                self.assertEqual(mock_url.call_count, 1)
+
+                # 2. Запрос ?source=yandex сразу после этого: не должен делать повторный запрос в сеть
+                res2 = caching_server.get_weather_for(56.32, 44.0, force=False, sources=("yandex",))
+                self.assertEqual(res2.get("src"), "Yandex")
+                self.assertEqual(mock_url.call_count, 1, "Запрос ?source=yandex должен взять свежий кэш Яндекса без обращения к API")
+
+    def test_last_error_message_recorded_for_all_fallbacks(self):
+        """При сбое каждого источника (Open-Meteo, OWM, 7timer, wttr) ошибка пишется в last_error_message"""
+        sources_to_test = [
+            ("om", "Open-Meteo", "fetch_from_openmeteo"),
+            ("owm", "OpenWeatherMap", "fetch_from_openweathermap"),
+            ("7timer", "7timer", "fetch_from_7timer"),
+            ("wttr", "wttr.in", "fetch_from_wttr"),
+        ]
+        cfg = {
+            "api": "test-key",
+            "openweathermap_api_key": "test-owm",
+            "enable_openmeteo_fallback": True,
+            "enable_openweathermap_fallback": True,
+            "enable_7timer_fallback": True,
+            "enable_wttr_fallback": True,
+        }
+        with patch("caching_server.load_config", return_value=cfg):
+            for src_name, label, target_fn in sources_to_test:
+                caching_server.last_error_message = None
+                with patch(f"caching_server.{target_fn}", side_effect=Exception(f"{src_name} exploded")):
+                    caching_server.get_weather_for(56.32, 44.0, force=True, sources=(src_name,))
+                    self.assertIsNotNone(caching_server.last_error_message)
+                    self.assertIn(label, caching_server.last_error_message)
+                    self.assertIn("exploded", caching_server.last_error_message)
+
+    def test_http_503_response_format_and_headers(self):
+        """При data is None HTTP-обработчик возвращает 503, заголовки CORS, Content-Type и JSON с error/details"""
+        from io import BytesIO
+
+        class FakeSocket:
+            def __init__(self, data=b""):
+                self._rfile = BytesIO(data)
+                self._wfile = BytesIO()
+
+            def settimeout(self, timeout):
+                pass
+
+            def sendall(self, data):
+                self._wfile.write(data)
+
+            def makefile(self, mode, *args, **kwargs):
+                if "b" in mode:
+                    return self._rfile if "r" in mode else self._wfile
+                raise NotImplementedError
+
+        req = FakeSocket(b"GET /weather.json HTTP/1.1\r\nHost: localhost\r\n\r\n")
+
+        with patch("caching_server.get_weather_for", return_value=None):
+            with patch("caching_server.last_error_message", "Mock upstream outage"):
+                handler = caching_server.WeatherHTTPHandler(req, ("127.0.0.1", 12345), None)
+                req._wfile.seek(0)
+                resp_bytes = req._wfile.getvalue()
+                resp_text = resp_bytes.decode("utf-8")
+
+                self.assertIn("HTTP/1.0 503", resp_text)
+                self.assertIn("Access-Control-Allow-Origin: *", resp_text)
+                self.assertIn("Content-Type: application/json; charset=utf-8", resp_text)
+                body_json = json.loads(resp_text.split("\r\n\r\n", 1)[1])
+                self.assertEqual(body_json.get("error"), "Weather data unavailable")
+                self.assertEqual(body_json.get("details"), "Mock upstream outage")
 
 
 if __name__ == "__main__":

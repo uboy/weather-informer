@@ -42,6 +42,7 @@ CACHE_FILE = os.path.join(SCRIPT_DIR, "weather_cache.json")
 LOCATION_CACHE = {}
 LOCATION_CACHE_LOCK = threading.Lock()
 KEY_LOCKS = {}
+KEY_LOCKS_LOCK = threading.Lock()
 MAX_LOCATIONS = 8
 NOMINATIM = "https://nominatim.openstreetmap.org"
 GEO_HEADERS = {"User-Agent": "WeatherInformerLocal/1.0 (lan weather kiosk)"}
@@ -1095,19 +1096,38 @@ def get_weather_for(lat, lon, force=False, sources=None):
     """Погода для конкретной точки: свежий кэш — мгновенно,
     устаревший — фетч с неблокирующим локом на точку.
     sources: None (вся цепочка) или кортеж имён источников-фильтр."""
-    key = loc_key(lat, lon) + (":" + ",".join(sorted(sources)) if sources else "")
+    base_key = loc_key(lat, lon)
+    key = base_key + (":" + ",".join(sorted(sources)) if sources else "")
     interval = load_config().get("cache_interval_minutes", 60) * 60
     with LOCATION_CACHE_LOCK:
         entry = LOCATION_CACHE.get(key)
+        if not entry and sources == ("yandex",):
+            base_entry = LOCATION_CACHE.get(base_key)
+            if base_entry and base_entry.get("data", {}).get("src") == "Yandex":
+                entry = base_entry
+        elif not entry and sources is None:
+            y_entry = LOCATION_CACHE.get(base_key + ":yandex")
+            if y_entry and y_entry.get("data", {}).get("src") == "Yandex":
+                entry = y_entry
+
         if not force and entry:
-            cache_ttl = entry.get("ttl", interval)
-            if time.time() - entry.get("ts", 0) < cache_ttl:
+            cache_ttl = entry.get("ttl")
+            if cache_ttl is None:
+                cache_ttl = interval
+            age = time.time() - entry.get("ts", 0)
+            if 0 <= age < cache_ttl:
                 return entry.get("data")
-    lock = KEY_LOCKS.setdefault(key, threading.Lock())
+
+    with KEY_LOCKS_LOCK:
+        lock = KEY_LOCKS.setdefault(key, threading.Lock())
     if not lock.acquire(blocking=False):
         # другой поток уже обновляет эту точку — отдаём что есть (может быть None)
         with LOCATION_CACHE_LOCK:
             entry = LOCATION_CACHE.get(key)
+            if not entry and sources == ("yandex",):
+                base_entry = LOCATION_CACHE.get(base_key)
+                if base_entry and base_entry.get("data", {}).get("src") == "Yandex":
+                    entry = base_entry
             return entry["data"] if entry else None
     try:
         return _fetch_weather_locked(force, lat, lon, sources, key)
@@ -1123,32 +1143,70 @@ def _store_location_result(key, data, note=None, ttl=None):
     interval = cfg.get("cache_interval_minutes", 60) * 60
     entry_ttl = ttl if ttl is not None else interval
     defk = loc_key(cfg.get("lat", 56.317722), cfg.get("lon", 43.999303))
+    base_key = key.split(":")[0] + ":" + key.split(":")[1] if ":" in key else key
+    should_save_disk = False
+
     with LOCATION_CACHE_LOCK:
         LOCATION_CACHE[key] = {"data": data, "ts": ts, "ttl": entry_ttl}
+        if data and data.get("src") == "Yandex":
+            LOCATION_CACHE[base_key] = {"data": data, "ts": ts, "ttl": entry_ttl}
+            LOCATION_CACHE[base_key + ":yandex"] = {"data": data, "ts": ts, "ttl": entry_ttl}
+
         if len(LOCATION_CACHE) > MAX_LOCATIONS:
-            for k in sorted(LOCATION_CACHE, key=lambda k: LOCATION_CACHE[k].get("ts", 0))[:-MAX_LOCATIONS]:
-                if k != key and k != defk:  # дефолтный город не эвиктим — иначе внеплановый расход квоты
-                    LOCATION_CACHE.pop(k, None)
-        if key == defk or (key == defk + ":yandex" and data and data.get("src") == "Yandex"):
+            evictable = sorted(
+                (k for k in LOCATION_CACHE if k != key and k != defk and k != base_key),
+                key=lambda k: LOCATION_CACHE[k].get("ts", 0)
+            )
+            for k in evictable[:len(LOCATION_CACHE) - MAX_LOCATIONS]:
+                LOCATION_CACHE.pop(k, None)
+                with KEY_LOCKS_LOCK:
+                    lk = KEY_LOCKS.get(k)
+                    if lk and not lk.locked():
+                        KEY_LOCKS.pop(k, None)
+
+        if key == defk or base_key == defk or (key == defk + ":yandex" and data and data.get("src") == "Yandex"):
             LOCATION_CACHE[defk] = {"data": data, "ts": ts, "ttl": entry_ttl}
             cached_data = data
             last_fetch_time = ts
             last_error_message = note
-            save_disk_cache(data)
+            should_save_disk = True
+
+        with KEY_LOCKS_LOCK:
+            if len(KEY_LOCKS) > 32:
+                for k in list(KEY_LOCKS.keys()):
+                    lk = KEY_LOCKS.get(k)
+                    if lk and not lk.locked() and k not in LOCATION_CACHE:
+                        KEY_LOCKS.pop(k, None)
+
+    if should_save_disk:
+        save_disk_cache(data)
 
 
 def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
-    global last_error_message
+    global last_error_message, last_fetch_time
     if key is None:
         key = loc_key(lat, lon)
+    base_key = loc_key(lat, lon)
     cfg = load_config()
     interval = cfg.get("cache_interval_minutes", 60) * 60
     now = time.time()
     with LOCATION_CACHE_LOCK:
         entry = LOCATION_CACHE.get(key)
+        if not entry and sources == ("yandex",):
+            base_entry = LOCATION_CACHE.get(base_key)
+            if base_entry and base_entry.get("data", {}).get("src") == "Yandex":
+                entry = base_entry
+        elif not entry and sources is None:
+            y_entry = LOCATION_CACHE.get(base_key + ":yandex")
+            if y_entry and y_entry.get("data", {}).get("src") == "Yandex":
+                entry = y_entry
+
         if not force and entry:
-            cache_ttl = entry.get("ttl", interval)
-            if now - entry.get("ts", 0) < cache_ttl:
+            cache_ttl = entry.get("ttl")
+            if cache_ttl is None:
+                cache_ttl = interval
+            age = now - entry.get("ts", 0)
+            if 0 <= age < cache_ttl:
                 return entry.get("data")
 
     def want(name):
@@ -1244,6 +1302,7 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
                      om_data["fact"].get("temp"), fallback_ttl / 60)
             return om_data
         except Exception as e:
+            last_error_message = f"Open-Meteo: {e}"
             log.error("Open-Meteo fallback also failed: %s", e)
 
     # 5. OpenWeatherMap (четвертый резерв: глобальный коммерческий API, 3ч-сетка)
@@ -1260,6 +1319,7 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
                      owm_data["fact"].get("temp"), fallback_ttl / 60)
             return owm_data
         except Exception as e:
+            last_error_message = f"OpenWeatherMap: {e}"
             log.error("OpenWeatherMap fallback failed: %s", e)
 
     # 6. 7timer (пятый резерв: астрономический прогноз NOAA GFS, без ключа)
@@ -1275,6 +1335,7 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
                      st_data["fact"].get("temp"), fallback_ttl / 60)
             return st_data
         except Exception as e:
+            last_error_message = f"7timer: {e}"
             log.error("7timer fallback failed: %s", e)
 
     # 7. wttr.in (крайний рубеж: консольный бэкенд WWO)
@@ -1290,12 +1351,14 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
                      wt_data["fact"].get("temp"), fallback_ttl / 60)
             return wt_data
         except Exception as e:
+            last_error_message = f"wttr.in: {e}"
             log.error("wttr.in fallback also failed: %s", e)
 
     # Тотальный фейл всех источников: считаем попытку израсходованной,
     # чтобы не долбить источники на каждом тике; старые данные оставляем
     ts = time.time()
     defk = loc_key(cfg.get("lat", 56.317722), cfg.get("lon", 43.999303))
+    base_key = loc_key(lat, lon)
     with LOCATION_CACHE_LOCK:
         fail_ttl = interval if yandex_quota_blocked else probe_interval
         cur_entry = LOCATION_CACHE.get(key)
@@ -1314,13 +1377,27 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
             res_data = None
 
         if len(LOCATION_CACHE) > MAX_LOCATIONS:
-            for k in sorted(LOCATION_CACHE, key=lambda k: LOCATION_CACHE[k].get("ts", 0))[:-MAX_LOCATIONS]:
-                if k != key and k != defk:
-                    LOCATION_CACHE.pop(k, None)
+            evictable = sorted(
+                (k for k in LOCATION_CACHE if k != key and k != defk and k != base_key),
+                key=lambda k: LOCATION_CACHE[k].get("ts", 0)
+            )
+            for k in evictable[:len(LOCATION_CACHE) - MAX_LOCATIONS]:
+                LOCATION_CACHE.pop(k, None)
+                with KEY_LOCKS_LOCK:
+                    lk = KEY_LOCKS.get(k)
+                    if lk and not lk.locked():
+                        KEY_LOCKS.pop(k, None)
 
-    if key == defk:
-        global last_fetch_time
-        last_fetch_time = ts
+        if key == defk or base_key == defk or key == defk + ":yandex":
+            last_fetch_time = ts
+
+        with KEY_LOCKS_LOCK:
+            if len(KEY_LOCKS) > 32:
+                for k in list(KEY_LOCKS.keys()):
+                    lk = KEY_LOCKS.get(k)
+                    if lk and not lk.locked() and k not in LOCATION_CACHE:
+                        KEY_LOCKS.pop(k, None)
+
     return res_data
 
 
@@ -1343,13 +1420,17 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0]
 
         if path in ["/health", "/status"]:
+            with LOCATION_CACHE_LOCK:
+                lft = last_fetch_time
+                cd = cached_data
+                lem = last_error_message
             now = time.time()
-            age_min = (now - last_fetch_time) / 60 if last_fetch_time else -1
+            age_min = max(0.0, (now - lft) / 60) if lft else -1
             status_body = json.dumps({
-                "status": "ok" if cached_data else "no_cache",
+                "status": "ok" if cd else "no_cache",
                 "cache_age_minutes": round(age_min, 1),
-                "last_error": last_error_message,
-                "has_weather_data": cached_data is not None
+                "last_error": lem,
+                "has_weather_data": cd is not None
             }, indent=2)
             self.send_response(200)
             self.send_cors_headers()
@@ -1536,7 +1617,9 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
             self.send_cors_headers()
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
-            err = json.dumps({"error": "Weather data unavailable", "details": last_error_message})
+            with LOCATION_CACHE_LOCK:
+                lem = last_error_message
+            err = json.dumps({"error": "Weather data unavailable", "details": lem})
             self.wfile.write(err.encode("utf-8"))
 
     def log_message(self, format, *args):
