@@ -125,16 +125,19 @@ STATS_LOCK = threading.Lock()
 DEFAULT_CONFIG = {
     "port": 8085,
     "cache_interval_minutes": 60,  # 24 запроса в сутки (квота 30/день)
+    "fallback_interval_minutes": 10,  # опрос при возврате на основной источник (если не 403)
     "api": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
     "lat": 56.317722,
     "lon": 43.999303,
-    "enable_openmeteo_fallback": True,
-    "om_proxy": "",
     "enable_gismeteo_fallback": True,
     "foreca_api_key": "",
     "enable_foreca_fallback": True,
-    "enable_wttr_fallback": True,
+    "enable_openmeteo_fallback": True,
+    "om_proxy": "",
+    "enable_openweathermap_fallback": True,
+    "openweathermap_api_key": "",
     "enable_7timer_fallback": True,
+    "enable_wttr_fallback": True,
     "stats_enabled": True,
     "stats_interval_minutes": 60
 }
@@ -196,9 +199,12 @@ def load_disk_cache():
                     last_fetch_time = os.path.getmtime(CACHE_FILE)
                     cfg0 = load_config()
                     dk = loc_key(cfg0.get("lat", 56.317722), cfg0.get("lon", 43.999303))
-                    LOCATION_CACHE[dk] = {"data": cached_data, "ts": last_fetch_time}
-                    log.info("Restored cache from disk (%s), age: %.1f min",
-                             CACHE_FILE, (time.time() - last_fetch_time) / 60)
+                    is_fallback = cached_data.get("src") != "Yandex"
+                    disk_ttl = (cfg0.get("fallback_interval_minutes", 10) * 60) if is_fallback else (cfg0.get("cache_interval_minutes", 60) * 60)
+                    LOCATION_CACHE[dk] = {"data": cached_data, "ts": last_fetch_time, "ttl": disk_ttl}
+                    log.info("Restored cache from disk (%s), age: %.1f min (src=%s, ttl=%.1f min)",
+                             CACHE_FILE, (time.time() - last_fetch_time) / 60,
+                             cached_data.get("src"), disk_ttl / 60)
         except Exception as e:
             log.warning("Could not read disk cache: %s", e)
 
@@ -1092,8 +1098,10 @@ def get_weather_for(lat, lon, force=False, sources=None):
     interval = load_config().get("cache_interval_minutes", 90) * 60
     with LOCATION_CACHE_LOCK:
         entry = LOCATION_CACHE.get(key)
-        if not force and entry and entry.get("data") and (time.time() - entry["ts"] < interval):
-            return entry["data"]
+        if not force and entry and entry.get("data"):
+            cache_ttl = entry.get("ttl", interval)
+            if time.time() - entry["ts"] < cache_ttl:
+                return entry["data"]
     lock = KEY_LOCKS.setdefault(key, threading.Lock())
     if not lock.acquire(blocking=False):
         # другой поток уже обновляет эту точку — отдаём что есть (может быть None)
@@ -1106,23 +1114,26 @@ def get_weather_for(lat, lon, force=False, sources=None):
         lock.release()
 
 
-def _store_location_result(key, data, note=None):
+def _store_location_result(key, data, note=None, ttl=None):
     """Сохранение результата фетча; для города по умолчанию — ещё глобальный кэш и диск."""
     global cached_data, last_fetch_time, last_error_message
     ts = time.time()
     cfg = load_config()
+    interval = cfg.get("cache_interval_minutes", 90) * 60
+    entry_ttl = ttl if ttl is not None else interval
     defk = loc_key(cfg.get("lat", 56.317722), cfg.get("lon", 43.999303))
     with LOCATION_CACHE_LOCK:
-        LOCATION_CACHE[key] = {"data": data, "ts": ts}
+        LOCATION_CACHE[key] = {"data": data, "ts": ts, "ttl": entry_ttl}
         if len(LOCATION_CACHE) > MAX_LOCATIONS:
             for k in sorted(LOCATION_CACHE, key=lambda k: LOCATION_CACHE[k]["ts"])[:-MAX_LOCATIONS]:
                 if k != key and k != defk:  # дефолтный город не эвиктим — иначе внеплановый расход квоты
                     LOCATION_CACHE.pop(k, None)
-    if key == defk:
-        cached_data = data
-        last_fetch_time = ts
-        last_error_message = note
-        save_disk_cache(data)
+        if key == defk or (key == defk + ":yandex" and data and data.get("src") == "Yandex"):
+            LOCATION_CACHE[defk] = {"data": data, "ts": ts, "ttl": entry_ttl}
+            cached_data = data
+            last_fetch_time = ts
+            last_error_message = note
+            save_disk_cache(data)
 
 
 def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
@@ -1133,14 +1144,18 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
     now = time.time()
     with LOCATION_CACHE_LOCK:
         entry = LOCATION_CACHE.get(key)
-        if not force and entry and entry.get("data") and (now - entry["ts"] < interval):
-            return entry["data"]
+        if not force and entry and entry.get("data"):
+            cache_ttl = entry.get("ttl", interval)
+            if now - entry["ts"] < cache_ttl:
+                return entry["data"]
 
     def want(name):
         return sources is None or name in sources
 
     api_key = load_config().get("api", "")
+    yandex_quota_blocked = False
 
+    # 1. Яндекс.Погода (основной доверенный источник)
     if want("yandex"):
         yandex_url = f"https://api.weather.yandex.ru/v2/forecast?lat={lat}&lon={lon}"
         headers = {
@@ -1156,34 +1171,60 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
                 if "fact" in data and "forecasts" in data:
                     data = normalize_weather_data(data)
                     data["src"] = "Yandex"
-                    _store_location_result(key, data, None)
+                    _store_location_result(key, data, None, ttl=interval)
                     stats_log_source("Yandex", data)
                     record_forecast("Yandex", key, data)
                     log.info("Successfully fetched and cached Yandex weather (temp: %s°)", data["fact"].get("temp"))
                     return data
         except urllib.error.HTTPError as e:
             last_error_message = f"Yandex HTTP {e.code}: {e.reason}"
-            log.warning("Yandex API returned HTTP %s: %s", e.code, e.reason)
+            if e.code in (401, 402, 403, 429):
+                yandex_quota_blocked = True
+                log.warning("Yandex API quota/auth error HTTP %s: %s (keeping standard %d min cooldown, will not hammer)",
+                            e.code, e.reason, interval // 60)
+            else:
+                log.warning("Yandex API returned HTTP %s: %s", e.code, e.reason)
         except Exception as e:
             last_error_message = f"Yandex request error: {e}"
             log.warning("Yandex request failed: %s", e)
 
-    # Fallback на OpenWeatherMap (если задан ключ) при ошибке Яндекса
-    if want("owm") and load_config().get("enable_openweathermap_fallback", True) and load_config().get("openweathermap_api_key", ""):
-        owm_key = load_config().get("openweathermap_api_key", "")
-        log.info("Attempting fallback to OpenWeatherMap...")
-        try:
-            owm_data = fetch_from_openweathermap(lat, lon, owm_key)
-            owm_data["src"] = "OpenWeatherMap"
-            _store_location_result(key, owm_data, "Active fallback: OpenWeatherMap (Yandex quota/error)")
-            stats_log_source("OpenWeatherMap", owm_data)
-            record_forecast("OpenWeatherMap", key, owm_data)
-            log.info("Successfully updated weather via OpenWeatherMap fallback (temp: %s°)", owm_data["fact"].get("temp"))
-            return owm_data
-        except Exception as e:
-            log.error("OpenWeatherMap fallback failed: %s", e)
+    # При сбое Яндекса: если 403/429/401 — ждем полный интервал (не долбим квоту);
+    # если временный сбой сети/DNS/таймаут — используем укороченный probe TTL (10 мин),
+    # чтобы быстро вернуться на Яндекс, как только связь восстановится.
+    probe_interval = load_config().get("fallback_interval_minutes", 10) * 60
+    fallback_ttl = interval if yandex_quota_blocked else probe_interval
 
-    # Fallback на Open-Meteo при ошибке Яндекса (опционально через прокси)
+    # 2. Gismeteo (первый резерв для РФ: богатая локальная модель, без токена)
+    if want("gismeteo") and load_config().get("enable_gismeteo_fallback", True):
+        log.info("Attempting fallback to Gismeteo...")
+        try:
+            g_data = GISMETEO.get_weather(latitude=lat, longitude=lon)
+            _store_location_result(key, g_data, "Active fallback: Gismeteo (Yandex unavailable)", ttl=fallback_ttl)
+            stats_log_source("Gismeteo", g_data)
+            record_forecast("Gismeteo", key, g_data)
+            log.info("Successfully updated weather via Gismeteo fallback (temp: %s°, ttl: %.1f min)",
+                     g_data["fact"].get("temp"), fallback_ttl / 60)
+            return g_data
+        except Exception as e:
+            last_error_message = f"Gismeteo: {e}"
+            log.error("Gismeteo fallback failed: %s", e)
+
+    # 3. Foreca (второй резерв: модель ECMWF, высокая точность, официальный Bearer-токен)
+    if want("foreca") and load_config().get("enable_foreca_fallback", True) and load_config().get("foreca_api_key", ""):
+        log.info("Attempting fallback to Foreca...")
+        try:
+            fc_data = FORECA.get_weather(latitude=lat, longitude=lon)
+            _store_location_result(key, fc_data, "Active fallback: Foreca", ttl=fallback_ttl)
+            stats_log_source("Foreca", fc_data)
+            record_forecast("Foreca", key, fc_data)
+            log.info("Successfully updated weather via Foreca fallback (temp: %s°, ttl: %.1f min)",
+                     fc_data["fact"].get("temp"), fallback_ttl / 60)
+            return fc_data
+        except Exception as e:
+            last_error_message = f"Foreca: {e}"
+            log.error("Foreca fallback failed: %s", e)
+
+    # 4. Open-Meteo (третий резерв: гидрометеомодели DWD/ICON, через om_proxy)
     if want("om") and load_config().get("enable_openmeteo_fallback", True):
         proxy = load_config().get("om_proxy", "") or None
         log.info("Attempting fallback to Open-Meteo%s...",
@@ -1191,78 +1232,71 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
         try:
             om_data = fetch_from_openmeteo(lat, lon, proxy)
             om_data["src"] = "Open-Meteo"
-            _store_location_result(key, om_data, "Active fallback: Open-Meteo (Yandex quota/error)")
+            _store_location_result(key, om_data, "Active fallback: Open-Meteo", ttl=fallback_ttl)
             stats_log_source("Open-Meteo", om_data)
             record_forecast("Open-Meteo", key, om_data)
-            log.info("Successfully updated weather via Open-Meteo fallback (temp: %s°)", om_data["fact"].get("temp"))
+            log.info("Successfully updated weather via Open-Meteo fallback (temp: %s°, ttl: %.1f min)",
+                     om_data["fact"].get("temp"), fallback_ttl / 60)
             return om_data
         except Exception as e:
             log.error("Open-Meteo fallback also failed: %s", e)
 
-    # Fallback: Gismeteo (без токена, изолированный провайдер)
-    if want("gismeteo") and load_config().get("enable_gismeteo_fallback", True):
-        log.info("Attempting fallback to Gismeteo...")
+    # 5. OpenWeatherMap (четвертый резерв: глобальный коммерческий API, 3ч-сетка)
+    if want("owm") and load_config().get("enable_openweathermap_fallback", True) and load_config().get("openweathermap_api_key", ""):
+        owm_key = load_config().get("openweathermap_api_key", "")
+        log.info("Attempting fallback to OpenWeatherMap...")
         try:
-            g_data = GISMETEO.get_weather(latitude=lat, longitude=lon)
-            _store_location_result(key, g_data, "Active fallback: Gismeteo (Yandex/OWM/OM unavailable)")
-            stats_log_source("Gismeteo", g_data)
-            record_forecast("Gismeteo", key, g_data)
-            log.info("Successfully updated weather via Gismeteo fallback (temp: %s°)", g_data["fact"].get("temp"))
-            return g_data
+            owm_data = fetch_from_openweathermap(lat, lon, owm_key)
+            owm_data["src"] = "OpenWeatherMap"
+            _store_location_result(key, owm_data, "Active fallback: OpenWeatherMap", ttl=fallback_ttl)
+            stats_log_source("OpenWeatherMap", owm_data)
+            record_forecast("OpenWeatherMap", key, owm_data)
+            log.info("Successfully updated weather via OpenWeatherMap fallback (temp: %s°, ttl: %.1f min)",
+                     owm_data["fact"].get("temp"), fallback_ttl / 60)
+            return owm_data
         except Exception as e:
-            last_error_message = f"Gismeteo: {e}"
-            log.error("Gismeteo fallback failed: %s", e)
+            log.error("OpenWeatherMap fallback failed: %s", e)
 
-    # Fallback: Foreca (Bearer-токен в config: foreca_api_key)
-    if want("foreca") and load_config().get("enable_foreca_fallback", True) and load_config().get("foreca_api_key", ""):
-        log.info("Attempting fallback to Foreca...")
-        try:
-            fc_data = FORECA.get_weather(latitude=lat, longitude=lon)
-            _store_location_result(key, fc_data, "Active fallback: Foreca")
-            stats_log_source("Foreca", fc_data)
-            record_forecast("Foreca", key, fc_data)
-            log.info("Successfully updated weather via Foreca fallback (temp: %s°)", fc_data["fact"].get("temp"))
-            return fc_data
-        except Exception as e:
-            last_error_message = f"Foreca: {e}"
-            log.error("Foreca fallback failed: %s", e)
-
-    # Fallback 2: wttr.in (без ключа)
-    if want("wttr") and load_config().get("enable_wttr_fallback", True):
-        log.info("Attempting fallback to wttr.in...")
-        try:
-            wt_data = fetch_from_wttr(lat, lon)
-            wt_data["src"] = "wttr.in"
-            _store_location_result(key, wt_data, "Active fallback: wttr.in (Yandex/OM unavailable)")
-            stats_log_source("wttr.in", wt_data)
-            record_forecast("wttr.in", key, wt_data)
-            log.info("Successfully updated weather via wttr.in fallback (temp: %s°)", wt_data["fact"].get("temp"))
-            return wt_data
-        except Exception as e:
-            log.error("wttr.in fallback also failed: %s", e)
-
-    # Fallback 3: 7timer (последний рубеж)
+    # 6. 7timer (пятый резерв: астрономический прогноз NOAA GFS, без ключа)
     if want("7timer") and load_config().get("enable_7timer_fallback", True):
         log.info("Attempting fallback to 7timer...")
         try:
             st_data = fetch_from_7timer(lat, lon)
             st_data["src"] = "7timer"
-            _store_location_result(key, st_data, "Active fallback: 7timer (others unavailable)")
+            _store_location_result(key, st_data, "Active fallback: 7timer", ttl=fallback_ttl)
             stats_log_source("7timer", st_data)
             record_forecast("7timer", key, st_data)
-            log.info("Successfully updated weather via 7timer fallback (temp: %s°)", st_data["fact"].get("temp"))
+            log.info("Successfully updated weather via 7timer fallback (temp: %s°, ttl: %.1f min)",
+                     st_data["fact"].get("temp"), fallback_ttl / 60)
             return st_data
         except Exception as e:
-            log.error("7timer fallback also failed: %s", e)
+            log.error("7timer fallback failed: %s", e)
+
+    # 7. wttr.in (крайний рубеж: консольный бэкенд WWO)
+    if want("wttr") and load_config().get("enable_wttr_fallback", True):
+        log.info("Attempting fallback to wttr.in...")
+        try:
+            wt_data = fetch_from_wttr(lat, lon)
+            wt_data["src"] = "wttr.in"
+            _store_location_result(key, wt_data, "Active fallback: wttr.in (last resort)", ttl=fallback_ttl)
+            stats_log_source("wttr.in", wt_data)
+            record_forecast("wttr.in", key, wt_data)
+            log.info("Successfully updated weather via wttr.in fallback (temp: %s°, ttl: %.1f min)",
+                     wt_data["fact"].get("temp"), fallback_ttl / 60)
+            return wt_data
+        except Exception as e:
+            log.error("wttr.in fallback also failed: %s", e)
 
     # Тотальный фейл всех источников: считаем попытку израсходованной,
     # чтобы не долбить источники на каждом тике; старые данные оставляем
     ts = time.time()
     with LOCATION_CACHE_LOCK:
+        fail_ttl = interval if yandex_quota_blocked else probe_interval
         if entry is not None:
             entry["ts"] = ts
+            entry["ttl"] = fail_ttl
         else:
-            LOCATION_CACHE[key] = {"data": None, "ts": ts}
+            LOCATION_CACHE[key] = {"data": None, "ts": ts, "ttl": fail_ttl}
         res_data = LOCATION_CACHE[key]["data"]
     cfg = load_config()
     defk = loc_key(cfg.get("lat", 56.317722), cfg.get("lon", 43.999303))
@@ -1458,7 +1492,7 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
                 log.warning("Rejected weather request with invalid coords: lat=%r lon=%r", lat_raw, lon_raw)
                 return
         src_filter = (qs.get("source", [""])[0] or "").strip().lower()
-        valid_sources = ("yandex", "owm", "om", "gismeteo", "foreca", "wttr", "7timer")
+        valid_sources = ("yandex", "gismeteo", "foreca", "om", "owm", "7timer", "wttr")
         sources = None
         if src_filter:
             if src_filter not in valid_sources:

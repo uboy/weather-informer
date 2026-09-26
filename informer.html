@@ -643,9 +643,10 @@ function init_menu() {
 	function render_src() {
 		var pref = safe_get_item("weather_source_pref", "default");
 		if (pref !== "server" && pref !== "wttr" && pref !== "owm" && pref !== "om" && pref !== "7timer" && pref !== "yandex" && pref !== "gismeteo" && pref !== "foreca") pref = "default";
+		var hasServer = (server_url && server_url.trim() !== "");
 		$(".menu_src").each(function() {
 			var src = $(this).attr("data-src");
-			if (src === "yandex" && !allow_direct_yandex) { $(this).hide(); return; }
+			if (src === "yandex" && !hasServer && !allow_direct_yandex) { $(this).hide(); return; }
 			$(this).show();
 			if (src === pref) $(this).addClass("menu_active");
 			else $(this).removeClass("menu_active");
@@ -1732,15 +1733,19 @@ function get_data() {
 		return;
 	}
 	if (source_pref === "yandex") {
-		if (!allow_direct_yandex) { show_error(null, "source_disabled", "прямой Яндекс отключён конфигом"); return; }
-		var effKey = safe_get_item("yandex_api_key", "") || api;
-		if (!effKey || effKey === 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx') {
-			show_key_dialog("Ключ Яндекс.Погоды (прямой)", "yandex_api_key", function() { get_data(); });
+		if (server) {
+			server += "&source=yandex";
+		} else {
+			if (!allow_direct_yandex) { show_error(null, "source_disabled", "прямой Яндекс отключён конфигом"); return; }
+			var effKey = safe_get_item("yandex_api_key", "") || api;
+			if (!effKey || effKey === 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx') {
+				show_key_dialog("Ключ Яндекс.Погоды (прямой)", "yandex_api_key", function() { get_data(); });
+				return;
+			}
+			console.log("get_data: source pref = Yandex (direct)");
+			fetch_url('https://api.weather.yandex.ru/v2/forecast?lat=' + lat + '&lon=' + lon, {'X-Yandex-Weather-Key': effKey}, true, 'Яндекс.Погода');
 			return;
 		}
-		console.log("get_data: source pref = Yandex (direct)");
-		fetch_url('https://api.weather.yandex.ru/v2/forecast?lat=' + lat + '&lon=' + lon, {'X-Yandex-Weather-Key': effKey}, true, 'Яндекс.Погода');
-		return;
 	}
 
 	if (source_pref === "wttr") {
@@ -1844,10 +1849,14 @@ function get_data() {
 		}
 
 		var chain = [];
+		var effForecaKey = safe_get_item("foreca_api_key", "") || foreca_api_key_cfg;
+		if (effForecaKey) {
+			chain.push({ name: 'Foreca', run: function(ok, fail) { fetch_from_foreca_client(ok, fail); } });
+		}
+		chain.push({ name: 'Open-Meteo', run: function(ok, fail) { fetch_from_om_client(ok, fail); } });
 		if (owm_key) {
 			chain.push({ name: 'OpenWeatherMap', run: function(ok, fail) { fetch_from_owm(ok, fail); } });
 		}
-		chain.push({ name: 'Open-Meteo', run: function(ok, fail) { fetch_from_om_client(ok, fail); } });
 		chain.push({ name: '7timer', run: function(ok, fail) { fetch_from_7timer_client(ok, fail); } });
 		if (enable_wttr_fallback) {
 			chain.push({ name: 'wttr.in', run: function(ok, fail) { fetch_from_wttr(ok, fail); } });
@@ -3086,13 +3095,13 @@ body {
 		<div class="menu_title">Источник (по умолчанию)</div>
 		<div class="menu_item menu_src" data-src="default">По умолчанию</div>
 		<div class="menu_item menu_src" data-src="server">Локальный сервер</div>
-		<div class="menu_item menu_src" data-src="owm">OpenWeatherMap</div>
-		<div class="menu_item menu_src" data-src="om">Open-Meteo</div>
+		<div class="menu_item menu_src" data-src="yandex" style="display:none">Яндекс</div>
 		<div class="menu_item menu_src" data-src="gismeteo">Gismeteo</div>
 		<div class="menu_item menu_src" data-src="foreca">Foreca</div>
+		<div class="menu_item menu_src" data-src="om">Open-Meteo</div>
+		<div class="menu_item menu_src" data-src="owm">OpenWeatherMap</div>
 		<div class="menu_item menu_src" data-src="7timer">7timer</div>
 		<div class="menu_item menu_src" data-src="wttr">wttr.in</div>
-		<div class="menu_item menu_src" data-src="yandex" style="display:none">Яндекс (прямой)</div>
 		<div class="menu_title">Город</div>
 		<div class="menu_item" id="city_current">Город: —</div>
 		<div class="menu_item" id="city_auto">Определить автоматически (GPS)</div>

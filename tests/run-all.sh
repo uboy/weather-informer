@@ -10,4 +10,5 @@ echo "=== python foreca ==="; python3 tests/test_foreca_provider.py 2>&1 | tail 
 echo "=== python synop ==="; python3 tests/test_synop.py 2>&1 | tail -1
 echo "=== python accuracy ==="; python3 tests/test_accuracy.py 2>&1 | tail -1
 echo "=== python history/7timer ==="; python3 tests/test_history.py 2>&1 | tail -1
+echo "=== python fallback hierarchy ==="; python3 tests/test_fallback.py 2>&1 | tail -1
 echo "=== ВСЁ ЗЕЛЁНОЕ ==="
