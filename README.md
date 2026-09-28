@@ -1,182 +1,162 @@
-# Weather Informer — парк погодных планшетов-киосков
+# Weather Informer (Яндекс.Погода в Kiosk Mode)
 
-Локальный кэширующий сервер погоды + веб-страница киоска для парка Android-планшетов.
-Сервер ходит в Яндекс.Погоду **раз в 90 минут** (квота бесплатного тарифа 30 запросов/сутки),
-кэширует результат и раздаёт неограниченному числу планшетов. Цепочка фолбэков сервера:
-**OpenWeatherMap → Open-Meteo → Gismeteo → wttr.in → 7timer**. Клиентский фолбэк при пропавшем
-сервере — по приоритету безлимитных источников: **OWM → Open-Meteo → 7timer → wttr.in**,
-и только затем прямой Яндекс (тратит общую квоту 30/сутки, поэтому последний).
+## О проекте
 
-## Архитектура
+Автономный погодный информер для старых Android-планшетов и смартфонов, созданный на основе статьи [mysku.club/blog/diy/105101.html](https://mysku.club/blog/diy/105101.html) («Погодный информер из старого телефона»).
+Отображает:
+* Крупные цифровые часы (секунды, дата, день недели) на всю ширину экрана.
+* Текущую погоду (температура, анимированная иконка, min/max дня).
+* Ветер (скорость, направление, шкала), влажность (процент, шкала), давление (мм рт. ст., шкала).
+* Прогноз погоды на следующие периоды дня (вечер/ночь/утро).
+* Астрономический блок: время восхода и заката, полоса светового дня с обратным отсчётом, фаза луны.
+* Информационную плашку статуса с понятным описанием сетевых ошибок и времени актуальности данных.
 
+---
+
+## Архитектура и возможности
+
+1. **Горизонтальная 2-колоночная вёрстка (`@media (orientation: landscape)`)**:
+   * Верх: гигантские часы (`34vw`) с мигающим двоеточием и крупная дата.
+   * Низ (левая колонка): текущая погода, min/max, ветер, влажность, давление.
+   * Низ (правая колонка): прогноз на ближайшие периоды, восход/закат, световой день, луна.
+2. **Кэширование, оффлайн-работа и почасовой прогноз**:
+   * Данные погоды сохраняются в `localStorage` (`weather_cache_data`) и `weather_cache.json`.
+   * При сбое связи или лимите 403 информер продолжает работать автономно до 2 суток (48 часов):
+     * При сбое более 1 часа текущая температура, ветер, влажность и иконка обновляются каждый час из почасового среза (`forecasts.hours[hour]`).
+     * В полночь автоматически происходит календарное переключение на прогноз следующих суток (`forecasts[1]`).
+     * Прогнозные карточки (утро/день/вечер/ночь) динамически адаптируются под текущий системный час.
+3. **Автоматический fallback на Open-Meteo**:
+   * При исчерпании лимита Яндекса или сетевом сбое информер автоматически делает запрос к бесплатному безлимитному **Open-Meteo API**.
+   * Данные конвертируются в идентичный формат Яндекса (3 полных суток с почасовыми срезами на 72 часа, периодами, восходом/закатом) со 100% сохранением визуального оформления.
+4. **Защита от дезинформации и статусная строка (`#status_bar`)**:
+   * Если данные в кэше устарели более чем на 2 суток (48 часов), погодный блок `#weather_body` полностью скрывается, а цифровые часы масштабируются на весь экран.
+   * Внизу отображается статусная строка с точным временем последней попытки запроса (с секундами) и текстом ошибки.
+5. **Внешний файл конфигурации (`config.json`)**:
+   * Все настройки вынесены в `config.json` без необходимости редактировать HTML.
+6. **Поддержка локального кэширующего сервера (`server_url`)**:
+   * Можно перенаправить запрос на локальный прокси (`caching_server.py`), который делает запросы к Яндексу строго по расписанию (раз в 50 минут) и обслуживает любое количество устройств дома без траты суточного лимита.
+
+---
+
+## Конфигурация (`config.json`)
+
+Файл лежит рядом с `informer.html` (на планшете: `/sdcard/Download/config.json`):
+
+```json
+{
+  "server_url": "",
+  "api": "0d7e54ed-6215-48f0-916f-e234a36cb032",
+  "lat": 56.317722,
+  "lon": 43.999303,
+  "timeout": 3600,
+  "max_cache_age_hours": 48,
+  "enable_openmeteo_fallback": true,
+  "wind_max": 15,
+  "pressure_min": 710,
+  "pressure_max": 770,
+  "port": 8085,
+  "cache_interval_minutes": 50
+}
 ```
-Яндекс.Погода (90 мин) ──┐
-OpenWeatherMap (fallback)┤
-Open-Meteo (fallback) ───┤→ caching_server.py :8085 ──→ планшеты (webview kiosk)
-Gismeteo (fallback) ─────┤      ├─ /weather.json[?lat=&lon=&source=gismeteo]
-wttr.in (fallback) ──────┤      ├─ /geocode?q= / /reverse?lat=&lon= — город
-7timer (fallback) ───────┘      ├─ /status — здоровье, возраст кэша
-                                 └─ weather_stats.csv — лог источников
-```
 
-Клиент — статическая страница `informer.html`, лежащая локально на каждом планшете
-(`/sdcard/Download/informer.html`), данные тянет из `config.json` рядом (server_url).
-Плюс локальный кэш в localStorage — переживает недоступность сервера.
+* `server_url`: адрес локального кэширующего сервера (например `"http://192.168.1.55:8085/weather.json"`). Если строка пустая, информер стучится напрямую в API Яндекса. При отказе локального сервера автоматически пробует прямой доступ к Яндексу.
+* `api`: API-ключ Яндекс.Погоды (тариф «Тестовый» / «Погода на вашем сайте»).
+* `lat`, `lon`: географические координаты точки наблюдения.
+* `timeout`: интервал планового опроса в секундах (по умолчанию 3600 = 1 час).
+* `max_cache_age_hours`: допустимый возраст оффлайн-кэша в часах (по умолчанию 48). При превышении блок погоды скрывается.
+* `enable_openmeteo_fallback`: включить ли автоматический переход на Open-Meteo при недоступности Яндекса (true/false).
 
-## Состав репозитория
+---
 
-| Файл | Что |
-|---|---|
-| `caching_server.py` | сервер: кэш, фолбэк-цепочка, статистика, защита от дублей |
-| `informer.html` | страница киоска (деплоится на планшеты) |
-| `config.example.json` | шаблон конфига сервера (реальный `config.json` в .gitignore!) |
-| `tablets/config.example.json` | шаблон конфига планшета |
-| `install/weather-informer.service` | systemd --user юнит |
-| Цвет текста киоска | меню киоска → «Цвет» (белый/зелёный/янтарный/голубой/розовый), либо `text_color` в config.json планшета. По умолчанию белый |
-| `install/install-service.sh` | установка сервиса (linger, автостарт) |
-| `deploy/informer-to-tablet.sh` | деплой страницы на один планшет |
-| `deploy/all-tablets.sh` | деплой на весь парк (список в `deploy/tablets.list`) |
-| `gismeteo_provider.py` | изолированный провайдер Gismeteo (без токена); endpoint/XML меняется только внутри него |
-| `tests/test_gismeteo.py` | unittest провайдера (HTTP замокан) |
-| `tests/icon-test.js` | тесты значков и конвертаций клиента (`node tests/icon-test.js`) |
-| `host-watchdog/` | хостовой adb-watchdog парка (systemd --user таймер, 3 мин) |
-| `host-watchdog/device-42/` | копия скриптов на планшете .42 (`/data/adb/service.d/`) |
-| `gismeteo_cities.json` | (создаётся при работе) долговременный кэш координаты → city_id |
+## Локальный кэширующий сервер (`caching_server.py`)
 
-## Развёртывание сервера
+Так как бесплатный тариф Яндекс.Погоды ограничен **30 запросами в сутки** (1000 в месяц), при наличии нескольких устройств или перезапусках лимит быстро заканчивается.
+
+Для решения в проекте есть лёгкий сервер `caching_server.py` (Python 3, без внешних зависимостей):
+
+### Запуск сервера
 
 ```bash
-cp config.example.json config.json   # вписать ключ Яндекса и lat/lon
-./install/install-service.sh
+# В папке Projects/WeatherInformer/:
+python3 caching_server.py
 ```
 
-Скрипт ставит юнит в `~/.config/systemd/user/`, включает `linger` (работа без логина),
-запускает и проверяет `GET /status`. Логи: `journalctl --user -u weather-informer -f`.
+Сервер:
+* Забирает погоду из Яндекса раз в 50 минут (28 запросов в сутки — запас до лимита 30/день).
+* Сохраняет кэш на диск (`weather_cache.json`), не делая лишних запросов при перезапусках.
+* Раздаёт данные клиентам по адресам:
+  * `http://<IP>:8085/weather.json` (погода)
+  * `http://<IP>:8085/health` (проверка состояния кэша)
+* Если Яндекс вернул 403 или недоступен, сервер автоматически обращается к **Open-Meteo** (бесплатный безлимитный источник) и конвертирует прогноз в формат Яндекса, защищая экран от простоя.
 
-## Развёртывание планшета (root/adb)
+---
 
-1. Установить kiosk-приложение (WebViewKiosk) и указать home = `file:///sdcard/Download/informer.html`
-2. Положить конфиг: `adb push tablets/config.example.json /sdcard/Download/config.json` (вписать IP сервера; поле `api` — любая строка-заглушка, ключ на планшетах не нужен)
-3. Задеплоить страницу: `./deploy/informer-to-tablet.sh <serial|ip:5555>`
-4. Автостарт adb-over-wifi после загрузки — скрипт в Magisk `/data/adb/service.d/99-adbtcp.sh`:
+## Решение CORS и Fullscreen в Webview Kiosk
 
-```sh
-#!/system/bin/sh
-setprop persist.adb.tcp.port 5555
-setprop service.adb.tcp.port 5555
-stop adbd; start adbd
-( sleep 120; while true; do
-    if [ "$(getprop service.adb.tcp.port)" != "5555" ]; then
-      setprop persist.adb.tcp.port 5555; setprop service.adb.tcp.port 5555
-      stop adbd 2>/dev/null; start adbd
-    fi
-    sleep 300
-  done ) &
+Файл настроек на планшете: `/data/data/uk.nktnet.webviewkiosk/shared_prefs/user_settings.xml`:
+
+```xml
+<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
+<map>
+    <string name="web_content.home_url">file:///sdcard/Download/informer.html</string>
+    <boolean name="web_engine.allow_universal_access_from_file_urls" value="true" />
+    <boolean name="web_engine.allow_file_access_from_file_urls" value="true" />
+    <boolean name="web_engine.enable_dom_storage" value="true" />
+    <boolean name="web_content.allow_local_files" value="true" />
+    <string name="appearance.address_bar_mode">HIDDEN</string>
+    <string name="appearance.floating_toolbar_mode">HIDDEN</string>
+    <string name="appearance.immersive_mode">SYSTEM_BARS</string>
+    <string name="appearance.theme">DARK</string>
+    <string name="appearance.webview_inset">NONE</string>
+    <string name="device.rotation">ROTATION_90</string>
+</map>
 ```
 
-Если `adb connect` показывает offline, а планшет работает — протухла сессия adb-сервера хоста:
-`adb kill-server && adb connect <ip>:5555`.
+---
 
-## Ключи API
-
-| Источник | Ключ | Как получить |
-|---|---|---|
-| Яндекс.Погода | нужен | https://developer.tech.yandex.ru/services/ → «Погода» → бесплатный тариф (30 запросов/сутки). Ключ в заголовок `X-Yandex-Weather-Key` |
-| OpenWeatherMap | нужен (опционально, fallback) | https://home.openweathermap.org/api_keys (бесплатный тариф). Параметры `openweathermap_api_key` + `enable_openweathermap_fallback` в конфиге сервера и планшета |
-| Open-Meteo | не нужен | https://open-meteo.com/ (безлимитно, fallback) |
-| wttr.in | не нужен | https://wttr.in/:help |
-| 7timer | не нужен | http://www.7timer.info/ |
-| Gismeteo | не нужен (внутренний inform-service) | `services.gismeteo.ru` → фолбэк `.net`. **Не официальный API** (`api.gismeteo.net/v4` требует токен) — формат XML может измениться; вся работа изолирована в `gismeteo_provider.py` |
-
-**Секреты:** реальный `config.json` (ключ) в .gitignore — в репозитории только шаблоны.
-
-## Политика данных (без фейков)
-
-Конвертеры **не подставляют выдуманные значения**. Если источник поле не отдаёт —
-в JSON уходит `null`, а информер показывает «—» и сбрасывает полосу/стрелку
-(значения не «застывают» от предыдущего источника при переключении). Легитимные
-агрегации (средний ветер части из hourly, выдержка ближайшей 3-часовой точки
-в почасовике — без интерполяции) — разрешены. Фаза луны считается, а не константа.
-
-Покрытие полей по источникам (проверено против живых API):
-
-| Поле | Яндекс | OWM | Open-Meteo | Gismeteo | wttr.in | 7timer |
-|---|---|---|---|---|---|---|
-| температура | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| влажность | ✓ | ✓ | hourly[hIdx] | ✓ | ✓ | rh2m (строка «46%») |
-| давление | из `info.def_pressure_mm` | ✓ | hourly[hIdx] | ✓ | ✓ | **нет** → null |
-| ветер (скорость) | ✓ | ✓ | ✓ | ✓ | ✓ | Бофорт → м/с |
-| ветер (направление) | ✓ | ✓ | ✓ | ✓ (румб→°) | ✓ | ✓ (румб→°) |
-| восход/закат | ✓ | ✓ | ✓ | ✓ (risem/setm, мин) | ✓ | **нет** → null |
-
-Данные Gismeteo — 3-часовые точки; исходные точки сохраняются в ответе
-(`gismeteo_points[]`, `"interpolated": false`), почасовик — выдержка ближайшей точки.
-
-## Ground truth (наблюдения для проверки прогнозов)
-
-| Физическая станция | Канал | Статус |
-|---|---|---|
-| Нижний Новгород WMO 27459 | **OGIMET SYNOP** (`/observations/fetch`, raw в `synop_raw`) | ✅ основной (t/давление/осадки, каждые 3 ч, UTC→МСК) |
-| Нижний Новгород WMO 27459 | Foreca observations | ✅ контроль (тот же физический датчик) |
-| Strigino (аэропорт) | Foreca / METAR | ✅ независимая станция |
-| Volzskaya GMO, Sergac, Arzamas, Krasnye Baki | Foreca | ✅ региональный контроль (осадки — только по нескольким станциям) |
-| WMO 27459 через Meteostat | — | ❌ 100% модель DWD MOSMIX, наблюдений нет |
-| ISD 274590-99999 | NOAA | 🟡 архив до 08.2025; оперативно — GHCNh (исследовать) |
-
-Наблюдения копятся в `forecast.db` (таблица `observations`, колонка `phys_station`
-различает физические датчики; raw SYNOP — `synop_raw`). OGIMET SYNOP хранится
-в исходном виде. Влажность станция 27459 не передаёт — humidity-эталон только
-из Foreca-станций.
-
-Проверка точности: `GET /accuracy?provider=Gismeteo&lead_hours=3&phys=27459&window=1.5`
-(MAE температуры; `phys` — фильтр физической станции, `window` — допуск часов).
-
-## Кэши и лимиты
-
-| Что | TTL / лимит |
-|---|---|
-| Погода сервера (на точку) | `cache_interval_minutes` (по умолчанию 90 мин) |
-| Точек в памяти (`LOCATION_CACHE`) | до 8; город по умолчанию не эвиктится никогда |
-| Прогноз Gismeteo (в провайдере) | 20 мин |
-| Кэш city_id Gismeteo (`gismeteo_cities.json`) | 30 дней |
-| Ключ Яндекса | ~16 запросов/сутки при 90-мин интервале; прямой Яндекс с планшетов — та же квота |
-
-Запрос `GET /weather.json?source=gismeteo` отдаёт **только** Gismeteo для точки
-(свой ключ кэша, Яндекс не тратится). Без `source` — обычная цепочка.
-
-## Выбор города (на планшете)
-
-В меню киоска (☰) секция **«Город»**:
-- **Поиск города…** → «Найти город» → подсказки (Nominatim через сервер: `GET /geocode?q=…`, при блокировке — через прокси `om_proxy`) → тап по подсказке.
-- **Определить автоматически (GPS)** — геолокация устройства. Требует: в WebViewKiosk `device.allow_location=true` (настройка приложения или правка `user_settings.xml` под root) + `pm grant …ACCESS_FINE_LOCATION` + включённая служба локации; на планшетах без сетевой геолокации (GMS) работает только по GPS-чипу.
-- **Сбросить город** — возврат к координатам из `config.json`.
-
-Выбранный город хранится в localStorage (`city_name/city_lat/city_lon`) и **переиспользуется всеми источниками** (и сервером — через `GET /weather.json?lat=&lon=`, и прямыми). Город всегда показан в статус-баре внизу. Имя по умолчанию — поле `city_name` в конфиге планшета.
-
-Обратный геокодинг для GPS: `GET /reverse?lat=&lon=` (тот же Nominatim). Кэш сервера ведётся на каждую точку отдельно (до 8 городов), интервал обновления общий.
-
-## Тесты (обязательный прогон перед деплоем)
+## Быстрое развёртывание на планшете
 
 ```bash
-bash tests/run-all.sh
+# 1. Залить файлы на планшет
+adb push informer.html /sdcard/Download/informer.html
+adb push config.json /sdcard/Download/config.json
+adb push weather_cache.json /sdcard/Download/weather_cache.json
+
+# 2. Установить Webview Kiosk
+adb install uk.nktnet.webviewkiosk.apk
+
+# 3. Применить настройки и права
+adb push kiosk_user_settings.xml /data/local/tmp/user_settings.xml
+adb shell "su -c '
+cp /data/local/tmp/user_settings.xml /data/data/uk.nktnet.webviewkiosk/shared_prefs/user_settings.xml
+chown \$(stat -c %u:%g /data/data/uk.nktnet.webviewkiosk) /data/data/uk.nktnet.webviewkiosk/shared_prefs/user_settings.xml
+chmod 660 /data/data/uk.nktnet.webviewkiosk/shared_prefs/user_settings.xml
+restorecon /data/data/uk.nktnet.webviewkiosk/shared_prefs/user_settings.xml
+rm /data/local/tmp/user_settings.xml
+'"
+
+# 4. Настроить надёжный NTP и часовой пояс (защита от рассинхронизации и дрейфа RTC)
+adb shell settings put global auto_time 1
+adb shell settings put global auto_time_zone 0
+adb shell setprop persist.sys.timezone Europe/Moscow
+adb shell settings put global ntp_server ru.pool.ntp.org
+adb shell settings put global ntp_timeout 5000
+adb shell settings put global auto_time 0 && adb shell settings put global auto_time 1
+adb shell "su -c 'date -s @\$(date +%s) && hwclock -w' 2>/dev/null || true"
+
+# 5. Дать права на чтение хранилища и запустить
+adb shell pm grant uk.nktnet.webviewkiosk android.permission.READ_EXTERNAL_STORAGE
+adb shell am start -n uk.nktnet.webviewkiosk/.MainActivity
 ```
 
-| Файл | Что покрывает |
-|---|---|
-| `tests/icon-test.js` | icon_daynight, парность _d/_n, вокабуляр иконок ⊆ CSS |
-| `tests/converters-test.js` | **энд-ту-енд клиентские конвертеры** на фикстурах API (OWM/OM/7timer/wttr/Foreca): структура, завтрашние parts, ночные иконки, честные null; все регрессии раундов ревью здесь как векторы (wttr OOB, Foreca TDZ, tzshift-скос, дневная иконка ночи) |
-| `tests/test_gismeteo.py` | GismeteoProvider: парсинг XML, хост-фолбэк, кэши, 48ч-фильтр |
-| `tests/test_foreca_provider.py` | ForecaProvider: конвертация, иконки по symbol, кэш локейшенов, observations |
-| `tests/test_synop.py` | SYNOP-декодер: температура/давление/шкала осадков WMO, ветряные группы ≠ осадки, секция 3 |
-| `tests/test_accuracy.py` | accuracy_query: lead в ЧАСАХ, окно ловит METAR :30, регистр, phys-фильтр, negative-lead |
+---
 
-**Правило (вывод из 7 раундов ревью): каждый раунд ловил регрессию в непротестированном коде.** Новый источник = фиксстура + векторы в converters-test; правка конвертера/декодера = прогон run-all; `deploy/all-tablets.sh` гоняет тесты перед деплоем и падает при красном.
+## Подключенные устройства
 
-## Эксплуатация
+| # | Модель | IP (WiFi ADB) | Android | Разрешение / Соотношение | Ориентация | Особенности |
+|---|--------|---------------|---------|---------------------------|------------|-------------|
+| 1 | **Digma Plane 7514S** | `192.168.1.42:5555` | 6.0 | 1280×800 (16:10) | `ROTATION_90` | Адаптивная верстка (высокие экраны, крупный шрифт 27.5vw) |
+| 2 | **Oysters T74HMi LTE** | `192.168.1.52:5555` | 6.0 | 1024×600 (16:9) | `ROTATION_270` | Разворот 180° под кабель, клиренс под статус-бар |
+| 3 | **4GOOD Light AT200** | `192.168.1.30:5555` | 6.0 | 1280×800 (16:10) | `ROTATION_90` | Очищено 1.1 ГБ кэша, отключен GMS, устранен димминг |
+| 4 | **IRBIS TZ175** | `192.168.1.31:5555` | 7.0 | 1024×600 (16:9) | `ROTATION_90` | Очищено bloatware, отключены GMS/Play Store, RAM оптимизирована |
 
-- Здоровье: `curl http://<сервер>:8085/status` → `{"status":"ok","cache_age_minutes":N}`
-- Логи: `journalctl --user -u weather-informer -f`
-- Статистика источников: `weather_stats.csv` (кто, когда, температура) + `stats_report.py`
-- Расход квоты: ~16 запросов/сутки при интервале 90 мин (менять через `cache_interval_minutes`)
-- Рестарты безопасны: кэш на диске хранит время последнего запроса — свежий кэш не перезапрашивается
-- Дубли экземпляров невозможны: порт биндится до старта фоновых потоков, вторая копия умирает мгновенно

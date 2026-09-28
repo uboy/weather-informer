@@ -13,6 +13,7 @@ import os
 import sys
 import json
 import sqlite3
+import subprocess
 import time
 import threading
 import math
@@ -143,7 +144,17 @@ DEFAULT_CONFIG = {
     "enable_7timer_fallback": True,
     "enable_wttr_fallback": True,
     "stats_enabled": True,
-    "stats_interval_minutes": 60
+    "stats_interval_minutes": 60,
+    "tablets_time_sync_enabled": True,
+    "tablets_sync_interval_hours": 6,
+    "tablets": [
+        "192.168.1.42:5555",
+        "192.168.1.20:5555",
+        "192.168.1.30:5555",
+        "192.168.1.31:5555",
+        "192.168.1.52:5555"
+    ],
+    "ntp_server": "ru.pool.ntp.org"
 }
 
 cached_data = None
@@ -1432,6 +1443,87 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
     return res_data
 
 
+
+TABLET_SYNC_LOCK = threading.Lock()
+
+
+def sync_single_tablet_time(dev, ntp_server="ru.pool.ntp.org"):
+    """Синхронизация системного времени и настройка надежного NTP на планшете через ADB"""
+    now_epoch = int(time.time())
+    cmds = [
+        "settings put global auto_time 1",
+        "settings put global auto_time_zone 0",
+        "setprop persist.sys.timezone Europe/Moscow",
+        f"settings put global ntp_server {ntp_server}",
+        "settings put global ntp_timeout 5000",
+        "settings put global auto_time 0",
+        "settings put global auto_time 1",
+        f'(su -c "date -s @{now_epoch} && hwclock -w" || date -s @{now_epoch} || true) 2>/dev/null'
+    ]
+    remote_cmd = " ; ".join(cmds)
+    try:
+        subprocess.run(["adb", "connect", dev], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+        res = subprocess.run(
+            ["adb", "-s", dev, "shell", remote_cmd],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=10
+        )
+        if res.returncode == 0:
+            log.info("Tablet %s time synced successfully (epoch %d, ntp: %s)", dev, now_epoch, ntp_server)
+            return True
+        else:
+            log.warning("Tablet %s time sync returned code %d: %s", dev, res.returncode, res.stderr.strip() or res.stdout.strip())
+            return False
+    except subprocess.TimeoutExpired:
+        log.warning("Tablet %s time sync timed out", dev)
+        return False
+    except FileNotFoundError:
+        log.error("adb binary not found in PATH; cannot sync tablet time")
+        return False
+    except Exception as e:
+        log.warning("Tablet %s time sync error: %s", dev, e)
+        return False
+
+
+def sync_all_tablets_time():
+    """Синхронизация времени на всех настроенных планшетах"""
+    if not TABLET_SYNC_LOCK.acquire(blocking=False):
+        log.info("Tablet time sync is already in progress, skipping concurrent run")
+        return
+    try:
+        cfg = load_config()
+        if not cfg.get("tablets_time_sync_enabled", True):
+            return
+        devices = cfg.get("tablets", [
+            "192.168.1.42:5555",
+            "192.168.1.20:5555",
+            "192.168.1.30:5555",
+            "192.168.1.31:5555",
+            "192.168.1.52:5555"
+        ])
+        ntp_server = cfg.get("ntp_server", "ru.pool.ntp.org")
+        log.info("Starting scheduled time sync for %d tablets (NTP: %s)...", len(devices), ntp_server)
+        for dev in devices:
+            sync_single_tablet_time(dev, ntp_server)
+    finally:
+        TABLET_SYNC_LOCK.release()
+
+
+def tablets_time_sync_loop():
+    """Фоновый поток: периодическая синхронизация времени на планшетах (каждые 6 часов)"""
+    time.sleep(20)
+    while True:
+        try:
+            sync_all_tablets_time()
+        except Exception as e:
+            log.error("tablets_time_sync_loop error: %s", e)
+        cfg = load_config()
+        interval_hours = float(cfg.get("tablets_sync_interval_hours", 6))
+        interval_sec = max(300, int(interval_hours * 3600))
+        time.sleep(interval_sec)
+
 class WeatherHTTPHandler(BaseHTTPRequestHandler):
     # Заморозка однопоточного сервера на полумёртвом клиентском сокете
     # (keep-alive readline без таймаута) — закрываем соединение через 30 с
@@ -1449,6 +1541,21 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = self.path.split("?")[0]
+
+        if path == "/sync_time":
+            threading.Thread(target=sync_all_tablets_time, daemon=True).start()
+            try:
+                self.send_response(200)
+                self.send_cors_headers()
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    "status": "triggered",
+                    "message": "Tablet time synchronization initiated in background"
+                }).encode("utf-8"))
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return
 
         if path in ["/health", "/status"]:
             with LOCATION_CACHE_LOCK:
@@ -1694,6 +1801,8 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
         data = get_weather_for(q_lat, q_lon, force=False, sources=sources)
         try:
             if data:
+                if isinstance(data, dict):
+                    data["server_time"] = int(time.time())
                 body = json.dumps(data, ensure_ascii=False)
                 self.send_response(200)
                 self.send_cors_headers()
@@ -1737,6 +1846,12 @@ def main():
     # (защита от дублей: ручные запуски поверх systemd-инстанса)
     server = ThreadingHTTPServer(("0.0.0.0", port), WeatherHTTPHandler)
     log.info("WeatherInformer Caching Proxy listening on port %d...", port)
+
+    # Фоновая синхронизация времени на планшетах (каждые 6 часов)
+    if cfg.get("tablets_time_sync_enabled", True):
+        sync_thread = threading.Thread(target=tablets_time_sync_loop, daemon=True)
+        sync_thread.start()
+        log.info("Tablets time sync loop enabled (every %s hours)", cfg.get("tablets_sync_interval_hours", 6))
 
     # Первичный запрос в фоне
     t = threading.Thread(target=background_refresher, daemon=True)
