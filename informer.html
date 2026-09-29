@@ -584,11 +584,11 @@ function update_viewport_metrics() {
 
 	var wrapper = document.getElementById("wrapper");
 	if (wrapper) {
-		wrapper.style.height = winH + "px";
+		wrapper.style.setProperty("height", winH + "px", "important");
 	}
 
 	var diffH = screenH - winH;
-	var hasTopBar = (diffH >= 16 && diffH <= 36) || (window.screenTop > 0 || window.screenY > 0);
+	var hasTopBar = (diffH >= 16 && diffH <= 36) || (diffH >= 54) || (window.screenTop > 0 || window.screenY > 0);
 	var hasBottomBar = (diffH >= 38);
 
 	if (hasTopBar) {
@@ -2798,7 +2798,7 @@ body {
 		display: flex !important;
 		flex-direction: column !important;
 		width: 100vw !important;
-		height: 100vh !important;
+		height: 100vh;
 		box-sizing: border-box !important;
 		padding: 0 !important;
 		position: static !important;

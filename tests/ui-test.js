@@ -172,5 +172,30 @@ for (const t of [...new Set(afterTargets)]) {
 check('update_interval default 3600', /var timeout = 60 \* 60/.test(html));
 check('direct_update_interval default 1800', /var direct_timeout = 30 \* 60/.test(html));
 
+// ===== 6. Адаптивная вёрстка и высота видимой области =====
+// 6.1 Динамическая подгонка высоты #wrapper под winH через setProperty с important
+check('update_viewport_metrics: setProperty height winH important',
+    /wrapper\.style\.setProperty\(\s*["']height["']\s*,\s*winH\s*\+\s*["']px["']\s*,\s*["']important["']\s*\)/.test(html));
+
+// 6.2 Определение двойных системных панелей (top + bottom bar)
+check('update_viewport_metrics: dual bar diffH >= 54',
+    /diffH\s*>=\s*54/.test(html));
+
+// 6.3 Инвариант бюджета высоты: datetime + weather_body <= 96vh (запас >= 4vh под status_bar)
+const tallDtMatch = html.match(/html\.screen_tall\s+#datetime\s*\{[^}]*height:\s*([\d.]+)vh/);
+const tallWbMatch = html.match(/html\.screen_tall\s+#weather_body\s*\{[^}]*height:\s*([\d.]+)vh/);
+const tallDtH = tallDtMatch ? parseFloat(tallDtMatch[1]) : 0;
+const tallWbH = tallWbMatch ? parseFloat(tallWbMatch[1]) : 0;
+check('screen_tall: бюджет высоты (datetime ' + tallDtH + 'vh + weather_body ' + tallWbH + 'vh = ' + (tallDtH + tallWbH) + 'vh <= 96vh)',
+    tallDtH > 0 && tallWbH > 0 && (tallDtH + tallWbH) <= 96);
+
+const wideDtMatch = html.match(/#datetime\s*\{[^}]*height:\s*([\d.]+)vh/);
+const wideWbMatch = html.match(/#weather_body\s*\{[^}]*height:\s*([\d.]+)vh/);
+const wideDtH = wideDtMatch ? parseFloat(wideDtMatch[1]) : 0;
+const wideWbH = wideWbMatch ? parseFloat(wideWbMatch[1]) : 0;
+check('landscape widescreen: бюджет высоты (datetime ' + wideDtH + 'vh + weather_body ' + wideWbH + 'vh = ' + (wideDtH + wideWbH) + 'vh <= 96vh)',
+    wideDtH > 0 && wideWbH > 0 && (wideDtH + wideWbH) <= 96);
+
 console.log('\nИТОГ: pass=' + pass + ' fail=' + fail);
 process.exit(fail ? 1 : 0);
+
