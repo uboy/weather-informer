@@ -581,12 +581,26 @@ function update_viewport_metrics() {
 	var winW = window.innerWidth;
 	var winH = window.innerHeight;
 	var screenH = window.screen.height;
-	var hasTopBar = (screenH > winH) && (screenH - winH >= 16);
+
+	var wrapper = document.getElementById("wrapper");
+	if (wrapper) {
+		wrapper.style.height = winH + "px";
+	}
+
+	var diffH = screenH - winH;
+	var hasTopBar = (diffH >= 16 && diffH <= 36) || (window.screenTop > 0 || window.screenY > 0);
+	var hasBottomBar = (diffH >= 38);
 
 	if (hasTopBar) {
 		document.documentElement.classList.add("has_system_bar");
 	} else {
 		document.documentElement.classList.remove("has_system_bar");
+	}
+
+	if (hasBottomBar) {
+		document.documentElement.classList.add("has_bottom_bar");
+	} else {
+		document.documentElement.classList.remove("has_bottom_bar");
 	}
 
 	var ratio = winW / winH;
@@ -2805,13 +2819,13 @@ body {
 		align-items: center !important;
 		position: static !important;
 		margin: 0 !important;
-		padding: 1.0vh 0 0.4vh 0 !important;
+		padding: 1.2vh 0 0.4vh 0 !important;
 		overflow: hidden !important;
 		border-bottom: 1px solid rgba(255, 255, 255, 0.15) !important;
 		box-sizing: border-box !important;
 	}
 	html.has_system_bar #datetime {
-		padding-top: 1.8vh !important;
+		padding-top: 2.0vh !important;
 	}
 	#wrapper.weather_stale #datetime {
 		height: 88vh !important;
@@ -2871,7 +2885,7 @@ body {
 		display: flex !important;
 		flex-direction: row !important;
 		width: 100% !important;
-		height: 54vh !important;
+		height: 48vh !important;
 		box-sizing: border-box !important;
 	}
 
@@ -2885,7 +2899,7 @@ body {
 		align-items: center !important;
 		justify-content: space-between !important;
 		border-right: 1px solid rgba(255, 255, 255, 0.15) !important;
-		padding: 0.6vh 2vw 2.8vh 2vw !important;
+		padding: 0.6vh 2vw 1.2vh 2vw !important;
 		box-sizing: border-box !important;
 	}
 	#now_hero {
@@ -2982,7 +2996,7 @@ body {
 		display: flex !important;
 		flex-direction: column !important;
 		justify-content: space-between !important;
-		padding: 0.6vh 1.5vw 2.8vh 1.5vw !important;
+		padding: 0.6vh 1.5vw 1.2vh 1.5vw !important;
 		box-sizing: border-box !important;
 	}
 
@@ -3093,71 +3107,77 @@ body {
 		background-size: contain !important;
 	}
 	#status_bar {
-		font-size: 1.25vw !important;
-		padding: 0.2vh 1.5vw !important;
+		font-size: 1.2vw !important;
+		padding: 0.3vh 1.5vw 0.5vh 1.5vw !important;
 		line-height: 1.2 !important;
+	}
+	html.has_bottom_bar #status_bar {
+		padding-bottom: 0.7vh !important;
 	}
 
 	/* ADAPTIVE RULES FOR TALLER LANDSCAPE (16:10 / 4:3, e.g. Digma 1280x800) */
 	@media screen and (orientation: landscape) and (max-aspect-ratio: 168/100),
 	       screen and (orientation: landscape) and (min-height: 680px) {
 		#datetime {
-			height: 53vh !important;
-			padding: 1.2vh 0 0.4vh 0 !important;
+			height: 51vh !important;
+			padding: 1.6vh 0 0.4vh 0 !important;
 		}
 		#wrapper.weather_stale #time {
-			font-size: 35vw !important;
+			font-size: 33vw !important;
 		}
 		#time {
-			font-size: 27.5vw !important;
-			line-height: 0.85 !important;
-			letter-spacing: -0.5vw !important;
+			font-size: 25.5vw !important;
+			line-height: 0.90 !important;
+			letter-spacing: -0.45vw !important;
 		}
 		#time .colon {
-			transform: translateY(-0.8vw) !important;
+			transform: translateY(-0.7vw) !important;
 		}
 		#date {
-			font-size: 4.1vw !important;
-			margin-top: 0.6vh !important;
+			font-size: 3.8vw !important;
+			margin-top: 0.5vh !important;
 		}
 		#weather_body {
-			height: 47vh !important;
+			height: 44.5vh !important;
 		}
 		#now {
-			padding: 1.0vh 2vw 2.6vh 2vw !important;
+			padding: 0.8vh 2vw 1.2vh 2vw !important;
 		}
 		#weather_right {
-			padding: 1.0vh 1.5vw 2.6vh 1.5vw !important;
+			padding: 0.8vh 1.5vw 1.2vh 1.5vw !important;
 		}
 	}
 
 	html.screen_tall #datetime {
-		height: 53vh !important;
-		padding: 1.2vh 0 0.4vh 0 !important;
+		height: 51vh !important;
+		padding: 1.6vh 0 0.4vh 0 !important;
+	}
+	html.screen_tall.has_system_bar #datetime {
+		padding-top: 2.2vh !important;
 	}
 	html.screen_tall #wrapper.weather_stale #time {
-		font-size: 35vw !important;
+		font-size: 33vw !important;
 	}
 	html.screen_tall #time {
-		font-size: 27.5vw !important;
-		line-height: 0.85 !important;
-		letter-spacing: -0.5vw !important;
+		font-size: 25.5vw !important;
+		line-height: 0.90 !important;
+		letter-spacing: -0.45vw !important;
 	}
 	html.screen_tall #time .colon {
-		transform: translateY(-0.8vw) !important;
+		transform: translateY(-0.7vw) !important;
 	}
 	html.screen_tall #date {
-		font-size: 4.1vw !important;
-		margin-top: 0.6vh !important;
+		font-size: 3.8vw !important;
+		margin-top: 0.5vh !important;
 	}
 	html.screen_tall #weather_body {
-		height: 47vh !important;
+		height: 44.5vh !important;
 	}
 	html.screen_tall #now {
-		padding: 1.0vh 2vw 2.6vh 2vw !important;
+		padding: 0.8vh 2vw 1.2vh 2vw !important;
 	}
 	html.screen_tall #weather_right {
-		padding: 1.0vh 1.5vw 2.6vh 1.5vw !important;
+		padding: 0.8vh 1.5vw 1.2vh 1.5vw !important;
 	}
 }
 
