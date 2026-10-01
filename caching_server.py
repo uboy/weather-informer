@@ -207,14 +207,39 @@ def load_config():
     return cfg
 
 
+def mask_key(key):
+    """Частичная маскировка ключа: первые 4 символа, последние 4, в середине скрыто"""
+    if not key or not isinstance(key, str):
+        return ""
+    s = key.strip()
+    if not s or s == "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx":
+        return ""
+    if len(s) > 8:
+        return s[:4] + "••••••••" + s[-4:]
+    elif len(s) > 4:
+        return s[:2] + "••••" + s[-2:]
+    else:
+        return "••••"
+
+
 def save_config(new_cfg):
-    """Атомарное сохранение конфигурации в config.json"""
+    """Атомарное сохранение конфигурации в config.json с защитой от перезаписи маскированными значениями"""
     current = load_config()
-    current.update(new_cfg)
+    key_fields = ("api", "gismeteo_api_key", "foreca_api_key", "openweathermap_api_key")
+    for k, v in new_cfg.items():
+        if k in key_fields and isinstance(v, str):
+            if "•" in v or "*" in v:
+                continue
+        current[k] = v
     tmp_file = CONFIG_FILE + ".tmp"
     with open(tmp_file, "w", encoding="utf-8") as f:
         json.dump(current, f, ensure_ascii=False, indent=2)
     os.replace(tmp_file, CONFIG_FILE)
+    if "foreca_api_key" in current:
+        try:
+            FORECA.token = current.get("foreca_api_key", "")
+        except Exception:
+            pass
     log.info("Saved updated configuration to %s", CONFIG_FILE)
     return current
 
@@ -1434,6 +1459,56 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
             res = _try_gismeteo_v2()
             if res:
                 return res
+    elif primary_source == "foreca" and want("foreca") and cfg.get("foreca_api_key"):
+        try:
+            FORECA.token = cfg.get("foreca_api_key", "")
+            fc_data = FORECA.get_weather(latitude=lat, longitude=lon)
+            _store_location_result(key, fc_data, None, ttl=interval)
+            stats_log_source("Foreca", fc_data)
+            record_forecast("Foreca", key, fc_data)
+            return fc_data
+        except Exception as e:
+            log.warning("Foreca primary failed: %s", sanitize_secrets(e))
+    elif primary_source == "om" and want("om"):
+        try:
+            om_data = fetch_from_openmeteo(lat, lon, cfg.get("om_proxy", "") or None)
+            om_data["src"] = "Open-Meteo"
+            _store_location_result(key, om_data, None, ttl=interval)
+            stats_log_source("Open-Meteo", om_data)
+            record_forecast("Open-Meteo", key, om_data)
+            return om_data
+        except Exception as e:
+            log.warning("Open-Meteo primary failed: %s", sanitize_secrets(e))
+    elif primary_source == "owm" and want("owm") and cfg.get("openweathermap_api_key"):
+        try:
+            owm_data = fetch_from_openweathermap(lat, lon, cfg.get("openweathermap_api_key"))
+            owm_data["src"] = "OpenWeatherMap"
+            _store_location_result(key, owm_data, None, ttl=interval)
+            stats_log_source("OpenWeatherMap", owm_data)
+            record_forecast("OpenWeatherMap", key, owm_data)
+            return owm_data
+        except Exception as e:
+            log.warning("OpenWeatherMap primary failed: %s", sanitize_secrets(e))
+    elif primary_source == "7timer" and want("7timer"):
+        try:
+            st_data = fetch_from_7timer(lat, lon)
+            st_data["src"] = "7timer"
+            _store_location_result(key, st_data, None, ttl=interval)
+            stats_log_source("7timer", st_data)
+            record_forecast("7timer", key, st_data)
+            return st_data
+        except Exception as e:
+            log.warning("7timer primary failed: %s", sanitize_secrets(e))
+    elif primary_source == "wttr" and want("wttr"):
+        try:
+            wt_data = fetch_from_wttr(lat, lon)
+            wt_data["src"] = "wttr.in"
+            _store_location_result(key, wt_data, None, ttl=interval)
+            stats_log_source("wttr.in", wt_data)
+            record_forecast("wttr.in", key, wt_data)
+            return wt_data
+        except Exception as e:
+            log.warning("wttr.in primary failed: %s", sanitize_secrets(e))
 
     if want("yandex"):
         res = _try_yandex()
@@ -1456,6 +1531,7 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
     if want("foreca") and cfg.get("enable_foreca_fallback", True) and cfg.get("foreca_api_key", ""):
         log.info("Attempting fallback to Foreca...")
         try:
+            FORECA.token = cfg.get("foreca_api_key", "")
             fc_data = FORECA.get_weather(latitude=lat, longitude=lon)
             _store_location_result(key, fc_data, "Active fallback: Foreca", ttl=fallback_ttl)
             stats_log_source("Foreca", fc_data)
@@ -1701,9 +1777,35 @@ button { width: 100%; padding: 12px; border: none; border-radius: 8px; font-size
   <button type="button" class="btn-gps" id="btn_detect_city" style="width:auto; margin-top:5px; white-space:nowrap; background:#00838F; padding:10px 14px;">Авто</button>
 </div>
 <label>Основной источник погоды:</label>
-<select id="primary_source"><option value="yandex">Яндекс.Погода (API)</option><option value="gismeteo">Gismeteo v2 (API Token)</option></select>
-<label>Ключ Gismeteo API v2:</label><input type="text" id="gismeteo_api_key" placeholder="X-Gismeteo-Token">
-<label>Ключ Яндекс.Погода:</label><input type="text" id="api" placeholder="X-Yandex-Weather-Key">
+<select id="primary_source">
+  <option value="yandex">Яндекс.Погода (API)</option>
+  <option value="gismeteo">Gismeteo v2 (API Token)</option>
+  <option value="foreca">Foreca (API Token)</option>
+  <option value="om">Open-Meteo (бесплатно, без ключа)</option>
+  <option value="owm">OpenWeatherMap (API Key)</option>
+  <option value="7timer">7timer (бесплатно, без ключа)</option>
+  <option value="wttr">wttr.in (бесплатно, без ключа)</option>
+</select>
+<label>Ключ Gismeteo API v2:</label>
+<div style="display:flex; gap:6px; align-items:center;">
+  <input type="text" id="gismeteo_api_key" placeholder="X-Gismeteo-Token">
+  <button type="button" class="btn-gps" id="btn_clear_gismeteo" style="width:auto; margin-top:5px; white-space:nowrap; background:#C62828; padding:10px 14px;">✕</button>
+</div>
+<label>Ключ Яндекс.Погода:</label>
+<div style="display:flex; gap:6px; align-items:center;">
+  <input type="text" id="api" placeholder="X-Yandex-Weather-Key">
+  <button type="button" class="btn-gps" id="btn_clear_yandex" style="width:auto; margin-top:5px; white-space:nowrap; background:#C62828; padding:10px 14px;">✕</button>
+</div>
+<label>Ключ Foreca (API Token):</label>
+<div style="display:flex; gap:6px; align-items:center;">
+  <input type="text" id="foreca_api_key" placeholder="Bearer JWT Token">
+  <button type="button" class="btn-gps" id="btn_clear_foreca" style="width:auto; margin-top:5px; white-space:nowrap; background:#C62828; padding:10px 14px;">✕</button>
+</div>
+<label>Ключ OpenWeatherMap (API Key):</label>
+<div style="display:flex; gap:6px; align-items:center;">
+  <input type="text" id="openweathermap_api_key" placeholder="API Key">
+  <button type="button" class="btn-gps" id="btn_clear_owm" style="width:auto; margin-top:5px; white-space:nowrap; background:#C62828; padding:10px 14px;">✕</button>
+</div>
 <label>Интервал кэша (минуты):</label><input type="number" id="cache_interval_minutes" value="60">
 <label>Интервал повтора при сбое (минуты):</label><input type="number" id="fallback_interval_minutes" value="15">
 <button type="button" class="btn-primary" id="btn_save">Сохранить настройки сервера</button>
@@ -1720,10 +1822,28 @@ document.getElementById('lon').value = c.lon || '';
 document.getElementById('city_name').value = c.city_name || '';
 document.getElementById('primary_source').value = c.primary_source || 'yandex';
 document.getElementById('gismeteo_api_key').value = c.gismeteo_api_key || '';
-document.getElementById('api').value = (c.api && c.api.indexOf('xxxx')===-1) ? c.api : '';
+document.getElementById('api').value = c.api || '';
+document.getElementById('foreca_api_key').value = c.foreca_api_key || '';
+document.getElementById('openweathermap_api_key').value = c.openweathermap_api_key || '';
 document.getElementById('cache_interval_minutes').value = c.cache_interval_minutes || 60;
 document.getElementById('fallback_interval_minutes').value = c.fallback_interval_minutes || 15;
 });
+document.getElementById('btn_clear_gismeteo').onclick = function(){
+document.getElementById('gismeteo_api_key').value = '';
+currentCfg.gismeteo_api_key = '';
+};
+document.getElementById('btn_clear_yandex').onclick = function(){
+document.getElementById('api').value = '';
+currentCfg.api = '';
+};
+document.getElementById('btn_clear_foreca').onclick = function(){
+document.getElementById('foreca_api_key').value = '';
+currentCfg.foreca_api_key = '';
+};
+document.getElementById('btn_clear_owm').onclick = function(){
+document.getElementById('openweathermap_api_key').value = '';
+currentCfg.openweathermap_api_key = '';
+};
 function detectCity(la, lo){
 if(!la || !lo) return Promise.resolve(null);
 var cInput = document.getElementById('city_name');
@@ -1770,10 +1890,12 @@ currentCfg.lon = parseFloat(document.getElementById('lon').value);
 currentCfg.city_name = document.getElementById('city_name').value.trim();
 currentCfg.primary_source = document.getElementById('primary_source').value;
 currentCfg.gismeteo_api_key = document.getElementById('gismeteo_api_key').value.trim();
+currentCfg.foreca_api_key = document.getElementById('foreca_api_key').value.trim();
+currentCfg.openweathermap_api_key = document.getElementById('openweathermap_api_key').value.trim();
 currentCfg.cache_interval_minutes = parseInt(document.getElementById('cache_interval_minutes').value, 10) || 60;
 currentCfg.fallback_interval_minutes = parseInt(document.getElementById('fallback_interval_minutes').value, 10) || 15;
 var yk = document.getElementById('api').value.trim();
-if(yk) currentCfg.api = yk;
+currentCfg.api = yk;
 var s = document.getElementById('status');
 fetch('/api/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(currentCfg)})
 .then(function(r){return r.json();}).then(function(res){
@@ -2078,8 +2200,10 @@ code {{ color: #81D4FA; }}
                 "lon": cfg.get("lon"),
                 "city_name": cfg.get("city_name", ""),
                 "primary_source": cfg.get("primary_source", "yandex"),
-                "gismeteo_api_key": cfg.get("gismeteo_api_key", ""),
-                "api": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" if (cfg.get("api") and cfg.get("api") != "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx") else "",
+                "gismeteo_api_key": mask_key(cfg.get("gismeteo_api_key")),
+                "api": mask_key(cfg.get("api")),
+                "foreca_api_key": mask_key(cfg.get("foreca_api_key")),
+                "openweathermap_api_key": mask_key(cfg.get("openweathermap_api_key")),
                 "cache_interval_minutes": cfg.get("cache_interval_minutes", 60),
                 "fallback_interval_minutes": cfg.get("fallback_interval_minutes", 15),
                 "port": cfg.get("port", 8085)
@@ -2203,7 +2327,8 @@ code {{ color: #81D4FA; }}
 
                 allowed_fields = [
                     "lat", "lon", "city_name", "primary_source",
-                    "gismeteo_api_key", "api", "cache_interval_minutes",
+                    "gismeteo_api_key", "api", "foreca_api_key", "openweathermap_api_key",
+                    "server_url", "cache_interval_minutes",
                     "fallback_interval_minutes", "ntp_server"
                 ]
                 to_update = {}

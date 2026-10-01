@@ -20,7 +20,7 @@ public class MainActivity extends Activity implements Runnable {
     public void run() {
         if (webView != null) {
             webView.clearCache(true);
-            webView.loadUrl("http://127.0.0.1:8080/");
+            webView.loadUrl("http://127.0.0.1:8080/?force=1");
         }
     }
 

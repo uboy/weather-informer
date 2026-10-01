@@ -221,6 +221,10 @@ function hoursSane(hours) {
         check('OM: forecasts[1].parts.night завтра', r.result.forecasts[1] && r.result.forecasts[1].parts && r.result.forecasts[1].parts.night);
         check('OM: завтра-ночь temp = 7', r.result.forecasts[1].parts.night.temp_avg === 7, JSON.stringify(r.result.forecasts[1].parts.night));
         check('OM: завтра-утро temp = 9', r.result.forecasts[1].parts.morning.temp_avg === 9, JSON.stringify(r.result.forecasts[1].parts.morning));
+        check('OM: завтра-ночь wind_speed не null', r.result.forecasts[1].parts.night.wind_speed != null);
+        check('OM: завтра-ночь wind_angle в пределах 0-360', r.result.forecasts[1].parts.night.wind_angle >= 0 && r.result.forecasts[1].parts.night.wind_angle <= 360);
+        check('OM: завтра-утро wind_speed не null', r.result.forecasts[1].parts.morning.wind_speed != null);
+        check('OM: завтра-утро wind_angle в пределах 0-360', r.result.forecasts[1].parts.morning.wind_angle >= 0 && r.result.forecasts[1].parts.morning.wind_angle <= 360);
         check('OM: иконки частей в CSS', iconsOk(r.result.forecasts[0].parts));
         check('OM: hours sane', hoursSane(r.result.forecasts[0].hours));
     }

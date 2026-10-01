@@ -51,6 +51,14 @@ class ForecaProvider:
         self._fc_cache = {}    # loc_id -> {"data": dict, "ts": float}
         self._load_location_cache()
 
+    @property
+    def token(self):
+        return self._token
+
+    @token.setter
+    def token(self, value):
+        self._token = (value or "").strip()
+
     # ------------------------------------------------------------------ #
     def get_weather(self, city=None, latitude=None, longitude=None) -> dict:
         """Прогноз в формате информера (Яндекс-подобном)."""

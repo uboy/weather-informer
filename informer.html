@@ -673,7 +673,8 @@ function show_key_dialog(title, lsKey, onSave, onDelete) {
 function init_menu() {
 	var menu = $("#weather_menu");
 	function render_src() {
-		var pref = safe_get_item("weather_source_pref", "default");
+		var pref = safe_get_item("weather_source_pref", "");
+		if (!pref || pref === "default") pref = primary_source_cfg || "default";
 		if (pref !== "server" && pref !== "wttr" && pref !== "owm" && pref !== "om" && pref !== "7timer" && pref !== "yandex" && pref !== "gismeteo" && pref !== "foreca") pref = "default";
 		var hasServer = (server_url && server_url.trim() !== "");
 		$(".menu_src").each(function() {
@@ -908,9 +909,11 @@ var server_url = ""; // Локальный сервер кэширования (
 var city_name_cfg = ""; // Город из config.json (для статус-бара)
 var night_dim_start = 23;
 var night_dim_end = 6;
+var primary_source_cfg = ""; // Основной источник из config.json
 var foreca_api_key_cfg = ""; // Ключ Foreca из config.json планшета (опционально)
 var gismeteo_api_key_cfg = ""; // Ключ Gismeteo API v2 из config.json планшета
 var owm_key = ""; // Ключ OpenWeatherMap для клиентского фолбэка
+var force_consumed = false; // Одноразовое поглощение параметра ?force=1
 
 function apply_text_color(c) {
 	try {
@@ -955,46 +958,59 @@ function load_config(callback) {
 		if (callback) callback();
 		return;
 	}
-	$.getJSON("config.json")
+	function applyConfig(cfg) {
+		if (cfg.api && cfg.api.indexOf('•') === -1 && cfg.api.indexOf('*') === -1 && cfg.api.indexOf('xxxx') === -1) api = cfg.api;
+		if (cfg.lat !== undefined) lat = cfg.lat;
+		if (cfg.lon !== undefined) lon = cfg.lon;
+		base_lat = lat;
+		base_lon = lon;
+		if (cfg.server_url !== undefined) server_url = cfg.server_url;
+		if (cfg.city_name !== undefined) city_name_cfg = String(cfg.city_name);
+		if (cfg.primary_source !== undefined) primary_source_cfg = String(cfg.primary_source);
+		if (cfg.night_dim_start_hour !== undefined) night_dim_start = parseInt(cfg.night_dim_start_hour, 10) || 23;
+		if (cfg.night_dim_end_hour !== undefined) night_dim_end = parseInt(cfg.night_dim_end_hour, 10) || 6;
+		if (cfg.foreca_api_key !== undefined && cfg.foreca_api_key.indexOf('•') === -1) foreca_api_key_cfg = String(cfg.foreca_api_key);
+		if (cfg.gismeteo_api_key !== undefined && cfg.gismeteo_api_key.indexOf('•') === -1) gismeteo_api_key_cfg = String(cfg.gismeteo_api_key);
+		if (cfg.openweathermap_api_key !== undefined && cfg.openweathermap_api_key.indexOf('•') === -1) owm_key = cfg.openweathermap_api_key;
+		var storedColor = safe_get_item("weather_text_color", "");
+		apply_text_color(storedColor || cfg.text_color || "");
+		if (cfg.timeout !== undefined) timeout = cfg.timeout;
+		if (cfg.update_interval_sec !== undefined) timeout = cfg.update_interval_sec;
+		if (cfg.direct_update_interval_sec !== undefined) direct_timeout = cfg.direct_update_interval_sec;
+		if (cfg.max_cache_age_hours !== undefined) {
+			max_cache_age_hours = Number(cfg.max_cache_age_hours);
+			max_cache_age_ms = max_cache_age_hours * 60 * 60 * 1000;
+			expire = max_cache_age_hours * 60 * 60;
+		}
+		if (cfg.enable_wttr_fallback !== undefined) {
+			enable_wttr_fallback = Boolean(cfg.enable_wttr_fallback);
+		}
+		if (cfg.allow_direct_yandex !== undefined) {
+			allow_direct_yandex = Boolean(cfg.allow_direct_yandex);
+		}
+		if (cfg.wind_max !== undefined) wind_max = cfg.wind_max;
+		if (cfg.pressure_min !== undefined) pressure_min = cfg.pressure_min;
+		if (cfg.pressure_max !== undefined) pressure_max = cfg.pressure_max;
+		console.log("Loaded configuration successfully:", cfg);
+	}
+	var isHttp = (window.location && (window.location.protocol === "http:" || window.location.protocol === "https:"));
+	var firstUrl = isHttp ? "/api/settings" : "config.json";
+	$.getJSON(firstUrl)
 		.done(function(cfg) {
-			if (cfg.api) api = cfg.api;
-			if (cfg.lat !== undefined) lat = cfg.lat;
-			if (cfg.lon !== undefined) lon = cfg.lon;
-			base_lat = lat;
-			base_lon = lon;
-			if (cfg.server_url !== undefined) server_url = cfg.server_url;
-			if (cfg.city_name !== undefined) city_name_cfg = String(cfg.city_name);
-			if (cfg.night_dim_start_hour !== undefined) night_dim_start = parseInt(cfg.night_dim_start_hour, 10) || 23;
-			if (cfg.night_dim_end_hour !== undefined) night_dim_end = parseInt(cfg.night_dim_end_hour, 10) || 6;
-			if (cfg.foreca_api_key !== undefined) foreca_api_key_cfg = String(cfg.foreca_api_key);
-			if (cfg.gismeteo_api_key !== undefined) gismeteo_api_key_cfg = String(cfg.gismeteo_api_key);
-			if (cfg.openweathermap_api_key !== undefined) owm_key = cfg.openweathermap_api_key;
-			var storedColor = safe_get_item("weather_text_color", "");
-			apply_text_color(storedColor || cfg.text_color || "");
-			if (cfg.timeout !== undefined) timeout = cfg.timeout;
-			if (cfg.update_interval_sec !== undefined) timeout = cfg.update_interval_sec;
-			if (cfg.direct_update_interval_sec !== undefined) direct_timeout = cfg.direct_update_interval_sec;
-			if (cfg.max_cache_age_hours !== undefined) {
-				max_cache_age_hours = Number(cfg.max_cache_age_hours);
-				max_cache_age_ms = max_cache_age_hours * 60 * 60 * 1000;
-				expire = max_cache_age_hours * 60 * 60;
-			}
-			if (cfg.enable_wttr_fallback !== undefined) {
-				enable_wttr_fallback = Boolean(cfg.enable_wttr_fallback);
-			}
-			if (cfg.allow_direct_yandex !== undefined) {
-				allow_direct_yandex = Boolean(cfg.allow_direct_yandex);
-			}
-			if (cfg.wind_max !== undefined) wind_max = cfg.wind_max;
-			if (cfg.pressure_min !== undefined) pressure_min = cfg.pressure_min;
-			if (cfg.pressure_max !== undefined) pressure_max = cfg.pressure_max;
-			console.log("Loaded external config.json successfully:", cfg);
+			applyConfig(cfg);
+			if (callback) callback();
 		})
 		.fail(function() {
-			console.log("config.json not found or parse error, using default settings");
-		})
-		.always(function() {
-			if (callback) callback();
+			$.getJSON("config.json")
+				.done(function(cfg) {
+					applyConfig(cfg);
+				})
+				.fail(function() {
+					console.log("config.json not found or parse error, using default settings");
+				})
+				.always(function() {
+					if (callback) callback();
+				});
 		});
 }
 
@@ -1173,12 +1189,13 @@ var fetch_from_om_client = function(on_success, on_error) {
 				function dominant(arr) {
 					return arr.length ? arr[Math.floor(arr.length / 2)] : 'bkn_d';
 				}
-				function partWind(h0, h1) {
+				function partWind(h0, h1, targetDay) {
 					var pw = null, cnt = 0, da = 0;
 					var sinSum = 0, cosSum = 0;
+					var dayToMatch = targetDay || today;
 					for (var wi = 0; wi < ht.length; wi++) {
 						var dayStr = String(ht[wi]).substring(0, 10);
-						if (dayStr !== today) continue;
+						if (dayStr !== dayToMatch) continue;
 						var wh = parseInt(String(ht[wi]).substring(11, 13), 10);
 						if (!isNaN(wh) && wh >= h0 && wh < h1 && ws[wi] != null) {
 							pw = (pw || 0) + ws[wi] / 3.6;
@@ -1208,17 +1225,31 @@ var fetch_from_om_client = function(on_success, on_error) {
 					evening: (function() { var w = partWind(18, 24); return { temp_avg: (tmp[20] != null ? Math.round(tmp[20]) : null), icon: dominant(byName.evening), wind_speed: w.wind_speed, wind_angle: w.wind_angle }; })(),
 					night: (function() { var w = partWind(0, 6); return { temp_avg: (tmp[2] != null ? Math.round(tmp[2]) : null), icon: dominant(byName.night), wind_speed: w.wind_speed, wind_angle: w.wind_angle }; })()
 				};
-				function tmrwPart(name, fbIcon) {
+				function tmrwWind(h0, h1) {
+					if (!tomorrowStrOm) return { wind_speed: null, wind_angle: null };
+					return partWind(h0, h1, tomorrowStrOm);
+				}
+				function tmrwPart(name, fbIcon, h0, h1) {
 					var arr = tmrwOm[name];
-					if (!arr.length) return parts[name];
+					var w = tmrwWind(h0, h1);
+					if (!arr.length) {
+						var fallback = parts[name] || {};
+						return {
+							temp_avg: fallback.temp_avg,
+							icon: fallback.icon || fbIcon,
+							wind_speed: (w.wind_speed != null ? w.wind_speed : fallback.wind_speed),
+							wind_angle: (w.wind_angle != null ? w.wind_angle : fallback.wind_angle)
+						};
+					}
 					var tt = arr.map(function(x) { return x.temp; }).filter(function(t) { return t != null; });
 					return {
 						temp_avg: tt.length ? Math.round(tt.reduce(function(a, b) { return a + b; }, 0) / tt.length) : null,
 						icon: arr[Math.floor(arr.length / 2)].icon || fbIcon,
-						wind_speed: null, wind_angle: null
+						wind_speed: w.wind_speed,
+						wind_angle: w.wind_angle
 					};
 				}
-				var parts2 = { night: tmrwPart('night', 'bkn_n'), morning: tmrwPart('morning', 'bkn_d') };
+				var parts2 = { night: tmrwPart('night', 'bkn_n', 0, 6), morning: tmrwPart('morning', 'bkn_d', 6, 12) };
 				parts2.day = parts.day; parts2.evening = parts.evening;
 				var converted = {
 					fact: {
@@ -1838,7 +1869,17 @@ function run() {
 		var _effTimeout = (_isDirect ? direct_timeout : timeout) * 1000;
 		applyNightDim();
 
-		if (lastcall < now - _effTimeout && (server_url.trim() !== '' || api != 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx')) {
+		var isForce = false;
+		if (!force_consumed && window.location && window.location.search && window.location.search.indexOf("force=1") !== -1) {
+			isForce = true;
+			force_consumed = true;
+			if (window.history && window.history.replaceState) {
+				try {
+					window.history.replaceState({}, document.title, window.location.pathname);
+				} catch (e) {}
+			}
+		}
+		if ((isForce || lastcall < now - _effTimeout) && (server_url.trim() !== '' || api != 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx')) {
 			get_data();
 		}
 
@@ -1904,7 +1945,10 @@ function get_data() {
 	}
 
 	// Выбор источника из меню (localStorage weather_source_pref): default = обычная цепочка
-	var source_pref = safe_get_item("weather_source_pref", "default");
+	var source_pref = safe_get_item("weather_source_pref", "");
+	if (!source_pref || source_pref === "default") {
+		source_pref = primary_source_cfg || "default";
+	}
 	if (source_pref !== "server" && source_pref !== "wttr" && source_pref !== "owm" && source_pref !== "om" && source_pref !== "7timer" && source_pref !== "yandex" && source_pref !== "gismeteo" && source_pref !== "foreca") source_pref = "default";
 	var only_server = (source_pref === "server");
 

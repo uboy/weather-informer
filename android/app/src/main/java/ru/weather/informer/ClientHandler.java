@@ -134,13 +134,50 @@ public class ClientHandler implements Runnable {
         // 3. API настроек /api/settings
         if (path.equals("/api/settings")) {
             if (method.equals("GET")) {
-                byte[] cfgBytes = server.readConfigFile();
-                sendResponse(out, 200, "OK", "application/json; charset=utf-8", cfgBytes);
+                InetAddress addr = socket.getInetAddress();
+                boolean isLocal = addr != null && (addr.isLoopbackAddress() || "127.0.0.1".equals(addr.getHostAddress()));
+                if (isLocal) {
+                    byte[] cfgBytes = server.readConfigFile();
+                    sendResponse(out, 200, "OK", "application/json; charset=utf-8", cfgBytes);
+                } else {
+                    sendMaskedSettings(out);
+                }
                 return;
             } else if (method.equals("POST")) {
                 File cfgFile = new File(server.getWebDir(), "config.json");
-                try (FileOutputStream fos = new FileOutputStream(cfgFile)) {
-                    fos.write(body);
+                try {
+                    byte[] existingBytes = server.readConfigFile();
+                    JSONObject existing = new JSONObject(new String(existingBytes, StandardCharsets.UTF_8));
+                    JSONObject incoming = new JSONObject(new String(body, StandardCharsets.UTF_8));
+                    String[] keyFields = new String[]{"api", "gismeteo_api_key", "foreca_api_key", "openweathermap_api_key"};
+                    for (String kf : keyFields) {
+                        if (incoming.has(kf)) {
+                            String val = incoming.optString(kf, "");
+                            if (val.contains("•") || val.contains("*")) {
+                                incoming.put(kf, existing.optString(kf, ""));
+                            }
+                        }
+                    }
+                    Iterator<String> it = incoming.keys();
+                    while (it.hasNext()) {
+                        String k = it.next();
+                        existing.put(k, incoming.get(k));
+                    }
+                    File tmpFile = new File(server.getWebDir(), "config.json.tmp");
+                    try (FileOutputStream fos = new FileOutputStream(tmpFile)) {
+                        fos.write(existing.toString(2).getBytes(StandardCharsets.UTF_8));
+                    }
+                    if (!tmpFile.renameTo(cfgFile)) {
+                        try (FileOutputStream fos = new FileOutputStream(cfgFile)) {
+                            fos.write(existing.toString(2).getBytes(StandardCharsets.UTF_8));
+                        }
+                        tmpFile.delete();
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "Failed to parse/save settings: " + e.getMessage());
+                    sendResponse(out, 400, "Bad Request", "application/json; charset=utf-8",
+                            "{\"error\":\"Invalid settings payload or JSON error\"}".getBytes(StandardCharsets.UTF_8));
+                    return;
                 }
                 if (server.getActivity() != null) {
                     server.getActivity().reloadInformer();
@@ -180,8 +217,8 @@ public class ClientHandler implements Runnable {
             return;
         }
 
-        // 8. Определение города по координатам /api/reverse
-        if (path.equals("/api/reverse")) {
+        // 8. Определение города по координатам /reverse и /api/reverse
+        if (path.equals("/reverse") || path.equals("/api/reverse")) {
             handleReverseGeocode(query, out);
             return;
         }
@@ -197,8 +234,40 @@ public class ClientHandler implements Runnable {
         serveFile(filename, mime, out);
     }
 
+    private void sendMaskedSettings(OutputStream out) {
+        byte[] cfgBytes = server.readConfigFile();
+        try {
+            JSONObject cfg = new JSONObject(new String(cfgBytes, StandardCharsets.UTF_8));
+            String[] keyFields = new String[]{"api", "gismeteo_api_key", "foreca_api_key", "openweathermap_api_key"};
+            for (String kf : keyFields) {
+                if (cfg.has(kf)) {
+                    cfg.put(kf, maskKey(cfg.optString(kf, "")));
+                }
+            }
+            sendResponse(out, 200, "OK", "application/json; charset=utf-8", cfg.toString(2).getBytes(StandardCharsets.UTF_8));
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to mask settings: " + e.getMessage());
+            sendResponse(out, 500, "Server Error", "application/json; charset=utf-8",
+                    "{\"error\":\"Failed to process configuration\"}".getBytes(StandardCharsets.UTF_8));
+        }
+    }
+
     private void serveFile(String filename, String mime, OutputStream out) throws IOException {
         filename = new File(filename).getName();
+
+        if (filename.toLowerCase(Locale.US).startsWith("config")) {
+            InetAddress addr = socket.getInetAddress();
+            boolean isLocal = addr != null && (addr.isLoopbackAddress() || "127.0.0.1".equals(addr.getHostAddress()));
+            if (!isLocal) {
+                if (filename.equalsIgnoreCase("config.json")) {
+                    sendMaskedSettings(out);
+                    return;
+                }
+                sendResponse(out, 403, "Forbidden", "text/plain",
+                        "Direct access to raw config files is restricted. Use /api/settings".getBytes(StandardCharsets.UTF_8));
+                return;
+            }
+        }
 
         File localFile = new File(server.getWebDir(), filename);
         if (localFile.exists() && localFile.isFile()) {
@@ -482,6 +551,11 @@ public class ClientHandler implements Runnable {
 
             filename = new File(filename).getName();
             String lower = filename.toLowerCase(Locale.US);
+            if (lower.startsWith("config") || lower.equals("config.json")) {
+                sendResponse(out, 403, "Forbidden", "application/json",
+                        "{\"error\":\"Uploading configuration files via /api/upload is prohibited. Use /api/settings\"}".getBytes(StandardCharsets.UTF_8));
+                return;
+            }
             if (!lower.endsWith(".html") && !lower.endsWith(".js") && !lower.endsWith(".css") &&
                 !lower.endsWith(".json") && !lower.endsWith(".png") && !lower.endsWith(".svg")) {
                 sendResponse(out, 400, "Bad Request", "application/json",
@@ -573,5 +647,18 @@ public class ClientHandler implements Runnable {
             }
         }
         return map;
+    }
+
+    public static String maskKey(String key) {
+        if (key == null) return "";
+        String s = key.trim();
+        if (s.isEmpty() || s.equals("xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx")) return "";
+        if (s.length() > 8) {
+            return s.substring(0, 4) + "••••••••" + s.substring(s.length() - 4);
+        } else if (s.length() > 4) {
+            return s.substring(0, 2) + "••••" + s.substring(s.length() - 2);
+        } else {
+            return "••••";
+        }
     }
 }

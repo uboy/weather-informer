@@ -141,9 +141,36 @@ public class InformerServer {
                 "</div>" +
                 "<label>Адрес домашнего сервера (server_url):</label><input type='text' id='server_url' placeholder='http://192.168.1.55:8085'>" +
                 "<label>Основной источник погоды:</label>" +
-                "<select id='primary_source'><option value='yandex'>Яндекс.Погода (API)</option><option value='gismeteo'>Gismeteo v2 (API Token)</option></select>" +
-                "<label>Ключ Gismeteo API v2:</label><input type='text' id='gismeteo_api_key' placeholder='X-Gismeteo-Token'>" +
-                "<label>Ключ Яндекс.Погода:</label><input type='text' id='api' placeholder='X-Yandex-Weather-Key'>" +
+                "<select id='primary_source'>" +
+                "<option value='server'>Локальный сервер (рекомендуется)</option>" +
+                "<option value='yandex'>Яндекс.Погода (API)</option>" +
+                "<option value='gismeteo'>Gismeteo v2 (API Token)</option>" +
+                "<option value='foreca'>Foreca (API Token)</option>" +
+                "<option value='om'>Open-Meteo (бесплатно, без ключа)</option>" +
+                "<option value='owm'>OpenWeatherMap (API Key)</option>" +
+                "<option value='7timer'>7timer (бесплатно, без ключа)</option>" +
+                "<option value='wttr'>wttr.in (бесплатно, без ключа)</option>" +
+                "</select>" +
+                "<label>Ключ Gismeteo API v2:</label>" +
+                "<div style='display:flex; gap:6px; align-items:center;'>" +
+                "<input type='text' id='gismeteo_api_key' placeholder='X-Gismeteo-Token'>" +
+                "<button type='button' class='btn-gps' id='btn_clear_gismeteo' style='width:auto; margin-top:5px; white-space:nowrap; background:#C62828; padding:10px 14px;'>✕</button>" +
+                "</div>" +
+                "<label>Ключ Яндекс.Погода:</label>" +
+                "<div style='display:flex; gap:6px; align-items:center;'>" +
+                "<input type='text' id='api' placeholder='X-Yandex-Weather-Key'>" +
+                "<button type='button' class='btn-gps' id='btn_clear_yandex' style='width:auto; margin-top:5px; white-space:nowrap; background:#C62828; padding:10px 14px;'>✕</button>" +
+                "</div>" +
+                "<label>Ключ Foreca (API Token):</label>" +
+                "<div style='display:flex; gap:6px; align-items:center;'>" +
+                "<input type='text' id='foreca_api_key' placeholder='Bearer JWT Token'>" +
+                "<button type='button' class='btn-gps' id='btn_clear_foreca' style='width:auto; margin-top:5px; white-space:nowrap; background:#C62828; padding:10px 14px;'>✕</button>" +
+                "</div>" +
+                "<label>Ключ OpenWeatherMap (API Key):</label>" +
+                "<div style='display:flex; gap:6px; align-items:center;'>" +
+                "<input type='text' id='openweathermap_api_key' placeholder='API Key'>" +
+                "<button type='button' class='btn-gps' id='btn_clear_owm' style='width:auto; margin-top:5px; white-space:nowrap; background:#C62828; padding:10px 14px;'>✕</button>" +
+                "</div>" +
                 "<button type='button' class='btn-primary' id='btn_save'>Сохранить настройки</button>" +
                 "<button type='button' class='btn-sec' id='btn_reload'>Обновить экран информера</button>" +
                 "<div id='status'></div>" +
@@ -158,10 +185,28 @@ public class InformerServer {
                 "document.getElementById('lon').value = c.lon || '';" +
                 "document.getElementById('city_name').value = c.city_name || '';" +
                 "document.getElementById('server_url').value = c.server_url || '';" +
-                "document.getElementById('primary_source').value = c.primary_source || 'yandex';" +
+                "document.getElementById('primary_source').value = c.primary_source || (c.server_url ? 'server' : 'yandex');" +
                 "document.getElementById('gismeteo_api_key').value = c.gismeteo_api_key || '';" +
-                "document.getElementById('api').value = (c.api && c.api.indexOf('xxxx')===-1) ? c.api : '';" +
+                "document.getElementById('api').value = c.api || '';" +
+                "document.getElementById('foreca_api_key').value = c.foreca_api_key || '';" +
+                "document.getElementById('openweathermap_api_key').value = c.openweathermap_api_key || '';" +
                 "});" +
+                "document.getElementById('btn_clear_gismeteo').onclick = function(){" +
+                "document.getElementById('gismeteo_api_key').value = '';" +
+                "currentCfg.gismeteo_api_key = '';" +
+                "};" +
+                "document.getElementById('btn_clear_yandex').onclick = function(){" +
+                "document.getElementById('api').value = '';" +
+                "currentCfg.api = '';" +
+                "};" +
+                "document.getElementById('btn_clear_foreca').onclick = function(){" +
+                "document.getElementById('foreca_api_key').value = '';" +
+                "currentCfg.foreca_api_key = '';" +
+                "};" +
+                "document.getElementById('btn_clear_owm').onclick = function(){" +
+                "document.getElementById('openweathermap_api_key').value = '';" +
+                "currentCfg.openweathermap_api_key = '';" +
+                "};" +
                 "function detectCity(la, lo){" +
                 "if(!la || !lo) return Promise.resolve(null);" +
                 "var cInput = document.getElementById('city_name');" +
@@ -209,8 +254,9 @@ public class InformerServer {
                 "currentCfg.server_url = document.getElementById('server_url').value.trim();" +
                 "currentCfg.primary_source = document.getElementById('primary_source').value;" +
                 "currentCfg.gismeteo_api_key = document.getElementById('gismeteo_api_key').value.trim();" +
-                "var yk = document.getElementById('api').value.trim();" +
-                "if(yk) currentCfg.api = yk;" +
+                "currentCfg.api = document.getElementById('api').value.trim();" +
+                "currentCfg.foreca_api_key = document.getElementById('foreca_api_key').value.trim();" +
+                "currentCfg.openweathermap_api_key = document.getElementById('openweathermap_api_key').value.trim();" +
                 "var s = document.getElementById('status');" +
                 "fetch('/api/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(currentCfg)})" +
                 ".then(function(r){return r.json();}).then(function(res){" +

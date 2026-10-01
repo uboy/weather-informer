@@ -28,9 +28,7 @@ mkdir -p "$BUILD_DIR/gen" "$BUILD_DIR/classes" "$BUILD_DIR/dex"
 echo "=== 1. Копирование свежих ассетов информера ==="
 cp "$ROOT_DIR/informer.html" "$ASSETS_DIR/informer.html"
 cp "$ROOT_DIR/jquery.min.js" "$ASSETS_DIR/jquery.min.js"
-if [ -f "$ROOT_DIR/config.json" ]; then
-    cp "$ROOT_DIR/config.json" "$ASSETS_DIR/config.json"
-fi
+# Не копируем $ROOT_DIR/config.json, чтобы боевые ключи не попадали в APK
 
 echo "=== 2. Компиляция ресурсов (aapt2 compile) ==="
 mkdir -p "$BUILD_DIR/compiled_res"
