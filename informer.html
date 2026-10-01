@@ -604,7 +604,7 @@ function update_viewport_metrics() {
 	}
 
 	var ratio = winW / winH;
-	if (ratio <= 1.68 || winH >= 680) {
+	if ((ratio <= 1.68 || winH >= 680) && winW <= 1280) {
 		document.documentElement.classList.add("screen_tall");
 		document.documentElement.classList.remove("screen_wide");
 	} else {
@@ -3261,8 +3261,8 @@ body {
 	}
 
 	/* ADAPTIVE RULES FOR TALLER LANDSCAPE (16:10 / 4:3, e.g. Digma 1280x800) */
-	@media screen and (orientation: landscape) and (max-aspect-ratio: 168/100),
-	       screen and (orientation: landscape) and (min-height: 680px) {
+	@media screen and (orientation: landscape) and (max-aspect-ratio: 168/100) and (max-width: 1280px),
+	       screen and (orientation: landscape) and (min-height: 680px) and (max-width: 1280px) {
 		#datetime {
 			height: 51vh !important;
 			padding: 1.6vh 0 0.4vh 0 !important;
@@ -3324,21 +3324,308 @@ body {
 	html.screen_tall #weather_right {
 		padding: 0.8vh 1.5vw 1.2vh 1.5vw !important;
 	}
-}
+
+	/* DESKTOP / LAPTOP WIDESCREEN ADAPTATION (16:9, e.g. 1920x1080, 1366x768, laptops) */
+	@media screen and (orientation: landscape) and (min-width: 1281px),
+	       screen and (orientation: landscape) and (min-height: 850px) {
+		#datetime {
+			height: 45vh !important;
+			padding: 0.8vh 0 0.4vh 0 !important;
+		}
+		#time {
+			font-size: 25vh !important;
+			letter-spacing: -0.2vw !important;
+		}
+		#date {
+			font-size: 4.0vh !important;
+			margin-top: 0.4vh !important;
+		}
+		#weather_body {
+			height: 48vh !important;
+		}
+		#now {
+			padding: 0.6vh 2vw 4.0vh 2vw !important;
+		}
+		#now_hero {
+			gap: 1.5vw !important;
+		}
+		#icon {
+			width: 15vh !important;
+			height: 15vh !important;
+		}
+		#temperature {
+			font-size: 14vh !important;
+		}
+		#temperature_sub div {
+			font-size: 2.2vh !important;
+		}
+		#feels_label .feels_svg {
+			width: 2vh !important;
+			height: 2vh !important;
+		}
+		#wind_humidity_pressure {
+			width: 34vw !important;
+		}
+		#wind, #humidity, #pressure {
+			font-size: 4.0vh !important;
+		}
+		#wind_humidity_pressure .wind_icon,
+		#wind_humidity_pressure .humidity_icon,
+		#wind_humidity_pressure .presure_icon {
+			min-height: 3.6vh !important;
+			min-width: 3.6vh !important;
+			background-size: 3.6vh 3.6vh !important;
+		}
+		.wind_humidity_pressure_bar {
+			height: 0.8vh !important;
+			margin: 0.3vh 0 0.8vh !important;
+		}
+		.wind_humidity_progress, #pressure_progress {
+			height: 0.8vh !important;
+		}
+		#weather_right {
+			padding: 0.6vh 1.5vw 4.0vh 1.5vw !important;
+		}
+		.forecast_title {
+			font-size: 2.8vh !important;
+		}
+		.forecast_icon {
+			width: 6.5vh !important;
+			height: 6.5vh !important;
+			background-size: 6.5vh 6.5vh !important;
+		}
+		#forecast_temperature_0, #forecast_temperature_1, .forecast_temperature {
+			font-size: 8.5vh !important;
+		}
+		.forecast_wind {
+			font-size: 3.8vh !important;
+		}
+		.forecast_wind_block .wind_icon {
+			height: 2.2vh !important;
+			width: 2.2vh !important;
+		}
+		.riseset_block span {
+			font-size: 4.2vh !important;
+		}
+		.rise, .set {
+			height: 4vh !important;
+			width: 4vh !important;
+			background-size: 4vh !important;
+		}
+		#duration {
+			font-size: 2.0vh !important;
+		}
+		#duration_left {
+			font-size: 2.2vh !important;
+		}
+		#duration_bar {
+			height: 0.7vh !important;
+		}
+		#moon {
+			width: 6.0vh !important;
+			height: 6.0vh !important;
+		}
+		#status_bar {
+			font-size: 1.8vh !important;
+			padding: 0.4vh 1.5vw 0.6vh 1.5vw !important;
+		}
+	}
 
 @media (orientation: portrait) {
-	#datetime {
+	html, body {
+		width: 100vw;
+		height: auto;
+		min-height: 100vh;
+		overflow-x: hidden;
+		overflow-y: auto;
+		background: #000;
+	}
+	#wrapper {
+		display: flex !important;
+		flex-direction: column !important;
+		width: 100vw !important;
+		min-height: 100vh !important;
 		height: auto !important;
-		padding: 2vh 0 0.5vh 0 !important;
+		padding: 0 0 5vh 0 !important;
+		position: static !important;
+	}
+	#datetime {
+		width: 100% !important;
+		height: auto !important;
+		padding: 3vh 0 1vh 0 !important;
+		display: flex !important;
+		flex-direction: column !important;
+		align-items: center !important;
+		position: static !important;
+		border-bottom: 1px solid rgba(255, 255, 255, 0.15) !important;
 	}
 	#time {
-		font-size: 24vw !important;
+		position: static !important;
+		font-size: 22vw !important;
 		line-height: 0.9 !important;
+		transform: none !important;
+		margin: 0 !important;
 		white-space: nowrap !important;
 	}
 	#date {
-		font-size: 6.5vw !important;
-		margin-top: 0.4vh !important;
+		position: static !important;
+		font-size: 5.5vw !important;
+		transform: none !important;
+		width: auto !important;
+		margin-top: 0.8vh !important;
+	}
+	#weather_body {
+		display: flex !important;
+		flex-direction: column !important;
+		width: 100% !important;
+		height: auto !important;
+		position: static !important;
+	}
+	#now {
+		width: 100% !important;
+		height: auto !important;
+		position: static !important;
+		display: flex !important;
+		flex-direction: column !important;
+		align-items: center !important;
+		border-right: none !important;
+		border-bottom: 1px solid rgba(255, 255, 255, 0.15) !important;
+		padding: 2vh 4vw !important;
+		box-sizing: border-box !important;
+	}
+	#now_hero {
+		display: flex !important;
+		flex-direction: row !important;
+		align-items: center !important;
+		justify-content: center !important;
+		gap: 4vw !important;
+		width: 100% !important;
+	}
+	#icon {
+		position: static !important;
+		transform: none !important;
+		width: 22vw !important;
+		height: 22vw !important;
+		background-size: contain !important;
+		margin: 0 !important;
+	}
+	#temperature_block {
+		position: static !important;
+		width: auto !important;
+	}
+	#temperature {
+		font-size: 18vw !important;
+		line-height: 0.9 !important;
+	}
+	#temperature_sub {
+		display: flex !important;
+		flex-direction: row !important;
+		gap: 2vw !important;
+		margin-top: 0.8vh !important;
+	}
+	#temperature_sub div {
+		width: auto !important;
+		font-size: 3.5vw !important;
+	}
+	#temperature_sub span {
+		display: inline !important;
+		padding-bottom: 0 !important;
+	}
+	.feels_svg {
+		width: 3.2vw !important;
+		height: 3.2vw !important;
+	}
+	#wind_humidity_pressure {
+		position: static !important;
+		width: 90% !important;
+		margin-top: 2vh !important;
+	}
+	#wind, #humidity, #pressure {
+		font-size: 6vw !important;
+	}
+	#wind_humidity_pressure .wind_icon,
+	#wind_humidity_pressure .humidity_icon,
+	#wind_humidity_pressure .presure_icon {
+		min-height: 5.5vw !important;
+		min-width: 5.5vw !important;
+		background-size: 5.5vw 5.5vw !important;
+	}
+	.wind_humidity_pressure_bar {
+		height: 1.2vw !important;
+		margin: 0.5vh 0 1vh !important;
+	}
+	.wind_humidity_progress, #pressure_progress {
+		height: 1.2vw !important;
+	}
+	#weather_right {
+		width: 100% !important;
+		height: auto !important;
+		padding: 2vh 4vw 6vh 4vw !important;
+		box-sizing: border-box !important;
+		display: flex !important;
+		flex-direction: column !important;
+		gap: 3vh !important;
+	}
+	#forecast {
+		width: 100% !important;
+		display: flex !important;
+		flex-direction: row !important;
+		justify-content: space-around !important;
+		border-bottom: 1px solid rgba(255, 255, 255, 0.12) !important;
+		padding-bottom: 2vh !important;
+	}
+	.forecast_part {
+		width: 48% !important;
+	}
+	.forecast_title {
+		font-size: 4.5vw !important;
+	}
+	.forecast_icon {
+		width: 12vw !important;
+		height: 12vw !important;
+		background-size: 12vw 12vw !important;
+	}
+	#forecast_temperature_0, #forecast_temperature_1, .forecast_temperature {
+		font-size: 14vw !important;
+	}
+	.forecast_wind {
+		font-size: 5vw !important;
+	}
+	.forecast_wind_block .wind_icon {
+		height: 4vw !important;
+		width: 4vw !important;
+	}
+	#riseset {
+		width: 100% !important;
+		display: flex !important;
+		flex-direction: row !important;
+		justify-content: space-around !important;
+		align-items: center !important;
+	}
+	.riseset_block span {
+		font-size: 6vw !important;
+	}
+	.rise, .set {
+		height: 6vw !important;
+		width: 6vw !important;
+		background-size: 6vw !important;
+	}
+	#duration {
+		font-size: 3.5vw !important;
+	}
+	#duration_bar {
+		height: 1vw !important;
+	}
+	#duration_left {
+		font-size: 3.5vw !important;
+	}
+	#moon {
+		width: 8vw !important;
+		height: 8vw !important;
+	}
+	#status_bar {
+		font-size: 3vw !important;
+		padding: 0.8vh 2vw !important;
 	}
 }
 
