@@ -697,6 +697,24 @@ function init_menu() {
 		console.log("Menu: forced weather refresh");
 		get_data();
 	});
+	$("#menu_settings").on("click", function(e) {
+		e.stopPropagation();
+		var dest = "/settings";
+		if (window.location.protocol === "file:") {
+			var base = server_base();
+			dest = base ? (base + "/settings") : "http://127.0.0.1:8080/settings";
+		}
+		window.location.href = dest;
+	});
+	$("#menu_upload").on("click", function(e) {
+		e.stopPropagation();
+		var dest = "/upload";
+		if (window.location.protocol === "file:") {
+			var base = server_base();
+			dest = base ? (base + "/upload") : "http://127.0.0.1:8080/upload";
+		}
+		window.location.href = dest;
+	});
 	$(".menu_src").on("click", function(e) {
 		e.stopPropagation();
 		var prevPref = safe_get_item("weather_source_pref", "default");
@@ -1873,6 +1891,15 @@ function get_data() {
 
 	var server = (server_url && server_url.trim() !== "") ? server_url.trim() : '';
 	if (server) {
+		var cleanServer = server.replace(/\/$/, "");
+		if (!/\/weather\.json($|\?)/.test(cleanServer) && !/\/forecast\.json($|\?)/.test(cleanServer)) {
+			var qIdx = cleanServer.indexOf("?");
+			if (qIdx === -1) {
+				server = cleanServer + "/weather.json";
+			} else {
+				server = cleanServer.substring(0, qIdx) + "/weather.json" + cleanServer.substring(qIdx);
+			}
+		}
 		server += (server.indexOf("?") === -1 ? "?" : "&") + "lat=" + lat + "&lon=" + lon;
 	}
 
@@ -3737,6 +3764,9 @@ body {
 	<div id="weather_menu">
 		<div class="menu_title">Погода</div>
 		<div class="menu_item" id="menu_refresh">Обновить сейчас</div>
+		<div class="menu_title">Управление</div>
+		<div class="menu_item" id="menu_settings">⚙️ Настройки</div>
+		<div class="menu_item" id="menu_upload">📁 Загрузка файлов</div>
 		<div class="menu_title">Источник (по умолчанию)</div>
 		<div class="menu_item menu_src" data-src="default">По умолчанию</div>
 		<div class="menu_item menu_src" data-src="server">Локальный сервер</div>

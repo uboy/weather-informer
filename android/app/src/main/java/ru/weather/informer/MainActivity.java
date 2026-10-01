@@ -19,12 +19,8 @@ public class MainActivity extends Activity implements Runnable {
     @Override
     public void run() {
         if (webView != null) {
-            String curUrl = webView.getUrl();
-            if (curUrl == null || curUrl.isEmpty()) {
-                webView.loadUrl("http://127.0.0.1:8080/");
-            } else {
-                webView.reload();
-            }
+            webView.clearCache(true);
+            webView.loadUrl("http://127.0.0.1:8080/");
         }
     }
 

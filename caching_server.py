@@ -207,6 +207,18 @@ def load_config():
     return cfg
 
 
+def save_config(new_cfg):
+    """Атомарное сохранение конфигурации в config.json"""
+    current = load_config()
+    current.update(new_cfg)
+    tmp_file = CONFIG_FILE + ".tmp"
+    with open(tmp_file, "w", encoding="utf-8") as f:
+        json.dump(current, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_file, CONFIG_FILE)
+    log.info("Saved updated configuration to %s", CONFIG_FILE)
+    return current
+
+
 def sanitize_secrets(text):
     if text is None:
         return None
@@ -1657,8 +1669,143 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
 
     def send_cors_headers(self):
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "X-Yandex-Weather-Key, Content-Type")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "X-Yandex-Weather-Key, X-Gismeteo-Token, Content-Type")
+
+    def get_settings_html(self):
+        return """<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Настройки Сервера Погоды</title>
+<style>
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #121212; color: #e0e0e0; margin: 0; padding: 16px; }
+.card { background: #1e1e1e; border-radius: 12px; padding: 20px; max-width: 480px; margin: 0 auto; box-shadow: 0 4px 16px rgba(0,0,0,0.5); }
+h2 { margin-top: 0; color: #4FC3F7; font-size: 1.4rem; }
+label { display: block; margin-top: 14px; font-size: 0.9rem; color: #bbb; }
+input, select { width: 100%; box-sizing: border-box; padding: 10px; border-radius: 8px; border: 1px solid #333; background: #2a2a2a; color: #fff; margin-top: 5px; font-size: 1rem; }
+button { width: 100%; padding: 12px; border: none; border-radius: 8px; font-size: 1rem; font-weight: bold; cursor: pointer; margin-top: 18px; }
+.btn-primary { background: #0288D1; color: #fff; }
+.btn-sec { background: #37474F; color: #fff; margin-top: 10px; }
+.btn-gps { background: #2E7D32; color: #fff; margin-top: 6px; padding: 8px; font-size: 0.85rem; }
+#status { margin-top: 14px; padding: 10px; border-radius: 6px; display: none; text-align: center; }
+.links { margin-top: 20px; text-align: center; font-size: 0.9rem; }
+.links a { color: #4FC3F7; text-decoration: none; margin: 0 8px; }
+</style></head><body>
+<div class="card">
+<h2>Сервер Погоды: Настройки</h2>
+<label>Широта (Latitude):</label><input type="number" step="0.0001" id="lat">
+<label>Долгота (Longitude):</label><input type="number" step="0.0001" id="lon">
+<button type="button" class="btn-gps" id="btn_gps">Определить GPS со смартфона/браузера</button>
+<label>Город (для отображения):</label>
+<div style="display:flex; gap:6px; align-items:center;">
+  <input type="text" id="city_name" placeholder="Определяется автоматически">
+  <button type="button" class="btn-gps" id="btn_detect_city" style="width:auto; margin-top:5px; white-space:nowrap; background:#00838F; padding:10px 14px;">Авто</button>
+</div>
+<label>Основной источник погоды:</label>
+<select id="primary_source"><option value="yandex">Яндекс.Погода (API)</option><option value="gismeteo">Gismeteo v2 (API Token)</option></select>
+<label>Ключ Gismeteo API v2:</label><input type="text" id="gismeteo_api_key" placeholder="X-Gismeteo-Token">
+<label>Ключ Яндекс.Погода:</label><input type="text" id="api" placeholder="X-Yandex-Weather-Key">
+<label>Интервал кэша (минуты):</label><input type="number" id="cache_interval_minutes" value="60">
+<label>Интервал повтора при сбое (минуты):</label><input type="number" id="fallback_interval_minutes" value="15">
+<button type="button" class="btn-primary" id="btn_save">Сохранить настройки сервера</button>
+<div id="status"></div>
+<div class="links">
+<a href="/weather.json" target="_blank">API /weather.json</a> | <a href="/install">Установка APK</a> | <a href="/status" target="_blank">Статус</a>
+</div></div>
+<script>
+var currentCfg = {};
+fetch('/api/settings').then(function(r){return r.json();}).then(function(c){
+currentCfg = c;
+document.getElementById('lat').value = c.lat || '';
+document.getElementById('lon').value = c.lon || '';
+document.getElementById('city_name').value = c.city_name || '';
+document.getElementById('primary_source').value = c.primary_source || 'yandex';
+document.getElementById('gismeteo_api_key').value = c.gismeteo_api_key || '';
+document.getElementById('api').value = (c.api && c.api.indexOf('xxxx')===-1) ? c.api : '';
+document.getElementById('cache_interval_minutes').value = c.cache_interval_minutes || 60;
+document.getElementById('fallback_interval_minutes').value = c.fallback_interval_minutes || 15;
+});
+function detectCity(la, lo){
+if(!la || !lo) return Promise.resolve(null);
+var cInput = document.getElementById('city_name');
+var tok = document.getElementById('gismeteo_api_key').value.trim();
+var q = '/reverse?lat=' + la + '&lon=' + lo + (tok ? ('&token=' + encodeURIComponent(tok)) : '');
+cInput.placeholder = 'Определение города...';
+return fetch(q).then(function(r){return r.json();}).then(function(res){
+if(res && res.name){
+cInput.value = res.name;
+currentCfg.city_name = res.name;
+var s = document.getElementById('status');
+s.style.display = 'block'; s.style.background = '#00695C';
+s.innerText = 'Город определён: ' + res.name + (res.source ? ' [' + res.source + ']' : '');
+setTimeout(function(){ s.style.display='none'; }, 3500);
+return res.name;
+} else {
+cInput.placeholder = 'Введите город вручную';
+return null;
+}
+}).catch(function(){
+cInput.placeholder = 'Введите город вручную';
+return null;
+});
+}
+document.getElementById('btn_gps').onclick = function(){
+if(!navigator.geolocation){alert('Геолокация недоступна'); return;}
+navigator.geolocation.getCurrentPosition(function(p){
+var la = p.coords.latitude.toFixed(4);
+var lo = p.coords.longitude.toFixed(4);
+document.getElementById('lat').value = la;
+document.getElementById('lon').value = lo;
+detectCity(la, lo);
+}, function(e){alert('Ошибка GPS: ' + e.message);});
+};
+document.getElementById('btn_detect_city').onclick = function(){
+var la = document.getElementById('lat').value.trim();
+var lo = document.getElementById('lon').value.trim();
+if(!la || !lo){alert('Сначала укажите координаты'); return;}
+detectCity(la, lo);
+};
+function doSave(){
+currentCfg.lat = parseFloat(document.getElementById('lat').value);
+currentCfg.lon = parseFloat(document.getElementById('lon').value);
+currentCfg.city_name = document.getElementById('city_name').value.trim();
+currentCfg.primary_source = document.getElementById('primary_source').value;
+currentCfg.gismeteo_api_key = document.getElementById('gismeteo_api_key').value.trim();
+currentCfg.cache_interval_minutes = parseInt(document.getElementById('cache_interval_minutes').value, 10) || 60;
+currentCfg.fallback_interval_minutes = parseInt(document.getElementById('fallback_interval_minutes').value, 10) || 15;
+var yk = document.getElementById('api').value.trim();
+if(yk) currentCfg.api = yk;
+var s = document.getElementById('status');
+fetch('/api/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(currentCfg)})
+.then(function(r){return r.json();}).then(function(res){
+s.style.display='block'; s.style.background='#1B5E20'; s.innerText='Настройки сохранены!';
+setTimeout(function(){s.style.display='none';}, 4000);
+}).catch(function(e){
+s.style.display='block'; s.style.background='#B71C1C'; s.innerText='Ошибка: ' + e;
+});
+}
+document.getElementById('btn_save').onclick = function(){
+var la = document.getElementById('lat').value.trim();
+var lo = document.getElementById('lon').value.trim();
+var cn = document.getElementById('city_name').value.trim();
+if(!cn && la && lo){
+detectCity(la, lo).then(function(){ doSave(); });
+} else {
+doSave();
+}
+};
+</script></body></html>"""
+
+    def serve_settings_html(self):
+        html = self.get_settings_html().encode("utf-8")
+        try:
+            self.send_response(200)
+            self.send_cors_headers()
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(html)))
+            self.end_headers()
+            self.wfile.write(html)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def do_OPTIONS(self):
         self.send_response(200)
@@ -1920,6 +2067,35 @@ code {{ color: #81D4FA; }}
                 pass
             return
 
+        if path == "/settings":
+            self.serve_settings_html()
+            return
+
+        if path == "/api/settings":
+            cfg = load_config()
+            safe_cfg = {
+                "lat": cfg.get("lat"),
+                "lon": cfg.get("lon"),
+                "city_name": cfg.get("city_name", ""),
+                "primary_source": cfg.get("primary_source", "yandex"),
+                "gismeteo_api_key": cfg.get("gismeteo_api_key", ""),
+                "api": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" if (cfg.get("api") and cfg.get("api") != "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx") else "",
+                "cache_interval_minutes": cfg.get("cache_interval_minutes", 60),
+                "fallback_interval_minutes": cfg.get("fallback_interval_minutes", 15),
+                "port": cfg.get("port", 8085)
+            }
+            body = json.dumps(safe_cfg, ensure_ascii=False).encode("utf-8")
+            try:
+                self.send_response(200)
+                self.send_cors_headers()
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return
+
         # Погодные маршруты — только известные: остальное 404,
         # чтобы сканеры/favicon не запускали фетчи и не жгли квоту
         if path not in ("/", "/weather.json", "/forecast.json", "/v2/forecast"):
@@ -1933,9 +2109,16 @@ code {{ color: #81D4FA; }}
                 pass
             return
 
-        # Координаты можно передать (?lat=&lon=) — выбор города на планшете;
-        # без параметров отдаётся город по умолчанию из config.json
         qs = parse_qs(urlparse(self.path).query)
+        accept = self.headers.get("Accept", "")
+
+        # Если браузер открыл корень / без погодных параметров — показываем настройки сервера
+        if path == "/":
+            is_api = "lat" in qs or "lon" in qs or "source" in qs or "application/json" in accept or qs.get("format", [""])[0] == "json"
+            if not is_api:
+                self.serve_settings_html()
+                return
+
         lat_raw = qs.get("lat", [None])[0]
         lon_raw = qs.get("lon", [None])[0]
         if lat_raw is None and lon_raw is None:
@@ -2009,6 +2192,46 @@ code {{ color: #81D4FA; }}
                 self.wfile.write(err.encode("utf-8"))
         except (BrokenPipeError, ConnectionResetError):
             pass
+
+    def do_POST(self):
+        path = self.path.split("?")[0]
+        if path in ("/api/settings", "/settings"):
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(length)
+                payload = json.loads(body.decode("utf-8"))
+
+                allowed_fields = [
+                    "lat", "lon", "city_name", "primary_source",
+                    "gismeteo_api_key", "api", "cache_interval_minutes",
+                    "fallback_interval_minutes", "ntp_server"
+                ]
+                to_update = {}
+                for k in allowed_fields:
+                    if k in payload:
+                        to_update[k] = payload[k]
+
+                save_config(to_update)
+                with LOCATION_CACHE_LOCK:
+                    LOCATION_CACHE.clear()
+
+                self.send_response(200)
+                self.send_cors_headers()
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "saved"}).encode("utf-8"))
+            except Exception as e:
+                log.error("Failed to save settings: %s", sanitize_secrets(e))
+                self.send_response(500)
+                self.send_cors_headers()
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": sanitize_secrets(str(e))}).encode("utf-8"))
+            return
+
+        self.send_response(404)
+        self.send_cors_headers()
+        self.end_headers()
 
     def log_message(self, format, *args):
         # Компактный лог HTTP-запросов
