@@ -27,6 +27,7 @@ import urllib.parse
 from urllib.parse import parse_qs, urlparse
 
 from gismeteo_provider import GismeteoProvider
+from gismeteo_v2_provider import GismeteoV2Provider, GismeteoV2QuotaError, GismeteoV2Error
 from foreca_provider import ForecaProvider
 
 logging.basicConfig(
@@ -45,7 +46,7 @@ LOCATION_CACHE = {}
 LOCATION_CACHE_LOCK = threading.Lock()
 KEY_LOCKS = {}
 KEY_LOCKS_LOCK = threading.Lock()
-MAX_LOCATIONS = 8
+MAX_LOCATIONS = 16
 NOMINATIM = "https://nominatim.openstreetmap.org"
 GEO_HEADERS = {"User-Agent": "WeatherInformerLocal/1.0 (lan weather kiosk)"}
 
@@ -119,6 +120,21 @@ GISMETEO = GismeteoProvider(
     logger=log,
 )
 
+GISMETEO_V2 = GismeteoV2Provider(
+    api_key="",  # инициализируется динамически из load_config()
+    cache_path=os.path.join(SCRIPT_DIR, "gismeteo_v2_cities.json"),
+    logger=log,
+)
+
+gismeteo_v2_quota_blocked_until = 0.0
+
+
+def _next_midnight_utc():
+    now = time.time()
+    tomorrow = datetime.now(timezone.utc).date() + timedelta(days=1)
+    midnight = datetime(tomorrow.year, tomorrow.month, tomorrow.day, tzinfo=timezone.utc).timestamp()
+    return max(now + 6 * 3600, midnight)
+
 
 STATS_FILE = os.path.join(SCRIPT_DIR, "weather_stats.csv")
 FORECAST_DB = os.path.join(SCRIPT_DIR, "forecast.db")
@@ -129,9 +145,11 @@ STATS_LOCK = threading.Lock()
 # Дефолтные параметры
 DEFAULT_CONFIG = {
     "port": 8085,
+    "primary_source": "yandex",
     "cache_interval_minutes": 60,  # 24 запроса в сутки (квота 30/день)
     "fallback_interval_minutes": 15,  # опрос при возврате на основной источник (если не 403)
     "api": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+    "gismeteo_api_key": "",
     "lat": 56.317722,
     "lon": 43.999303,
     "enable_gismeteo_fallback": True,
@@ -185,7 +203,7 @@ def sanitize_secrets(text):
     except Exception:
         cfg = {}
     secrets = []
-    for k in ("api", "foreca_api_key", "openweathermap_api_key"):
+    for k in ("api", "foreca_api_key", "openweathermap_api_key", "gismeteo_api_key"):
         v = cfg.get(k)
         if v and isinstance(v, str) and len(v.strip()) > 4 and v.strip() != "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx":
             secrets.append(v.strip())
@@ -194,6 +212,7 @@ def sanitize_secrets(text):
     s = re.sub(r'([?&](?:appid|api_key|apikey|key|token)=)[^&\s]+', r'\1******', s, flags=re.IGNORECASE)
     s = re.sub(r'(Bearer\s+)[A-Za-z0-9_\-\.~+/=]+', r'\1******', s, flags=re.IGNORECASE)
     s = re.sub(r'(X-Yandex-Weather-Key[:=]\s*)[^\s]+', r'\1******', s, flags=re.IGNORECASE)
+    s = re.sub(r'(X-Gismeteo-Token[:=]\s*)[^\s,\'"]+', r'\1******', s, flags=re.IGNORECASE)
     return s
 
 
@@ -1193,6 +1212,13 @@ def _store_location_result(key, data, note=None, ttl=None):
         if data and data.get("src") == "Yandex":
             LOCATION_CACHE[base_key] = {"data": data, "ts": ts, "ttl": entry_ttl}
             LOCATION_CACHE[base_key + ":yandex"] = {"data": data, "ts": ts, "ttl": entry_ttl}
+        elif data and data.get("src") == "Gismeteo":
+            if data.get("gismeteo_v2"):
+                LOCATION_CACHE[base_key] = {"data": data, "ts": ts, "ttl": entry_ttl}
+                LOCATION_CACHE[base_key + ":gismeteo"] = {"data": data, "ts": ts, "ttl": entry_ttl}
+            else:
+                LOCATION_CACHE[base_key + ":gismeteo_xml"] = {"data": data, "ts": ts, "ttl": entry_ttl}
+                LOCATION_CACHE[base_key] = {"data": data, "ts": ts, "ttl": entry_ttl}
 
         if len(LOCATION_CACHE) > MAX_LOCATIONS:
             evictable = sorted(
@@ -1206,7 +1232,8 @@ def _store_location_result(key, data, note=None, ttl=None):
                     if lk and not lk.locked():
                         KEY_LOCKS.pop(k, None)
 
-        if key == defk or (base_key == defk and data and data.get("src") == "Yandex"):
+        is_primary = (data and data.get("src") == "Gismeteo") if cfg.get("primary_source", "yandex") == "gismeteo" else (data and data.get("src") == "Yandex")
+        if key == defk or (base_key == defk and (is_primary or not cached_data)):
             LOCATION_CACHE[defk] = {"data": data, "ts": ts, "ttl": entry_ttl}
             cached_data = data
             last_fetch_time = ts
@@ -1225,7 +1252,7 @@ def _store_location_result(key, data, note=None, ttl=None):
 
 
 def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
-    global last_error_message, last_fetch_time
+    global last_error_message, last_fetch_time, gismeteo_v2_quota_blocked_until
     if key is None:
         key = loc_key(lat, lon)
     base_key = loc_key(lat, lon)
@@ -1238,10 +1265,16 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
             base_entry = LOCATION_CACHE.get(base_key)
             if base_entry and base_entry.get("data", {}).get("src") == "Yandex":
                 entry = base_entry
+        elif not entry and sources == ("gismeteo",):
+            g_entry = LOCATION_CACHE.get(base_key + ":gismeteo")
+            if g_entry:
+                entry = g_entry
         elif not entry and sources is None:
-            y_entry = LOCATION_CACHE.get(base_key + ":yandex")
-            if y_entry and y_entry.get("data", {}).get("src") == "Yandex":
-                entry = y_entry
+            primary = cfg.get("primary_source", "yandex")
+            prim_key = base_key + (":gismeteo" if primary == "gismeteo" else ":yandex")
+            p_entry = LOCATION_CACHE.get(prim_key)
+            if p_entry:
+                entry = p_entry
 
         if not force and entry:
             cache_ttl = entry.get("ttl")
@@ -1255,16 +1288,18 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
         return sources is None or name in sources
 
     api_key = cfg.get("api", "")
-    yandex_quota_blocked = False
+    gismeteo_v2_key = cfg.get("gismeteo_api_key", "").strip()
+    primary_source = cfg.get("primary_source", "yandex").lower()
+    primary_quota_blocked = False
 
-    # 1. Яндекс.Погода (основной доверенный источник)
-    if want("yandex"):
+    def _try_yandex():
+        nonlocal primary_quota_blocked
+        global last_error_message
         yandex_url = f"https://api.weather.yandex.ru/v2/forecast?lat={lat}&lon={lon}"
         headers = {
             "X-Yandex-Weather-Key": api_key,
             "User-Agent": "WeatherInformerLocal/1.0"
         }
-
         log.info("Requesting Yandex Weather API (%s, %s) [%s]...", lat, lon, key)
         req = urllib.request.Request(yandex_url, headers=headers)
         try:
@@ -1284,7 +1319,7 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
         except urllib.error.HTTPError as e:
             last_error_message = sanitize_secrets(f"Yandex HTTP {e.code}: {e.reason}")
             if e.code in (401, 402, 403, 429):
-                yandex_quota_blocked = True
+                primary_quota_blocked = True
                 log.warning("Yandex API quota/auth error HTTP %s: %s (keeping standard %d min cooldown, will not hammer)",
                             e.code, e.reason, interval // 60)
             else:
@@ -1292,27 +1327,96 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
         except Exception as e:
             last_error_message = sanitize_secrets(f"Yandex request error: {e}")
             log.warning("Yandex request failed: %s", sanitize_secrets(e))
+        return None
 
-    # При сбое Яндекса: если 403/429/401 — ждем полный интервал (не долбим квоту);
-    # если временный сбой сети/DNS/таймаут — используем укороченный probe TTL (15 мин),
-    # чтобы быстро вернуться на Яндекс, как только связь восстановится.
-    probe_interval = cfg.get("fallback_interval_minutes", 15) * 60
-    fallback_ttl = interval if yandex_quota_blocked else probe_interval
-
-    # 2. Gismeteo (первый резерв для РФ: богатая локальная модель, без токена)
-    if want("gismeteo") and cfg.get("enable_gismeteo_fallback", True):
-        log.info("Attempting fallback to Gismeteo...")
+    def _try_gismeteo_v2():
+        nonlocal primary_quota_blocked
+        global last_error_message, gismeteo_v2_quota_blocked_until
+        if not gismeteo_v2_key:
+            return None
+        if time.time() <= gismeteo_v2_quota_blocked_until:
+            log.debug("Gismeteo v2 quota currently blocked until %s", gismeteo_v2_quota_blocked_until)
+            return None
+        log.info("Requesting official Gismeteo v2 API (%s, %s)...", lat, lon)
+        GISMETEO_V2.api_key = gismeteo_v2_key
         try:
-            g_data = GISMETEO.get_weather(latitude=lat, longitude=lon)
-            _store_location_result(key, g_data, "Active fallback: Gismeteo (Yandex unavailable)", ttl=fallback_ttl)
+            g_data = GISMETEO_V2.get_weather(lat, lon)
+            _store_location_result(key, g_data, None, ttl=interval)
             stats_log_source("Gismeteo", g_data)
             record_forecast("Gismeteo", key, g_data)
-            log.info("Successfully updated weather via Gismeteo fallback (temp: %s°, ttl: %.1f min)",
-                     g_data["fact"].get("temp"), fallback_ttl / 60)
+            log.info("Successfully fetched weather via Gismeteo v2 (temp: %s°)", g_data["fact"].get("temp"))
+            return g_data
+        except GismeteoV2QuotaError as e:
+            gismeteo_v2_quota_blocked_until = _next_midnight_utc()
+            if primary_source == "gismeteo":
+                primary_quota_blocked = True
+            last_error_message = sanitize_secrets(f"Gismeteo v2 Quota: {e}")
+            log.warning("Gismeteo v2 quota blocked until %s: %s", gismeteo_v2_quota_blocked_until, sanitize_secrets(e))
+        except Exception as e:
+            last_error_message = sanitize_secrets(f"Gismeteo v2: {e}")
+            log.warning("Gismeteo v2 error: %s", sanitize_secrets(e))
+        return None
+
+    def _try_gismeteo_xml(ttl):
+        global last_error_message
+        if not cfg.get("enable_gismeteo_fallback", True):
+            return None
+        log.info("Attempting Gismeteo XML...")
+        try:
+            g_data = GISMETEO.get_weather(latitude=lat, longitude=lon)
+            _store_location_result(key, g_data, "Active fallback: Gismeteo XML", ttl=ttl)
+            stats_log_source("Gismeteo", g_data)
+            record_forecast("Gismeteo", key, g_data)
+            log.info("Successfully updated weather via Gismeteo XML (temp: %s°, ttl: %.1f min)",
+                     g_data["fact"].get("temp"), ttl / 60)
             return g_data
         except Exception as e:
             last_error_message = sanitize_secrets(f"Gismeteo: {e}")
             log.error("Gismeteo fallback failed: %s", sanitize_secrets(e))
+        return None
+
+    # Вызовы по явному источнику
+    if sources == ("gismeteo_xml",):
+        res = _try_gismeteo_xml(interval)
+        if res:
+            return res
+
+    if sources == ("gismeteo",):
+        res = _try_gismeteo_v2()
+        if res:
+            return res
+        res = _try_gismeteo_xml(interval)
+        if res:
+            return res
+
+    if sources == ("yandex",):
+        res = _try_yandex()
+        if res:
+            return res
+
+    # Общий вызов (sources is None) с учетом primary_source
+    if primary_source == "gismeteo":
+        if want("gismeteo"):
+            res = _try_gismeteo_v2()
+            if res:
+                return res
+
+    if want("yandex"):
+        res = _try_yandex()
+        if res:
+            return res
+
+    probe_interval = cfg.get("fallback_interval_minutes", 15) * 60
+    fallback_ttl = interval if primary_quota_blocked else probe_interval
+
+    if want("gismeteo"):
+        if primary_source != "gismeteo":
+            res = _try_gismeteo_v2()
+            if res:
+                return res
+        res = _try_gismeteo_xml(fallback_ttl)
+        if res:
+            return res
 
     # 3. Foreca (второй резерв: модель ECMWF, высокая точность, официальный Bearer-токен)
     if want("foreca") and cfg.get("enable_foreca_fallback", True) and cfg.get("foreca_api_key", ""):
@@ -1402,7 +1506,7 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
     defk = loc_key(cfg.get("lat", 56.317722), cfg.get("lon", 43.999303))
     base_key = loc_key(lat, lon)
     with LOCATION_CACHE_LOCK:
-        fail_ttl = interval if yandex_quota_blocked else probe_interval
+        fail_ttl = interval if primary_quota_blocked else probe_interval
         cur_entry = LOCATION_CACHE.get(key)
         if cur_entry is not None:
             cur_entry["ts"] = ts
@@ -1782,7 +1886,7 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
             "openweathermap": "owm",
         }
         src_filter = SOURCE_ALIASES.get(src_filter, src_filter)
-        valid_sources = ("yandex", "gismeteo", "foreca", "om", "owm", "7timer", "wttr")
+        valid_sources = ("yandex", "gismeteo", "gismeteo_xml", "foreca", "om", "owm", "7timer", "wttr")
         sources = None
         if src_filter:
             if src_filter not in valid_sources:

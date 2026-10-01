@@ -852,6 +852,47 @@ class TestFallbackHierarchyAndProbe(unittest.TestCase):
             handler = caching_server.WeatherHTTPHandler(req, ("127.0.0.1", 12345), None)
             self.assertEqual(mock_gw.call_args[1]["sources"], ("owm",))
 
+    def test_sanitize_gismeteo_token(self):
+        """gismeteo_api_key и заголовок X-Gismeteo-Token маскируются в sanitize_secrets()"""
+        secret_token = "gism-t0k3n-ABCDEF123456"
+        cfg = {
+            "api": "yandex-key",
+            "gismeteo_api_key": secret_token,
+        }
+        with patch("caching_server.load_config", return_value=cfg):
+            raw = f"Failed to fetch: token={secret_token} in url"
+            sanitized = caching_server.sanitize_secrets(raw)
+            self.assertNotIn(secret_token, sanitized)
+
+            raw2 = f"Request headers: {{X-Gismeteo-Token: {secret_token}}}"
+            sanitized2 = caching_server.sanitize_secrets(raw2)
+            self.assertNotIn(secret_token, sanitized2)
+            self.assertIn("X-Gismeteo-Token: ******", sanitized2)
+
+    def test_primary_source_gismeteo(self):
+        """При primary_source='gismeteo' Gismeteo v2 вызывается в первую очередь"""
+        calls = []
+        def fake_v2(lat, lon):
+            calls.append("gismeteo_v2")
+            return {"src": "Gismeteo", "fact": {"temp": 20}, "forecasts": [], "gismeteo_v2": True}
+
+        def fake_yandex(*args, **kwargs):
+            calls.append("yandex")
+            raise urllib.error.URLError("Network down")
+
+        cfg = {
+            "primary_source": "gismeteo",
+            "gismeteo_api_key": "my-secret-key",
+            "api": "yandex-key",
+            "cache_interval_minutes": 60,
+        }
+        with patch("caching_server.load_config", return_value=cfg):
+            with patch.object(caching_server.GISMETEO_V2, "get_weather", side_effect=fake_v2):
+                with patch.object(urllib.request, "urlopen", side_effect=fake_yandex):
+                    res = caching_server._fetch_weather_locked(force=True, lat=56.32, lon=44.0)
+                    self.assertEqual(res["src"], "Gismeteo")
+                    self.assertEqual(calls, ["gismeteo_v2"])
+
 
 if __name__ == "__main__":
     unittest.main()

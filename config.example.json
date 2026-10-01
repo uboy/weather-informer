@@ -1,6 +1,8 @@
 {
   "server_url": "",
+  "primary_source": "yandex",
   "api": "ВАШ_КЛЮЧ_YANDEX_WEATHER_API",
+  "gismeteo_api_key": "ВАШ_КЛЮЧ_GISMETEO_V2",
   "lat": 56.317722,
   "lon": 43.999303,
   "timeout": 3600,
