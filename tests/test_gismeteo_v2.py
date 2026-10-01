@@ -104,6 +104,7 @@ class GismeteoV2Tests(unittest.TestCase):
         with patch.object(self.provider, "_http_get", side_effect=mock_http):
             res = self.provider.get_weather(56.32, 44.00)
             self.assertEqual(res["src"], "Gismeteo")
+            self.assertEqual(res.get("city_name"), "НН")
             fact = res["fact"]
             self.assertEqual(fact["temp"], 18)
             self.assertEqual(fact["pressure_mm"], 755)

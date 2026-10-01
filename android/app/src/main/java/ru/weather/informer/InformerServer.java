@@ -134,7 +134,11 @@ public class InformerServer {
                 "<label>Широта (Latitude):</label><input type='number' step='0.0001' id='lat'>" +
                 "<label>Долгота (Longitude):</label><input type='number' step='0.0001' id='lon'>" +
                 "<button type='button' class='btn-gps' id='btn_gps'>Определить GPS со смартфона</button>" +
-                "<label>Город (для отображения):</label><input type='text' id='city_name'>" +
+                "<label>Город (для отображения):</label>" +
+                "<div style='display:flex; gap:6px; align-items:center;'>" +
+                "<input type='text' id='city_name' placeholder='Определяется автоматически'>" +
+                "<button type='button' class='btn-gps' id='btn_detect_city' style='width:auto; margin-top:5px; white-space:nowrap; background:#00838F; padding:10px 14px;'>Авто</button>" +
+                "</div>" +
                 "<label>Адрес домашнего сервера (server_url):</label><input type='text' id='server_url' placeholder='http://192.168.1.55:8085'>" +
                 "<label>Основной источник погоды:</label>" +
                 "<select id='primary_source'><option value='yandex'>Яндекс.Погода (API)</option><option value='gismeteo'>Gismeteo v2 (API Token)</option></select>" +
@@ -158,20 +162,53 @@ public class InformerServer {
                 "document.getElementById('gismeteo_api_key').value = c.gismeteo_api_key || '';" +
                 "document.getElementById('api').value = (c.api && c.api.indexOf('xxxx')===-1) ? c.api : '';" +
                 "});" +
+                "function detectCity(la, lo){" +
+                "if(!la || !lo) return Promise.resolve(null);" +
+                "var cInput = document.getElementById('city_name');" +
+                "var tok = document.getElementById('gismeteo_api_key').value.trim();" +
+                "var q = '/api/reverse?lat=' + la + '&lon=' + lo + (tok ? ('&token=' + encodeURIComponent(tok)) : '');" +
+                "cInput.placeholder = 'Определение города...';" +
+                "return fetch(q).then(function(r){return r.json();}).then(function(res){" +
+                "if(res && res.name){" +
+                "cInput.value = res.name;" +
+                "currentCfg.city_name = res.name;" +
+                "var s = document.getElementById('status');" +
+                "s.style.display = 'block'; s.style.background = '#00695C';" +
+                "s.innerText = 'Город определён: ' + res.name + (res.source ? ' [' + res.source + ']' : '');" +
+                "setTimeout(function(){ s.style.display='none'; }, 3500);" +
+                "return res.name;" +
+                "} else {" +
+                "cInput.placeholder = 'Введите город вручную';" +
+                "return null;" +
+                "}" +
+                "}).catch(function(){" +
+                "cInput.placeholder = 'Введите город вручную';" +
+                "return null;" +
+                "});" +
+                "}" +
                 "document.getElementById('btn_gps').onclick = function(){" +
                 "if(!navigator.geolocation){alert('Геолокация недоступна'); return;}" +
                 "navigator.geolocation.getCurrentPosition(function(p){" +
-                "document.getElementById('lat').value = p.coords.latitude.toFixed(4);" +
-                "document.getElementById('lon').value = p.coords.longitude.toFixed(4);" +
+                "var la = p.coords.latitude.toFixed(4);" +
+                "var lo = p.coords.longitude.toFixed(4);" +
+                "document.getElementById('lat').value = la;" +
+                "document.getElementById('lon').value = lo;" +
+                "detectCity(la, lo);" +
                 "}, function(e){alert('Ошибка GPS: ' + e.message);});" +
                 "};" +
-                "document.getElementById('btn_save').onclick = function(){" +
+                "document.getElementById('btn_detect_city').onclick = function(){" +
+                "var la = document.getElementById('lat').value.trim();" +
+                "var lo = document.getElementById('lon').value.trim();" +
+                "if(!la || !lo){alert('Сначала укажите координаты'); return;}" +
+                "detectCity(la, lo);" +
+                "};" +
+                "function doSave(){" +
                 "currentCfg.lat = parseFloat(document.getElementById('lat').value);" +
                 "currentCfg.lon = parseFloat(document.getElementById('lon').value);" +
-                "currentCfg.city_name = document.getElementById('city_name').value;" +
-                "currentCfg.server_url = document.getElementById('server_url').value;" +
+                "currentCfg.city_name = document.getElementById('city_name').value.trim();" +
+                "currentCfg.server_url = document.getElementById('server_url').value.trim();" +
                 "currentCfg.primary_source = document.getElementById('primary_source').value;" +
-                "currentCfg.gismeteo_api_key = document.getElementById('gismeteo_api_key').value;" +
+                "currentCfg.gismeteo_api_key = document.getElementById('gismeteo_api_key').value.trim();" +
                 "var yk = document.getElementById('api').value.trim();" +
                 "if(yk) currentCfg.api = yk;" +
                 "var s = document.getElementById('status');" +
@@ -182,6 +219,16 @@ public class InformerServer {
                 "}).catch(function(e){" +
                 "s.style.display='block'; s.style.background='#B71C1C'; s.innerText='Ошибка: ' + e;" +
                 "});" +
+                "}" +
+                "document.getElementById('btn_save').onclick = function(){" +
+                "var la = document.getElementById('lat').value.trim();" +
+                "var lo = document.getElementById('lon').value.trim();" +
+                "var cn = document.getElementById('city_name').value.trim();" +
+                "if(!cn && la && lo){" +
+                "detectCity(la, lo).then(function(){ doSave(); });" +
+                "} else {" +
+                "doSave();" +
+                "}" +
                 "};" +
                 "document.getElementById('btn_reload').onclick = function(){" +
                 "fetch('/api/reload', {method:'POST'}).then(function(){alert('Экран обновлён!');});" +

@@ -1,6 +1,8 @@
 package ru.weather.informer;
 
 import android.util.Log;
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 import java.io.*;
 import java.net.*;
@@ -178,7 +180,13 @@ public class ClientHandler implements Runnable {
             return;
         }
 
-        // 8. Статические файлы (информер, js, css, config)
+        // 8. Определение города по координатам /api/reverse
+        if (path.equals("/api/reverse")) {
+            handleReverseGeocode(query, out);
+            return;
+        }
+
+        // 9. Статические файлы (информер, js, css, config)
         if (path.equals("/") || path.equals("/informer.html") || path.equals("/index.html")) {
             serveFile("informer.html", "text/html; charset=utf-8", out);
             return;
@@ -275,6 +283,157 @@ public class ClientHandler implements Runnable {
         } catch (Exception e) {
             sendResponse(out, 502, "Bad Gateway", "application/json",
                     ("{\"error\":\"Proxy request failed: " + e.getMessage() + "\"}").getBytes(StandardCharsets.UTF_8));
+        }
+    }
+
+    private void handleReverseGeocode(String query, OutputStream out) {
+        Map<String, String> params = parseQuery(query);
+        String latStr = params.get("lat");
+        String lonStr = params.get("lon");
+        if (latStr == null || lonStr == null) {
+            sendResponse(out, 400, "Bad Request", "application/json; charset=utf-8",
+                    "{\"error\":\"lat and lon parameters required\"}".getBytes(StandardCharsets.UTF_8));
+            return;
+        }
+
+        double lat, lon;
+        try {
+            lat = Double.parseDouble(latStr);
+            lon = Double.parseDouble(lonStr);
+        } catch (NumberFormatException e) {
+            sendResponse(out, 400, "Bad Request", "application/json; charset=utf-8",
+                    "{\"error\":\"invalid coordinates\"}".getBytes(StandardCharsets.UTF_8));
+            return;
+        }
+
+        String gismeteoKey = params.get("token");
+        String serverUrl = null;
+        try {
+            byte[] cfgBytes = server.readConfigFile();
+            if (cfgBytes != null && cfgBytes.length > 0) {
+                JSONObject cfg = new JSONObject(new String(cfgBytes, StandardCharsets.UTF_8));
+                if (gismeteoKey == null || gismeteoKey.isEmpty()) {
+                    gismeteoKey = cfg.optString("gismeteo_api_key", "");
+                }
+                serverUrl = cfg.optString("server_url", "");
+            }
+        } catch (Exception ignored) {}
+
+        String resolvedName = null;
+        String source = null;
+
+        // 1. Попытка через официальный Gismeteo API v2 (источник погоды)
+        if (gismeteoKey != null && !gismeteoKey.isEmpty()) {
+            try {
+                String gUrl = "https://api.gismeteo.net/v2/search/cities/?latitude=" + lat + "&longitude=" + lon + "&limit=1";
+                HttpURLConnection conn = (HttpURLConnection) new URL(gUrl).openConnection();
+                conn.setRequestMethod("GET");
+                conn.setConnectTimeout(8000);
+                conn.setReadTimeout(8000);
+                conn.setRequestProperty("User-Agent", "WeatherInformerLocal-Tablet/1.0");
+                conn.setRequestProperty("X-Gismeteo-Token", gismeteoKey);
+                if (conn.getResponseCode() == 200) {
+                    try (InputStream is = conn.getInputStream();
+                         ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+                        byte[] b = new byte[2048];
+                        int n;
+                        while ((n = is.read(b)) != -1) baos.write(b, 0, n);
+                        JSONObject root = new JSONObject(new String(baos.toByteArray(), StandardCharsets.UTF_8));
+                        JSONObject resp = root.optJSONObject("response");
+                        JSONArray items = resp != null ? resp.optJSONArray("items") : root.optJSONArray("items");
+                        if (items != null && items.length() > 0) {
+                            JSONObject cityObj = items.getJSONObject(0);
+                            String cName = cityObj.optString("name", "");
+                            if (!cName.isEmpty()) {
+                                resolvedName = cName;
+                                source = "gismeteo";
+                            }
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Gismeteo city search failed: " + e.getMessage());
+            }
+        }
+
+        // 2. Попытка через домашний сервер кэширования
+        if (resolvedName == null && serverUrl != null && !serverUrl.isEmpty()) {
+            try {
+                String sBase = serverUrl.replaceAll("/weather\\.json.*$", "").replaceAll("/$", "");
+                String sUrl = sBase + "/reverse?lat=" + lat + "&lon=" + lon;
+                HttpURLConnection conn = (HttpURLConnection) new URL(sUrl).openConnection();
+                conn.setRequestMethod("GET");
+                conn.setConnectTimeout(8000);
+                conn.setReadTimeout(8000);
+                conn.setRequestProperty("User-Agent", "WeatherInformerLocal-Tablet/1.0");
+                if (conn.getResponseCode() == 200) {
+                    try (InputStream is = conn.getInputStream();
+                         ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+                        byte[] b = new byte[2048];
+                        int n;
+                        while ((n = is.read(b)) != -1) baos.write(b, 0, n);
+                        JSONObject root = new JSONObject(new String(baos.toByteArray(), StandardCharsets.UTF_8));
+                        String cName = root.optString("name", "");
+                        if (!cName.isEmpty()) {
+                            resolvedName = cName;
+                            source = "caching_server";
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Server reverse geocode failed: " + e.getMessage());
+            }
+        }
+
+        // 3. Попытка через OpenStreetMap Nominatim
+        if (resolvedName == null) {
+            try {
+                String oUrl = "https://nominatim.openstreetmap.org/reverse?lat=" + lat + "&lon=" + lon +
+                        "&format=jsonv2&zoom=10&accept-language=ru";
+                HttpURLConnection conn = (HttpURLConnection) new URL(oUrl).openConnection();
+                conn.setRequestMethod("GET");
+                conn.setConnectTimeout(8000);
+                conn.setReadTimeout(8000);
+                conn.setRequestProperty("User-Agent", "WeatherInformerLocal-Tablet/1.0");
+                if (conn.getResponseCode() == 200) {
+                    try (InputStream is = conn.getInputStream();
+                         ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+                        byte[] b = new byte[4096];
+                        int n;
+                        while ((n = is.read(b)) != -1) baos.write(b, 0, n);
+                        JSONObject root = new JSONObject(new String(baos.toByteArray(), StandardCharsets.UTF_8));
+                        JSONObject addr = root.optJSONObject("address");
+                        String name = "";
+                        if (addr != null) {
+                            name = addr.optString("city", "");
+                            if (name.isEmpty()) name = addr.optString("town", "");
+                            if (name.isEmpty()) name = addr.optString("village", "");
+                            if (name.isEmpty()) name = addr.optString("municipality", "");
+                            if (name.isEmpty()) name = addr.optString("state", "");
+                        }
+                        if (name.isEmpty()) name = root.optString("name", "");
+                        if (name.isEmpty()) {
+                            String disp = root.optString("display_name", "");
+                            if (!disp.isEmpty()) name = disp.split(",")[0].trim();
+                        }
+                        if (!name.isEmpty()) {
+                            resolvedName = name;
+                            source = "osm";
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "OSM reverse geocode failed: " + e.getMessage());
+            }
+        }
+
+        if (resolvedName != null) {
+            String json = "{\"name\":\"" + resolvedName.replace("\"", "\\\"") +
+                    "\",\"source\":\"" + source + "\",\"lat\":" + lat + ",\"lon\":" + lon + "}";
+            sendResponse(out, 200, "OK", "application/json; charset=utf-8", json.getBytes(StandardCharsets.UTF_8));
+        } else {
+            sendResponse(out, 404, "Not Found", "application/json; charset=utf-8",
+                    "{\"error\":\"Не удалось определить город по координатам\"}".getBytes(StandardCharsets.UTF_8));
         }
     }
 

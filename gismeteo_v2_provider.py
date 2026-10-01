@@ -300,10 +300,15 @@ class GismeteoV2Provider:
             }
         ]
 
-        return {
+        res = {
             "src": "Gismeteo",
             "now": int(time.time()),
             "fact": fact,
             "forecasts": forecasts,
             "gismeteo_v2": True,
         }
+        cache_key = f"{round(float(lat), 2)}:{round(float(lon), 2)}"
+        resolved_city_name = city_name or self._city_cache.get(cache_key, {}).get("name")
+        if resolved_city_name:
+            res["city_name"] = resolved_city_name
+        return res

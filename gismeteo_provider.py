@@ -342,12 +342,15 @@ class GismeteoProvider:
             "parts": parts,
         }, {"parts": next_night}]
 
-        return {
+        out = {
             "src": "Gismeteo",
             "fact": fact,
             "forecasts": forecasts,
             "gismeteo_points": [self._public_point(p) for p in raw_points],
         }
+        if place and place.get("name"):
+            out["city_name"] = place["name"]
+        return out
 
     # ------------------------------------------------------------------ #
     # Вспомогательные

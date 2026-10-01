@@ -494,7 +494,21 @@ function city_prefix() {
 
 function current_city_name() {
 	var n = safe_get_item("city_name", "");
-	return n ? n : city_name_cfg;
+	if (n) return n;
+	if (city_name_cfg) return city_name_cfg;
+	if (current_weather_data) {
+		if (current_weather_data.city_name) return current_weather_data.city_name;
+		if (current_weather_data.geo_object && current_weather_data.geo_object.locality && current_weather_data.geo_object.locality.name) {
+			return current_weather_data.geo_object.locality.name;
+		}
+		if (current_weather_data.geo_object && current_weather_data.geo_object.province && current_weather_data.geo_object.province.name) {
+			return current_weather_data.geo_object.province.name;
+		}
+		if (current_weather_data.location && current_weather_data.location.name) {
+			return current_weather_data.location.name;
+		}
+	}
+	return "";
 }
 
 function safe_get_item(key, fallback) {
@@ -715,10 +729,18 @@ function init_menu() {
 		render_color();
 	});
 	function render_city() {
+		var manual = safe_get_item("city_name", "");
 		var n = current_city_name();
-		$("#city_current").text("Город: " + (n ? n : "не задан"));
-		if (safe_get_item("city_name", "")) $("#city_reset").show();
-		else $("#city_reset").hide();
+		if (manual) {
+			$("#city_current").text("Город: " + manual);
+			$("#city_reset").show();
+		} else if (n) {
+			$("#city_current").text("Город: " + n + " (авто)");
+			$("#city_reset").hide();
+		} else {
+			$("#city_current").text("Город: не задан");
+			$("#city_reset").hide();
+		}
 	}
 	function apply_city() {
 		current_weather_data = null; // не показывать погоду чужого города
@@ -739,21 +761,73 @@ function init_menu() {
 		navigator.geolocation.getCurrentPosition(function(pos) {
 			var gla = pos.coords.latitude, glo = pos.coords.longitude;
 			var base = server_base();
-			if (!base) { $("#city_current").text("Нет адреса сервера для определения города"); return; }
-			$.ajax({ url: base + "/reverse?lat=" + gla + "&lon=" + glo, dataType: "json", timeout: 15000 })
-				.done(function(r) {
-					if (r && r.name) {
-						safe_set_item("city_name", r.name);
+
+			function try_gismeteo_or_osm() {
+				var gkey = safe_get_item("gismeteo_api_key", "") || gismeteo_api_key_cfg;
+				if (gkey) {
+					$.ajax({
+						url: "https://api.gismeteo.net/v2/search/cities/?latitude=" + gla + "&longitude=" + glo + "&limit=1",
+						headers: { "X-Gismeteo-Token": gkey },
+						dataType: "json",
+						timeout: 10000
+					}).done(function(cdata) {
+						var items = (cdata && cdata.response && cdata.response.items) ? cdata.response.items : [];
+						if (items.length && items[0].name) {
+							safe_set_item("city_name", items[0].name);
+							safe_set_item("city_lat", gla);
+							safe_set_item("city_lon", glo);
+							apply_city();
+							return;
+						}
+						try_osm_direct();
+					}).fail(function() {
+						try_osm_direct();
+					});
+				} else {
+					try_osm_direct();
+				}
+			}
+
+			function try_osm_direct() {
+				$.ajax({
+					url: "https://nominatim.openstreetmap.org/reverse?lat=" + gla + "&lon=" + glo + "&format=jsonv2&zoom=10&accept-language=ru",
+					dataType: "json",
+					timeout: 10000
+				}).done(function(r) {
+					var addr = (r && r.address) || {};
+					var name = (addr.city || addr.town || addr.village || addr.municipality || addr.state || (r && r.name) || "").trim();
+					if (!name && r && r.display_name) name = r.display_name.split(",")[0].trim();
+					if (name) {
+						safe_set_item("city_name", name);
 						safe_set_item("city_lat", gla);
 						safe_set_item("city_lon", glo);
 						apply_city();
 					} else {
 						$("#city_current").text("Не удалось определить город");
 					}
-				})
-				.fail(function() {
+				}).fail(function() {
 					$("#city_current").text("Ошибка определения города");
 				});
+			}
+
+			if (base) {
+				$.ajax({ url: base + "/reverse?lat=" + gla + "&lon=" + glo, dataType: "json", timeout: 10000 })
+					.done(function(r) {
+						if (r && r.name) {
+							safe_set_item("city_name", r.name);
+							safe_set_item("city_lat", gla);
+							safe_set_item("city_lon", glo);
+							apply_city();
+						} else {
+							try_gismeteo_or_osm();
+						}
+					})
+					.fail(function() {
+						try_gismeteo_or_osm();
+					});
+			} else {
+				try_gismeteo_or_osm();
+			}
 		}, function() {
 			$("#city_current").text("Геолокация отклонена или недоступна");
 		}, { timeout: 15000, maximumAge: 300000 });
@@ -1500,6 +1574,7 @@ function fetch_from_gismeteo_client(on_success, on_error) {
 			return;
 		}
 		var city_id = items[0].id;
+		var detected_city_name = items[0].name || "";
 		var fcUrl = "https://api.gismeteo.net/v2/weather/forecast/aggregate/" + city_id + "/?days=3";
 		$.ajax({
 			url: fcUrl,
@@ -1509,6 +1584,7 @@ function fetch_from_gismeteo_client(on_success, on_error) {
 		}).done(function(fdata) {
 			try {
 				var res = convert_gismeteo_v2(fdata);
+				if (detected_city_name && !res.city_name) res.city_name = detected_city_name;
 				if (on_success) on_success(res);
 			} catch(e) {
 				if (on_error) on_error(null, "parse_error", e && e.message);

@@ -101,7 +101,20 @@ def geocode_search(q, limit=6):
 
 
 def reverse_geocode(lat, lon):
-    """Координаты -> имя города"""
+    """Координаты -> имя города (сначала из источника погоды Gismeteo v2, затем Nominatim)"""
+    cfg = load_config()
+    gkey = cfg.get("gismeteo_api_key", "").strip()
+    if gkey:
+        try:
+            GISMETEO_V2.api_key = gkey
+            GISMETEO_V2.find_city_id(lat, lon)
+            cache_key = f"{round(float(lat), 2)}:{round(float(lon), 2)}"
+            g_name = GISMETEO_V2._city_cache.get(cache_key, {}).get("name")
+            if g_name:
+                return {"name": g_name, "lat": round(float(lat), 4), "lon": round(float(lon), 4), "source": "gismeteo"}
+        except Exception as e:
+            log.debug("Gismeteo reverse geocode error: %s", sanitize_secrets(e))
+
     res = _nominatim_get("/reverse", {
         "lat": lat, "lon": lon, "format": "jsonv2", "zoom": 10,
         "accept-language": "ru", "addressdetails": 1})
@@ -111,7 +124,7 @@ def reverse_geocode(lat, lon):
             or res.get("name") or "").strip()
     if not name:
         name = (res.get("display_name", "").split(",")[0] or "").strip()
-    return {"name": name, "lat": round(float(lat), 4), "lon": round(float(lon), 4)}
+    return {"name": name, "lat": round(float(lat), 4), "lon": round(float(lon), 4), "source": "osm"}
 
 
 GISMETEO = GismeteoProvider(
@@ -1207,6 +1220,11 @@ def _store_location_result(key, data, note=None, ttl=None):
     base_key = key.split(":")[0] + ":" + key.split(":")[1] if ":" in key else key
     should_save_disk = False
 
+    if data and isinstance(data, dict) and "city_name" not in data:
+        cfg_cn = cfg.get("city_name")
+        if cfg_cn:
+            data["city_name"] = cfg_cn
+
     with LOCATION_CACHE_LOCK:
         LOCATION_CACHE[key] = {"data": data, "ts": ts, "ttl": entry_ttl}
         if data and data.get("src") == "Yandex":
@@ -1308,6 +1326,10 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
                 if isinstance(data, dict) and "fact" in data and "forecasts" in data:
                     data = normalize_weather_data(data)
                     data["src"] = "Yandex"
+                    geo_obj = data.get("geo_object") or {}
+                    locality = (geo_obj.get("locality") or {}).get("name") or (geo_obj.get("province") or {}).get("name")
+                    if locality and "city_name" not in data:
+                        data["city_name"] = locality
                     _store_location_result(key, data, None, ttl=interval)
                     stats_log_source("Yandex", data)
                     record_forecast("Yandex", key, data)
