@@ -50,6 +50,7 @@ function srcOf(name) {
 const fnNames = ['safe_get_item', 'safe_set_item', 'moonPhaseCode', 'normalize_icon', 'calc_feels_like',
     'fetch_from_owm', 'fetch_from_om_client', 'fetch_from_7timer_client',
     'fetch_from_wttr', 'fetch_from_foreca_client', 'convert_foreca',
+    'convert_gismeteo_v2', 'gismeteo_v2_icon',
     'points_push', 'points_filter', 'points_each', 'points_each_day', 'foreca_icon'];
 let code = '';
 const aliasSrc = html.match(/^var ICON_ALIAS = \{[\s\S]*?^\};/m);
@@ -313,7 +314,40 @@ function hoursSane(hours) {
     }
 })();
 
+// ============================= Gismeteo v2 =============================
+(function () {
+    const items = [];
+    for (let i = 0; i < 24; i++) {
+        items.push({
+            temperature: { air: { C: 15.2 - (i % 5) } },
+            pressure: { mm_hg_atm: 755 },
+            wind: { speed: { m_s: 4.1 } },
+            humidity: { percent: 65 },
+            icon: "c3_r1",
+            description: { full: "Небольшой дождь" }
+        });
+    }
+    const gmData = { response: { items: items } };
+    try {
+        const convFn = eval('(function(){' + srcOf('gismeteo_v2_icon') + ';' + srcOf('convert_gismeteo_v2') + '; return convert_gismeteo_v2;})()');
+        const res = convFn(gmData);
+        check('Gismeteo v2: конвертация без ошибок', !!res);
+        if (res) {
+            check('Gismeteo v2: fact temp = 15', res.fact.temp === 15, JSON.stringify(res.fact.temp));
+            check('Gismeteo v2: fact humidity = 65', res.fact.humidity === 65, JSON.stringify(res.fact.humidity));
+            check('Gismeteo v2: fact pressure_mm = 755', res.fact.pressure_mm === 755, JSON.stringify(res.fact.pressure_mm));
+            check('Gismeteo v2: fact wind_speed = 4.1', res.fact.wind_speed === 4.1, JSON.stringify(res.fact.wind_speed));
+            check('Gismeteo v2: forecasts parts present', !!(res.forecasts[0] && res.forecasts[0].parts));
+            check('Gismeteo v2: hours sane', hoursSane(res.forecasts[0].hours));
+            check('Gismeteo v2: иконки частей в CSS', iconsOk(res.forecasts[0].parts));
+        }
+    } catch (e) {
+        check('Gismeteo v2: исключение при конвертации: ' + e.message, false);
+    }
+})();
+
 // --- astro_sun: астрономический восход/закат (фолбэк для источников без солнца) ---
+
 (function () {
     const m = html.match(/^function astro_sun[\s\S]*?^\}/m);
     check('astro_sun извлечена', !!m);
