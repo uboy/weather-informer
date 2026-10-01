@@ -694,6 +694,11 @@ function init_menu() {
 		menu.removeClass("menu_open");
 		get_data();
 	});
+	$("#menu_gismeteo_key").on("click", function(e) {
+		e.stopPropagation();
+		menu.removeClass("menu_open");
+		show_key_dialog("Ключ Gismeteo API v2", "gismeteo_api_key", function() { get_data(); });
+	});
 	function render_color() {
 		var pref = safe_get_item("weather_text_color", "#ffffff");
 		$(".menu_color").each(function() {
@@ -812,6 +817,7 @@ var city_name_cfg = ""; // Город из config.json (для статус-ба
 var night_dim_start = 23;
 var night_dim_end = 6;
 var foreca_api_key_cfg = ""; // Ключ Foreca из config.json планшета (опционально)
+var gismeteo_api_key_cfg = ""; // Ключ Gismeteo API v2 из config.json планшета
 var owm_key = ""; // Ключ OpenWeatherMap для клиентского фолбэка
 
 function apply_text_color(c) {
@@ -839,6 +845,7 @@ function load_config(callback) {
 		if (cfg.night_dim_start_hour !== undefined) night_dim_start = parseInt(cfg.night_dim_start_hour, 10) || 23;
 		if (cfg.night_dim_end_hour !== undefined) night_dim_end = parseInt(cfg.night_dim_end_hour, 10) || 6;
 		if (cfg.foreca_api_key !== undefined) foreca_api_key_cfg = String(cfg.foreca_api_key);
+		if (cfg.gismeteo_api_key !== undefined) gismeteo_api_key_cfg = String(cfg.gismeteo_api_key);
 		if (cfg.openweathermap_api_key !== undefined) owm_key = cfg.openweathermap_api_key;
 		apply_text_color(safe_get_item("weather_text_color", "") || cfg.text_color || "");
 		if (cfg.timeout !== undefined) timeout = cfg.timeout;
@@ -868,6 +875,7 @@ function load_config(callback) {
 			if (cfg.night_dim_start_hour !== undefined) night_dim_start = parseInt(cfg.night_dim_start_hour, 10) || 23;
 			if (cfg.night_dim_end_hour !== undefined) night_dim_end = parseInt(cfg.night_dim_end_hour, 10) || 6;
 			if (cfg.foreca_api_key !== undefined) foreca_api_key_cfg = String(cfg.foreca_api_key);
+			if (cfg.gismeteo_api_key !== undefined) gismeteo_api_key_cfg = String(cfg.gismeteo_api_key);
 			if (cfg.openweathermap_api_key !== undefined) owm_key = cfg.openweathermap_api_key;
 			var storedColor = safe_get_item("weather_text_color", "");
 			apply_text_color(storedColor || cfg.text_color || "");
@@ -1399,6 +1407,120 @@ function fetch_from_foreca_client(on_success, on_error) {
 		return 'ovc';
 	}
 
+function gismeteo_v2_icon(code, is_day) {
+	if (!code) return is_day ? 'skc_d' : 'skc_n';
+	var c = String(code).toLowerCase();
+	var s = is_day ? '_d' : '_n';
+	if (c.indexOf('t') !== -1) return 'ovc_ts';
+	if (c.indexOf('s') !== -1) return 'ovc_sn';
+	if (c.indexOf('r') !== -1) return 'ovc_ra';
+	if (c.indexOf('c3') !== -1) return 'ovc';
+	if (c.indexOf('c2') !== -1) return 'bkn' + s;
+	if (c.indexOf('c1') !== -1) return 'skc' + s;
+	return 'skc' + s;
+}
+
+function convert_gismeteo_v2(data) {
+	var resp = (data && data.response) ? data.response : data;
+	var items = (resp && resp.items) ? resp.items : (Array.isArray(resp) ? resp : []);
+	if (!items.length) throw new Error("Gismeteo v2: пустой ответ прогноза");
+	var cur = items[0];
+	var tempVal = (cur.temperature && cur.temperature.air && cur.temperature.air.C != null) ? cur.temperature.air.C : 0;
+	var pressVal = (cur.pressure && cur.pressure.mm_hg_atm != null) ? cur.pressure.mm_hg_atm : 750;
+	var windVal = (cur.wind && cur.wind.speed && cur.wind.speed.m_s != null) ? cur.wind.speed.m_s : 0;
+	var humVal = (cur.humidity && cur.humidity.percent != null) ? cur.humidity.percent : 0;
+	var iconCode = cur.icon || "";
+	var descr = (cur.description && cur.description.full) ? cur.description.full : "Ясно";
+	var isDay = (new Date().getHours() >= 6 && new Date().getHours() < 22);
+
+	var hours = [];
+	for (var i = 0; i < Math.min(items.length, 24); i++) {
+		var it = items[i];
+		var t = (it.temperature && it.temperature.air && it.temperature.air.C != null) ? it.temperature.air.C : tempVal;
+		hours.push({
+			hour: String(i % 24),
+			temp: Math.round(t),
+			icon: gismeteo_v2_icon(it.icon || iconCode, (i % 24 >= 6 && i % 24 < 22)),
+			condition: (it.description && it.description.full) || descr,
+			wind_speed: (it.wind && it.wind.speed && it.wind.speed.m_s) || windVal,
+			pressure_mm: Math.round((it.pressure && it.pressure.mm_hg_atm) || pressVal),
+			humidity: (it.humidity && it.humidity.percent) || humVal
+		});
+	}
+
+	var parts = {
+		night: { temp_avg: Math.round(tempVal), icon: gismeteo_v2_icon(iconCode, false), condition: descr, wind_speed: windVal, pressure_mm: Math.round(pressVal), humidity: humVal },
+		morning: { temp_avg: Math.round(tempVal), icon: gismeteo_v2_icon(iconCode, true), condition: descr, wind_speed: windVal, pressure_mm: Math.round(pressVal), humidity: humVal },
+		day: { temp_avg: Math.round(tempVal), icon: gismeteo_v2_icon(iconCode, true), condition: descr, wind_speed: windVal, pressure_mm: Math.round(pressVal), humidity: humVal },
+		evening: { temp_avg: Math.round(tempVal), icon: gismeteo_v2_icon(iconCode, false), condition: descr, wind_speed: windVal, pressure_mm: Math.round(pressVal), humidity: humVal }
+	};
+
+	return {
+		src: "Gismeteo",
+		fact: {
+			temp: Math.round(tempVal),
+			icon: gismeteo_v2_icon(iconCode, isDay),
+			wind_speed: windVal,
+			wind_angle: 0,
+			humidity: humVal,
+			pressure_mm: Math.round(pressVal),
+			condition: descr
+		},
+		forecasts: [
+			{
+				sunrise: "06:00",
+				sunset: "19:00",
+				moon_code: 0,
+				hours: hours,
+				parts: parts
+			},
+			{
+				parts: parts
+			}
+		]
+	};
+}
+
+function fetch_from_gismeteo_client(on_success, on_error) {
+	var key = safe_get_item("gismeteo_api_key", "") || gismeteo_api_key_cfg;
+	if (!key) {
+		if (on_error) on_error(null, "no_key", "нет ключа Gismeteo API");
+		return;
+	}
+	var searchUrl = "https://api.gismeteo.net/v2/search/cities/?latitude=" + lat + "&longitude=" + lon + "&limit=1";
+	$.ajax({
+		url: searchUrl,
+		headers: { "X-Gismeteo-Token": key },
+		dataType: "json",
+		timeout: 15000
+	}).done(function(cdata) {
+		var items = (cdata && cdata.response && cdata.response.items) ? cdata.response.items : [];
+		if (!items.length || !items[0].id) {
+			if (on_error) on_error(null, "city_not_found", "город не найден");
+			return;
+		}
+		var city_id = items[0].id;
+		var fcUrl = "https://api.gismeteo.net/v2/weather/forecast/aggregate/" + city_id + "/?days=3";
+		$.ajax({
+			url: fcUrl,
+			headers: { "X-Gismeteo-Token": key },
+			dataType: "json",
+			timeout: 15000
+		}).done(function(fdata) {
+			try {
+				var res = convert_gismeteo_v2(fdata);
+				if (on_success) on_success(res);
+			} catch(e) {
+				if (on_error) on_error(null, "parse_error", e && e.message);
+			}
+		}).fail(function(x, st, err) {
+			if (on_error) on_error(x, st, err);
+		});
+	}).fail(function(x, st, err) {
+		if (on_error) on_error(x, st, err);
+	});
+}
+
 function fetch_from_wttr(on_success, on_error) {
 	var wt_url = 'https://wttr.in/' + lat + ',' + lon + '?format=j1';
 
@@ -1830,37 +1952,60 @@ function get_data() {
 	}
 
 	if (source_pref === "gismeteo") {
-		if (!server) {
-			show_error(null, "no_server_url", "Gismeteo доступен только через локальный сервер", "Gismeteo");
-			return;
-		}
-		console.log("get_data: source pref = Gismeteo (via server)");
-		server += "&source=gismeteo";
-		active_data_xhr = $.ajax({
-			url: server,
-			dataType: 'json',
-			timeout: 25 * 1000,
-			success: function(result) {
-				if (result && result.fact && result.forecasts) {
-					current_weather_data = result;
-					try {
-						localStorage.setItem('weather_cache_data', JSON.stringify(result));
-						localStorage.setItem('weather_cache_time', String(Date.now()));
-						localStorage.setItem('weather_cache_source', result.src || 'Gismeteo');
-						localStorage.removeItem('weather_last_attempt_error');
-					} catch (e) {}
-					render_weather(result);
-					update_status_bar();
-				} else {
-					show_error(null, "format", "неверный формат данных сервера", "Gismeteo");
-				}
-			},
-			error: function(xhr, status, err) {
+		console.log("get_data: source pref = Gismeteo");
+		function try_direct_gismeteo(lastXhr, lastStatus, lastErr) {
+			var effKey = safe_get_item("gismeteo_api_key", "") || gismeteo_api_key_cfg;
+			if (!effKey) {
+				show_key_dialog("Ключ Gismeteo API v2", "gismeteo_api_key", function() { get_data(); });
+				return;
+			}
+			fetch_from_gismeteo_client(function(result) {
+				current_weather_data = result;
+				try {
+					localStorage.setItem('weather_cache_data', JSON.stringify(result));
+					localStorage.setItem('weather_cache_time', String(Date.now()));
+					localStorage.setItem('weather_cache_source', 'Gismeteo');
+					localStorage.removeItem('weather_last_attempt_error');
+				} catch (e) {}
+				render_weather(result);
+				update_status_bar();
+			}, function(xhr, status, err) {
 				if (status === "abort") return;
 				show_error(xhr, status, err, "Gismeteo");
-			}
-		});
-		return;
+			});
+		}
+
+		if (server) {
+			var sUrl = server + (server.indexOf("?") === -1 ? "?" : "&") + "source=gismeteo";
+			active_data_xhr = $.ajax({
+				url: sUrl,
+				dataType: 'json',
+				timeout: 25 * 1000,
+				success: function(result) {
+					if (result && result.fact && result.forecasts) {
+						current_weather_data = result;
+						try {
+							localStorage.setItem('weather_cache_data', JSON.stringify(result));
+							localStorage.setItem('weather_cache_time', String(Date.now()));
+							localStorage.setItem('weather_cache_source', result.src || 'Gismeteo');
+							localStorage.removeItem('weather_last_attempt_error');
+						} catch (e) {}
+						render_weather(result);
+						update_status_bar();
+					} else {
+						try_direct_gismeteo(null, "format", "неверный формат данных сервера");
+					}
+				},
+				error: function(xhr, status, err) {
+					if (status === "abort") return;
+					try_direct_gismeteo(xhr, status, err);
+				}
+			});
+			return;
+		} else {
+			try_direct_gismeteo();
+			return;
+		}
 	}
 
 	if (source_pref === "wttr") {
@@ -3218,6 +3363,7 @@ body {
 		<div class="menu_item menu_src" data-src="owm">OpenWeatherMap</div>
 		<div class="menu_item menu_src" data-src="7timer">7timer</div>
 		<div class="menu_item menu_src" data-src="wttr">wttr.in</div>
+		<div class="menu_item" id="menu_gismeteo_key">Ключ Gismeteo API v2…</div>
 		<div class="menu_title">Город</div>
 		<div class="menu_item" id="city_current">Город: —</div>
 		<div class="menu_item" id="city_auto">Определить автоматически (GPS)</div>
