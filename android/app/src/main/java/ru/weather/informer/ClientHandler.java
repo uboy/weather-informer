@@ -19,28 +19,47 @@ public class ClientHandler implements Runnable {
 
     @Override
     public void run() {
-        try (InputStream in = socket.getInputStream();
-             OutputStream out = socket.getOutputStream()) {
+        try {
+            socket.setSoTimeout(15000);
+            BufferedInputStream in = new BufferedInputStream(socket.getInputStream(), 8192);
+            OutputStream out = socket.getOutputStream();
 
-            BufferedReader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8));
-            String requestLine = reader.readLine();
-            if (requestLine == null || requestLine.isEmpty()) return;
+            // 1. Потоковое чтение заголовков до \r\n\r\n
+            ByteArrayOutputStream headerBuffer = new ByteArrayOutputStream();
+            int b;
+            int pattern = 0;
+            while ((b = in.read()) != -1) {
+                headerBuffer.write(b);
+                if ((pattern == 0 || pattern == 2) && b == '\r') {
+                    pattern++;
+                } else if ((pattern == 1 || pattern == 3) && b == '\n') {
+                    pattern++;
+                    if (pattern == 4) break;
+                } else {
+                    pattern = (b == '\r') ? 1 : 0;
+                }
+            }
+            if (pattern != 4) return;
 
+            String headerText = new String(headerBuffer.toByteArray(), StandardCharsets.US_ASCII);
+            String[] lines = headerText.split("\r\n");
+            if (lines.length == 0) return;
+
+            String requestLine = lines[0];
             String[] parts = requestLine.split(" ");
             if (parts.length < 2) return;
             String method = parts[0].toUpperCase(Locale.US);
             String fullPath = parts[1];
 
-            // Чтение заголовков
             Map<String, String> headers = new HashMap<>();
-            String headerLine;
             int contentLength = 0;
             String contentType = "";
-            while ((headerLine = reader.readLine()) != null && !headerLine.isEmpty()) {
-                int colon = headerLine.indexOf(':');
+            for (int i = 1; i < lines.length; i++) {
+                String line = lines[i];
+                int colon = line.indexOf(':');
                 if (colon > 0) {
-                    String k = headerLine.substring(0, colon).trim().toLowerCase(Locale.US);
-                    String v = headerLine.substring(colon + 1).trim();
+                    String k = line.substring(0, colon).trim().toLowerCase(Locale.US);
+                    String v = line.substring(colon + 1).trim();
                     headers.put(k, v);
                     if (k.equals("content-length")) {
                         try { contentLength = Integer.parseInt(v); } catch (Exception ignored) {}
@@ -56,6 +75,23 @@ public class ClientHandler implements Runnable {
                 return;
             }
 
+            if (contentLength > InformerServer.MAX_UPLOAD_BYTES) {
+                sendResponse(out, 413, "Payload Too Large", "application/json",
+                        "{\"error\":\"Payload exceeds 5MB limit\"}".getBytes(StandardCharsets.UTF_8));
+                return;
+            }
+
+            // 2. Чтение тела запроса из того же BufferedInputStream
+            byte[] body = new byte[contentLength];
+            if (contentLength > 0) {
+                int totalRead = 0;
+                while (totalRead < contentLength) {
+                    int count = in.read(body, totalRead, contentLength - totalRead);
+                    if (count == -1) break;
+                    totalRead += count;
+                }
+            }
+
             String path = fullPath;
             String query = "";
             int qIdx = fullPath.indexOf('?');
@@ -64,7 +100,7 @@ public class ClientHandler implements Runnable {
                 query = fullPath.substring(qIdx + 1);
             }
 
-            handleRoute(method, path, query, headers, in, out, contentLength, contentType);
+            handleRoute(method, path, query, headers, body, out, contentType);
 
         } catch (Exception e) {
             Log.e(TAG, "Request handling error: " + e.getMessage());
@@ -74,8 +110,8 @@ public class ClientHandler implements Runnable {
     }
 
     private void handleRoute(String method, String path, String query,
-                             Map<String, String> headers, InputStream in,
-                             OutputStream out, int contentLength, String contentType) throws Exception {
+                             Map<String, String> headers, byte[] body,
+                             OutputStream out, String contentType) throws Exception {
 
         // 1. Статус /health
         if (path.equals("/health")) {
@@ -100,7 +136,6 @@ public class ClientHandler implements Runnable {
                 sendResponse(out, 200, "OK", "application/json; charset=utf-8", cfgBytes);
                 return;
             } else if (method.equals("POST")) {
-                byte[] body = readBody(in, contentLength);
                 File cfgFile = new File(server.getWebDir(), "config.json");
                 try (FileOutputStream fos = new FileOutputStream(cfgFile)) {
                     fos.write(body);
@@ -123,7 +158,7 @@ public class ClientHandler implements Runnable {
 
         // 5. API загрузки файлов /api/upload
         if (path.equals("/api/upload") && method.equals("POST")) {
-            handleFileUpload(in, out, contentLength, contentType);
+            handleFileUpload(body, query, out, contentType);
             return;
         }
 
@@ -243,18 +278,14 @@ public class ClientHandler implements Runnable {
         }
     }
 
-    private void handleFileUpload(InputStream in, OutputStream out, int contentLength, String contentType) {
-        if (contentLength > InformerServer.MAX_UPLOAD_BYTES) {
-            sendResponse(out, 413, "Payload Too Large", "application/json",
-                    "{\"error\":\"File exceeds 5MB limit\"}".getBytes(StandardCharsets.UTF_8));
-            return;
-        }
-
+    private void handleFileUpload(byte[] body, String query, OutputStream out, String contentType) {
         try {
-            byte[] body = readBody(in, contentLength);
             String boundary = "";
-            if (contentType.contains("boundary=")) {
+            if (contentType != null && contentType.contains("boundary=")) {
                 boundary = contentType.substring(contentType.indexOf("boundary=") + 9).trim();
+                if (boundary.startsWith("\"") && boundary.endsWith("\"") && boundary.length() > 1) {
+                    boundary = boundary.substring(1, boundary.length() - 1);
+                }
             }
 
             String filename = "uploaded_file.bin";
@@ -276,11 +307,17 @@ public class ClientHandler implements Runnable {
                     int dataStart = headerEnd + 4;
                     int dataEnd = bodyStr.indexOf("--" + boundary, dataStart);
                     if (dataEnd > dataStart) {
-                        if (bodyStr.charAt(dataEnd - 2) == '\r' && bodyStr.charAt(dataEnd - 1) == '\n') {
+                        if (dataEnd >= 2 && bodyStr.charAt(dataEnd - 2) == '\r' && bodyStr.charAt(dataEnd - 1) == '\n') {
                             dataEnd -= 2;
                         }
                         fileContent = Arrays.copyOfRange(body, dataStart, dataEnd);
                     }
+                }
+            } else {
+                Map<String, String> params = parseQuery(query);
+                String qFile = params.get("file");
+                if (qFile != null && !qFile.isEmpty()) {
+                    filename = qFile;
                 }
             }
 
@@ -329,20 +366,6 @@ public class ClientHandler implements Runnable {
         }
     }
 
-    private static byte[] readBody(InputStream in, int len) throws IOException {
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        byte[] buf = new byte[4096];
-        int read = 0;
-        while (read < len) {
-            int toRead = Math.min(buf.length, len - read);
-            int n = in.read(buf, 0, toRead);
-            if (n == -1) break;
-            baos.write(buf, 0, n);
-            read += n;
-        }
-        return baos.toByteArray();
-    }
-
     private static void sendResponse(OutputStream out, int code, String msg, String contentType, byte[] data) {
         try {
             sendHeaders(out, code, msg, contentType, data.length);
@@ -381,9 +404,11 @@ public class ClientHandler implements Runnable {
         for (String param : query.split("&")) {
             int eq = param.indexOf('=');
             if (eq > 0) {
-                String k = URLDecoder.decode(param.substring(0, eq), StandardCharsets.UTF_8);
-                String v = URLDecoder.decode(param.substring(eq + 1), StandardCharsets.UTF_8);
-                map.put(k, v);
+                try {
+                    String k = URLDecoder.decode(param.substring(0, eq), "UTF-8");
+                    String v = URLDecoder.decode(param.substring(eq + 1), "UTF-8");
+                    map.put(k, v);
+                } catch (UnsupportedEncodingException ignored) {}
             }
         }
         return map;
