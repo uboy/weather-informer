@@ -9,4 +9,8 @@ __pycache__/
 forecast.db
 foreca_locations.json
 gismeteo_cities.json
+gismeteo_v2_cities.json
 weather_stats.csv.1
+android/build/
+android/debug.keystore
+*.idsig

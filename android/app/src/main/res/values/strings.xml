@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Погодный Информер</string>
+    <string name="service_running">Веб-сервер информера работает на порту 8080</string>
+</resources>

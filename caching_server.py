@@ -1835,6 +1835,69 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
                     pass
             return
 
+        if path == "/informer.apk":
+            apk_path = os.path.join(SCRIPT_DIR, "apks", "informer.apk")
+            if os.path.isfile(apk_path):
+                try:
+                    with open(apk_path, "rb") as f:
+                        data = f.read()
+                    self.send_response(200)
+                    self.send_cors_headers()
+                    self.send_header("Content-Type", "application/vnd.android.package-archive")
+                    self.send_header("Content-Disposition", 'attachment; filename="informer.apk"')
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+            else:
+                self.send_response(404)
+                self.end_headers()
+            return
+
+        if path == "/install":
+            host_header = self.headers.get("Host", "192.168.1.55:8085")
+            apk_url = f"http://{host_header}/informer.apk"
+            html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Установка Погодного Информера</title>
+<style>
+body {{ font-family: -apple-system, sans-serif; background: #121212; color: #e0e0e0; margin: 0; padding: 20px; }}
+.card {{ background: #1e1e1e; border-radius: 12px; padding: 24px; max-width: 480px; margin: 0 auto; box-shadow: 0 4px 16px rgba(0,0,0,0.5); }}
+h2 {{ color: #4FC3F7; margin-top: 0; }}
+p {{ line-height: 1.5; color: #ccc; }}
+.btn {{ display: block; width: 100%; box-sizing: border-box; text-align: center; padding: 14px; background: #0288D1; color: #fff; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 1.1rem; margin: 20px 0; }}
+.steps {{ background: #263238; border-radius: 8px; padding: 16px; margin-top: 20px; font-size: 0.95rem; }}
+.steps ol {{ padding-left: 20px; margin: 0; }}
+.steps li {{ margin-bottom: 8px; }}
+code {{ color: #81D4FA; }}
+</style></head><body>
+<div class="card">
+<h2>Погодный Информер: Установка</h2>
+<p>Установка информера со встроенным веб-сервером на планшет или телефон без подключения кабелей и без ADB.</p>
+<a href="{apk_url}" class="btn">Скачать informer.apk</a>
+<div class="steps">
+<strong>Инструкция по установке:</strong>
+<ol>
+<li>Нажмите кнопку выше или откройте эту страницу на планшете.</li>
+<li>Скачайте и установите <code>informer.apk</code> (разрешите установку из неизвестных источников).</li>
+<li>Запустите приложение «Погодный Информер». Оно автоматически откроет экран на весь экран и запустит фоновый веб-сервер на порту <code>8080</code>.</li>
+<li>Управлять настройками можно прямо со смартфона по адресу: <code>http://&lt;IP_планшета&gt;:8080/settings</code></li>
+</ol>
+</div>
+</div></body></html>"""
+            try:
+                data = html.encode("utf-8")
+                self.send_response(200)
+                self.send_cors_headers()
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return
+
         # Погодные маршруты — только известные: остальное 404,
         # чтобы сканеры/favicon не запускали фетчи и не жгли квоту
         if path not in ("/", "/weather.json", "/forecast.json", "/v2/forecast"):
