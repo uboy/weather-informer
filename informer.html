@@ -2104,18 +2104,6 @@ function get_data() {
 		}
 
 		var chain = [];
-		var effForecaKey = safe_get_item("foreca_api_key", "") || foreca_api_key_cfg;
-		if (effForecaKey) {
-			chain.push({ name: 'Foreca', run: function(ok, fail) { fetch_from_foreca_client(ok, fail); } });
-		}
-		chain.push({ name: 'Open-Meteo', run: function(ok, fail) { fetch_from_om_client(ok, fail); } });
-		if (owm_key) {
-			chain.push({ name: 'OpenWeatherMap', run: function(ok, fail) { fetch_from_owm(ok, fail); } });
-		}
-		chain.push({ name: '7timer', run: function(ok, fail) { fetch_from_7timer_client(ok, fail); } });
-		if (enable_wttr_fallback) {
-			chain.push({ name: 'wttr.in', run: function(ok, fail) { fetch_from_wttr(ok, fail); } });
-		}
 		var effFallbackKey = safe_get_item("yandex_api_key", "") || api;
 		if (!is_direct_yandex && allow_direct_yandex && effFallbackKey && effFallbackKey !== 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx') {
 			chain.push({ name: 'Яндекс.Погода', run: function(ok, fail) {
@@ -2127,6 +2115,22 @@ function get_data() {
 				}).done(function(d) { ok(d, 'Яндекс.Погода'); })
 				  .fail(function(x, st, e) { fail(x, st, e); });
 			}});
+		}
+		var effGisKey = safe_get_item("gismeteo_api_key", "") || gismeteo_api_key_cfg;
+		if (effGisKey) {
+			chain.push({ name: 'Gismeteo', run: function(ok, fail) { fetch_from_gismeteo_client(ok, fail); } });
+		}
+		var effForecaKey = safe_get_item("foreca_api_key", "") || foreca_api_key_cfg;
+		if (effForecaKey) {
+			chain.push({ name: 'Foreca', run: function(ok, fail) { fetch_from_foreca_client(ok, fail); } });
+		}
+		chain.push({ name: 'Open-Meteo', run: function(ok, fail) { fetch_from_om_client(ok, fail); } });
+		if (owm_key) {
+			chain.push({ name: 'OpenWeatherMap', run: function(ok, fail) { fetch_from_owm(ok, fail); } });
+		}
+		chain.push({ name: '7timer', run: function(ok, fail) { fetch_from_7timer_client(ok, fail); } });
+		if (enable_wttr_fallback) {
+			chain.push({ name: 'wttr.in', run: function(ok, fail) { fetch_from_wttr(ok, fail); } });
 		}
 
 		var stepIdx = 0;
