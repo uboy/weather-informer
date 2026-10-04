@@ -11,7 +11,12 @@ for S in "$@"; do
   echo "=== $S ==="
   if ! adb -s "$S" get-state >/dev/null 2>&1; then echo "$S: adb недоступен"; FAILS=$((FAILS+1)); continue; fi
   # 1. Свежий APK информера (поля интервалов в :8080/settings)
-  adb -s "$S" install -r "$DIR/apks/informer.apk" >/dev/null && echo "  apk: установлен" || { echo "  apk: FAIL"; FAILS=$((FAILS+1)); }
+  if ! adb -s "$S" install -r "$DIR/apks/informer.apk" >/dev/null 2>&1; then
+    echo "  apk: FAIL (установка не удалась, старый киоск НЕ трогаем)"
+    FAILS=$((FAILS+1))
+    continue
+  fi
+  echo "  apk: установлен"
   # 2. Снести старый kiosk
   # pm list может молча отдать пустоту сразу после install - проверяем дважды
   IS_INSTALLED=0
@@ -28,7 +33,12 @@ for S in "$@"; do
   adb -s "$S" shell "rm -f /sdcard/Download/informer.html /sdcard/Download/jquery.min.js" 2>/dev/null
   echo "  /sdcard/Download: старые informer.html/jquery удалены (config.json не трогали)"
   # 4. Поднять информер
-  adb -s "$S" shell am start -n ru.weather.informer/.MainActivity >/dev/null 2>&1 && echo "  информер: запущен" || echo "  информер: am start не сработал"
+  if adb -s "$S" shell am start -n ru.weather.informer/.MainActivity >/dev/null 2>&1; then
+    echo "  информер: запущен"
+  else
+    echo "  информер: am start не сработал"
+    FAILS=$((FAILS+1))
+  fi
   # 5. Факт
   adb -s "$S" shell pm list packages 2>/dev/null | tr -d "\r" | grep -E "ru\.weather\.informer|webviewkiosk" | sed "s/^/  pkg: /"
 done

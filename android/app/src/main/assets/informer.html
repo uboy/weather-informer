@@ -697,6 +697,7 @@ function init_menu() {
 		e.stopPropagation();
 		menu.removeClass("menu_open");
 		console.log("Menu: forced weather refresh");
+		force_bypass_direct_gate = true;
 		get_data();
 	});
 	$("#menu_settings").on("click", function(e) {
@@ -944,9 +945,9 @@ function load_config(callback) {
 		if (cfg.gismeteo_api_key !== undefined) gismeteo_api_key_cfg = String(cfg.gismeteo_api_key);
 		if (cfg.openweathermap_api_key !== undefined) owm_key = cfg.openweathermap_api_key;
 		apply_text_color(safe_get_item("weather_text_color", "") || cfg.text_color || "");
-		if (cfg.timeout !== undefined) timeout = cfg.timeout;
-		if (cfg.update_interval_sec !== undefined) timeout = cfg.update_interval_sec;
-		if (cfg.direct_update_interval_sec !== undefined) direct_timeout = cfg.direct_update_interval_sec;
+		if (cfg.timeout !== undefined) timeout = Math.max(60, parseInt(cfg.timeout, 10) || 300);
+		if (cfg.update_interval_sec !== undefined) timeout = Math.max(60, parseInt(cfg.update_interval_sec, 10) || 300);
+		if (cfg.direct_update_interval_sec !== undefined) direct_timeout = Math.max(60, parseInt(cfg.direct_update_interval_sec, 10) || 1800);
 		if (cfg.max_cache_age_hours !== undefined) {
 			max_cache_age_hours = Number(cfg.max_cache_age_hours);
 			max_cache_age_ms = max_cache_age_hours * 60 * 60 * 1000;
@@ -975,9 +976,9 @@ function load_config(callback) {
 		if (cfg.openweathermap_api_key !== undefined && cfg.openweathermap_api_key.indexOf('•') === -1) owm_key = cfg.openweathermap_api_key;
 		var storedColor = safe_get_item("weather_text_color", "");
 		apply_text_color(storedColor || cfg.text_color || "");
-		if (cfg.timeout !== undefined) timeout = cfg.timeout;
-		if (cfg.update_interval_sec !== undefined) timeout = cfg.update_interval_sec;
-		if (cfg.direct_update_interval_sec !== undefined) direct_timeout = cfg.direct_update_interval_sec;
+		if (cfg.timeout !== undefined) timeout = Math.max(60, parseInt(cfg.timeout, 10) || 300);
+		if (cfg.update_interval_sec !== undefined) timeout = Math.max(60, parseInt(cfg.update_interval_sec, 10) || 300);
+		if (cfg.direct_update_interval_sec !== undefined) direct_timeout = Math.max(60, parseInt(cfg.direct_update_interval_sec, 10) || 1800);
 		if (cfg.max_cache_age_hours !== undefined) {
 			max_cache_age_hours = Number(cfg.max_cache_age_hours);
 			max_cache_age_ms = max_cache_age_hours * 60 * 60 * 1000;
