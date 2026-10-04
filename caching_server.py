@@ -2206,6 +2206,8 @@ code {{ color: #81D4FA; }}
                 "openweathermap_api_key": mask_key(cfg.get("openweathermap_api_key")),
                 "cache_interval_minutes": cfg.get("cache_interval_minutes", 60),
                 "fallback_interval_minutes": cfg.get("fallback_interval_minutes", 15),
+                "update_interval_sec": cfg.get("update_interval_sec", 300),
+                "direct_update_interval_sec": cfg.get("direct_update_interval_sec", 1800),
                 "port": cfg.get("port", 8085)
             }
             body = json.dumps(safe_cfg, ensure_ascii=False).encode("utf-8")

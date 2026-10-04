@@ -151,6 +151,10 @@ public class InformerServer {
                 "<option value='7timer'>7timer (бесплатно, без ключа)</option>" +
                 "<option value='wttr'>wttr.in (бесплатно, без ключа)</option>" +
                 "</select>" +
+                "<label>Интервал синхронизации с сервером, сек (по умолчанию 300 = 5 мин):</label>" +
+                "<input type='number' id='update_interval_sec' min='60' step='30'>" +
+                "<label>Интервал прямых запросов к внешним API, сек (по умолчанию 1800 = 30 мин):</label>" +
+                "<input type='number' id='direct_update_interval_sec' min='60' step='30'>" +
                 "<label>Ключ Gismeteo API v2:</label>" +
                 "<div style='display:flex; gap:6px; align-items:center;'>" +
                 "<input type='text' id='gismeteo_api_key' placeholder='X-Gismeteo-Token'>" +
@@ -186,6 +190,8 @@ public class InformerServer {
                 "document.getElementById('city_name').value = c.city_name || '';" +
                 "document.getElementById('server_url').value = c.server_url || '';" +
                 "document.getElementById('primary_source').value = c.primary_source || (c.server_url ? 'server' : 'yandex');" +
+                "document.getElementById('update_interval_sec').value = c.update_interval_sec || c.timeout || 300;" +
+                "document.getElementById('direct_update_interval_sec').value = c.direct_update_interval_sec || 1800;" +
                 "document.getElementById('gismeteo_api_key').value = c.gismeteo_api_key || '';" +
                 "document.getElementById('api').value = c.api || '';" +
                 "document.getElementById('foreca_api_key').value = c.foreca_api_key || '';" +
@@ -253,6 +259,9 @@ public class InformerServer {
                 "currentCfg.city_name = document.getElementById('city_name').value.trim();" +
                 "currentCfg.server_url = document.getElementById('server_url').value.trim();" +
                 "currentCfg.primary_source = document.getElementById('primary_source').value;" +
+                "currentCfg.update_interval_sec = parseInt(document.getElementById('update_interval_sec').value, 10) || 300;" +
+                "currentCfg.direct_update_interval_sec = parseInt(document.getElementById('direct_update_interval_sec').value, 10) || 1800;" +
+                "currentCfg.timeout = currentCfg.update_interval_sec;" +
                 "currentCfg.gismeteo_api_key = document.getElementById('gismeteo_api_key').value.trim();" +
                 "currentCfg.api = document.getElementById('api').value.trim();" +
                 "currentCfg.foreca_api_key = document.getElementById('foreca_api_key').value.trim();" +

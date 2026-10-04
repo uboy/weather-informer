@@ -5,7 +5,7 @@
   "gismeteo_api_key": "ВАШ_КЛЮЧ_GISMETEO_V2",
   "lat": 56.317722,
   "lon": 43.999303,
-  "timeout": 3600,
+  "timeout": 300,
   "wind_max": 15,
   "pressure_min": 710,
   "pressure_max": 770,
@@ -19,5 +19,7 @@
   "stats_enabled": true,
   "stats_interval_minutes": 60,
   "openweathermap_api_key": "ВАШ_КЛЮЧ_OPENWEATHERMAP",
-  "enable_openweathermap_fallback": true
+  "enable_openweathermap_fallback": true,
+  "update_interval_sec": 300,
+  "direct_update_interval_sec": 1800
 }

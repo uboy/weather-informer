@@ -169,7 +169,7 @@ for (const t of [...new Set(afterTargets)]) {
 }
 
 // ===== 5. Ключевые настройки по умолчанию =====
-check('update_interval default 3600', /var timeout = 60 \* 60/.test(html));
+check('update_interval default 300 (5 мин)', /var timeout = 5 \* 60/.test(html));
 check('direct_update_interval default 1800', /var direct_timeout = 30 \* 60/.test(html));
 
 // ===== 6. Адаптивная вёрстка и высота видимой области =====
@@ -196,6 +196,45 @@ const wideWbH = wideWbMatch ? parseFloat(wideWbMatch[1]) : 0;
 check('landscape widescreen: бюджет высоты (datetime ' + wideDtH + 'vh + weather_body ' + wideWbH + 'vh = ' + (wideDtH + wideWbH) + 'vh <= 96vh)',
     wideDtH > 0 && wideWbH > 0 && (wideDtH + wideWbH) <= 96);
 
+
+
+// ===== 7. Интервалы синхронизации (карточка task-weather-informer-sync-intervals) =====
+// 7.1 Дефолты: сервер 5 мин, внешние 30 мин — два разных интервала
+check('дефолт опроса сервера = 5*60 сек (update_interval_sec)',
+    /var timeout = 5 \* 60;/.test(html));
+check('дефолт внешних запросов = 30*60 сек (direct_update_interval_sec)',
+    /var direct_timeout = 30 \* 60;/.test(html));
+
+// 7.2 Отдельный счётчик внешних попыток: падение сервера не должно сжигать
+// квоту Яндекса с частотой серверного опроса
+check('гейт внешних запросов: счётчик weather_last_direct_call',
+    html.includes('weather_last_direct_call'));
+check('on_failure (дефолтная цепочка) гейтится direct_gate_ok()',
+    /function on_failure[\s\S]{0,900}?direct_gate_ok\(\)/.test(html));
+check('try_direct_gismeteo гейтится direct_gate_ok()',
+    /function try_direct_gismeteo[\s\S]{0,700}?direct_gate_ok\(\)/.test(html));
+check('гейт помечает попытку: direct_gate_mark() определён',
+    /function direct_gate_mark\(\)/.test(html));
+
+// 7.3 «Обновить сейчас» (force=1) обходит гейт
+check('force обходит гейт внешних запросов',
+    /force_bypass_direct_gate = true/.test(html) &&
+    /!force_bypass_direct_gate && !direct_gate_ok\(\)/.test(html));
+
+// 7.4 Конфиг-ключи читаются в обоих путях загрузки (applyConfig/apply_config)
+const cfgKeyCount = (html.match(/cfg\.update_interval_sec/g) || []).length;
+check('конфиг: update_interval_sec читается (путей: ' + cfgKeyCount + ')', cfgKeyCount >= 2);
+const dCfgKeyCount = (html.match(/cfg\.direct_update_interval_sec/g) || []).length;
+check('конфиг: direct_update_interval_sec читается (путей: ' + dCfgKeyCount + ')', dCfgKeyCount >= 2);
+
+// 7.5 Без сервера и с allow_direct_yandex основной источник — внешний: интервал внешних
+check('нет сервера -> прямой источник использует direct_timeout',
+    /server_url\.trim\(\) === "" && allow_direct_yandex/.test(html));
+
+// 7.6 ES5-канарейка: ES6-конструкции в разметке/скрипте запрещены (Android 6.0 WebView)
+check('ES5: нет стрелочных функций', !/=>/.test(html));
+check('ES5: нет const/let объявлений', !/\b(const|let)\s+[A-Za-z_$]/.test(html));
+check('ES5: нет шаблонных строк', !html.includes('`'));
+
 console.log('\nИТОГ: pass=' + pass + ' fail=' + fail);
 process.exit(fail ? 1 : 0);
-

@@ -325,8 +325,9 @@ body.night-dim #status_bar { opacity: 0.5; }
 var day = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
 var period = {morning: 'утром', day: 'днём', evening: 'вечером', night: 'ночью', day_day: 'до заката', day_night: 'до рассвета'};
 
-var timeout = 60 * 60; // интервал опроса СЕРВЕРА, сек
-var direct_timeout = 30 * 60; // интервал ПРЯМЫХ запросов (форс квоты), сек
+var timeout = 5 * 60; // интервал синхронизации с ЛОКАЛЬНЫМ СЕРВЕРОМ, сек (config: update_interval_sec)
+var direct_timeout = 30 * 60; // интервал ПРЯМЫХ запросов к ВНЕШНИМ API, сек (config: direct_update_interval_sec)
+var force_bypass_direct_gate = false; // «Обновить сейчас» обходит гейт внешних запросов
 var max_cache_age_hours = 48; // Max cache age before hiding weather, hours
 var max_cache_age_ms = 48 * 60 * 60 * 1000;
 var expire = 60 * 60 * 48; // Data expire for sectors, sec
@@ -1866,12 +1867,19 @@ function run() {
 	try {
 		var _curPref = safe_get_item("weather_source_pref", "default");
 		var _isDirect = ["owm", "om", "7timer", "wttr", "yandex", "foreca"].indexOf(_curPref) >= 0;
+		// Локального сервера нет, а основной источник — прямой внешний API:
+		// синхронизация идёт с внешним интервалом, а не серверным
+		if (!_isDirect && _curPref !== "server" && server_url.trim() === "" && allow_direct_yandex) {
+			_isDirect = true;
+		}
 		var _effTimeout = (_isDirect ? direct_timeout : timeout) * 1000;
 		applyNightDim();
 
+		force_bypass_direct_gate = false;
 		var isForce = false;
 		if (!force_consumed && window.location && window.location.search && window.location.search.indexOf("force=1") !== -1) {
 			isForce = true;
+			force_bypass_direct_gate = true;
 			force_consumed = true;
 			if (window.history && window.history.replaceState) {
 				try {
@@ -1898,6 +1906,18 @@ function run() {
 	interval = 60 * 1000;
 	timer = Math.ceil(now / interval) * interval + 1000 - now;
 	setTimeout(function(){run()}, timer);
+}
+
+// Гейт ПРЯМЫХ запросов к внешним API: отдельный счётчик погоды, чтобы частый опрос
+// локального сервера (5 мин) при его падении не выжигал квоту внешних источников
+function direct_gate_ok() {
+	try {
+		var lastDirect = parseInt(safe_get_item("weather_last_direct_call", "0"), 10) || 0;
+		return lastDirect < Date.now() - direct_timeout * 1000;
+	} catch (e) { return true; }
+}
+function direct_gate_mark() {
+	try { localStorage.setItem("weather_last_direct_call", String(Date.now())); } catch (e) {}
 }
 
 var active_data_xhr = null;
@@ -2106,6 +2126,12 @@ function get_data() {
 				show_key_dialog("Ключ Gismeteo API v2", "gismeteo_api_key", function() { get_data(); });
 				return;
 			}
+			// Прямой запрос к Gismeteo — внешний: отдельный интервал, не серверный
+			if (!force_bypass_direct_gate && !direct_gate_ok()) {
+				show_error(lastXhr, lastStatus || "direct_throttled", lastErr || "прямые запросы ограничены интервалом (квота)", "Gismeteo");
+				return;
+			}
+			direct_gate_mark();
 			fetch_from_gismeteo_client(function(result) {
 				current_weather_data = result;
 				try {
@@ -2237,6 +2263,14 @@ function get_data() {
 		// Фолбэк по приоритету: безлимитные источники сначала,
 		// прямой Яндекс — ПОСЛЕДНИМ (расходует общую квоту ключа 30/сутки)
 		if (only_server) { show_error(xhr, status, err); return; }
+		// Внешние источники цепочки гейтятся отдельным интервалом (direct_update_interval_sec),
+		// а не серверным update_interval_sec — иначе падение сервера выжигает квоту каждые 5 мин
+		if (!force_bypass_direct_gate && !direct_gate_ok()) {
+			console.log("on_failure: direct fallbacks throttled (weather_last_direct_call), показываю ошибку сервера");
+			show_error(xhr, status, err);
+			return;
+		}
+		direct_gate_mark();
 
 		function fallback_success(d, srcName) {
 			current_weather_data = d;
