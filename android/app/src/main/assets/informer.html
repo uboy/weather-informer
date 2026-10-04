@@ -1866,7 +1866,7 @@ function run() {
 
 	try {
 		var _curPref = safe_get_item("weather_source_pref", "default");
-		var _isDirect = ["owm", "om", "7timer", "wttr", "yandex", "foreca"].indexOf(_curPref) >= 0;
+		var _isDirect = ["owm", "om", "7timer", "wttr", "yandex", "foreca", "gismeteo"].indexOf(_curPref) >= 0;
 		// Локального сервера нет, а основной источник — прямой внешний API:
 		// синхронизация идёт с внешним интервалом, а не серверным
 		if (!_isDirect && _curPref !== "server" && server_url.trim() === "" && allow_direct_yandex) {
@@ -2058,6 +2058,12 @@ function get_data() {
 				show_key_dialog("Ключ Яндекс.Погоды (прямой)", "yandex_api_key", function() { get_data(); });
 				return;
 			}
+			// Прямой Яндекс расходует общую квоту 30/сутки: тот же гейт, что у gismeteo
+			if (!force_bypass_direct_gate && !direct_gate_ok()) {
+				show_error(lastXhr, lastStatus || "direct_throttled", lastErr || "прямые запросы ограничены интервалом (квота)", "Яндекс.Погода");
+				return;
+			}
+			direct_gate_mark();
 			active_data_xhr = $.ajax({
 				url: 'https://api.weather.yandex.ru/v2/forecast?lat=' + lat + '&lon=' + lon,
 				headers: {'X-Yandex-Weather-Key': effKey},
