@@ -13,7 +13,13 @@ for S in "$@"; do
   # 1. Свежий APK информера (поля интервалов в :8080/settings)
   adb -s "$S" install -r "$DIR/apks/informer.apk" >/dev/null && echo "  apk: установлен" || { echo "  apk: FAIL"; FAILS=$((FAILS+1)); }
   # 2. Снести старый kiosk
-  if adb -s "$S" shell pm list packages 2>/dev/null | tr -d "\r" | grep -q "$OLD_PKG"; then
+  # pm list может молча отдать пустоту сразу после install - проверяем дважды
+  IS_INSTALLED=0
+  for try in 1 2; do
+    if adb -s "$S" shell pm list packages 2>/dev/null | tr -d "" | grep -q "$OLD_PKG"; then IS_INSTALLED=1; break; fi
+    sleep 2
+  done
+  if [ "$IS_INSTALLED" = "1" ]; then
     if adb -s "$S" uninstall "$OLD_PKG" >/dev/null 2>&1; then echo "  старый kiosk: удалён"; else echo "  старый kiosk: НЕ удалился (проверить вручную)"; FAILS=$((FAILS+1)); fi
   else
     echo "  старый kiosk: не установлен"
