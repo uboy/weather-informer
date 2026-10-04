@@ -16,7 +16,7 @@ for S in "$@"; do
   # pm list может молча отдать пустоту сразу после install - проверяем дважды
   IS_INSTALLED=0
   for try in 1 2; do
-    if adb -s "$S" shell pm list packages 2>/dev/null | tr -d "" | grep -q "$OLD_PKG"; then IS_INSTALLED=1; break; fi
+    if adb -s "$S" shell pm list packages 2>/dev/null | tr -d '\r' | grep -q "$OLD_PKG"; then IS_INSTALLED=1; break; fi
     sleep 2
   done
   if [ "$IS_INSTALLED" = "1" ]; then
