@@ -259,8 +259,8 @@ public class InformerServer {
                 "currentCfg.city_name = document.getElementById('city_name').value.trim();" +
                 "currentCfg.server_url = document.getElementById('server_url').value.trim();" +
                 "currentCfg.primary_source = document.getElementById('primary_source').value;" +
-                "currentCfg.update_interval_sec = parseInt(document.getElementById('update_interval_sec').value, 10) || 300;" +
-                "currentCfg.direct_update_interval_sec = parseInt(document.getElementById('direct_update_interval_sec').value, 10) || 1800;" +
+                "currentCfg.update_interval_sec = Math.max(60, parseInt(document.getElementById('update_interval_sec').value, 10) || 300);" +
+                "currentCfg.direct_update_interval_sec = Math.max(60, parseInt(document.getElementById('direct_update_interval_sec').value, 10) || 1800);" +
                 "currentCfg.timeout = currentCfg.update_interval_sec;" +
                 "currentCfg.gismeteo_api_key = document.getElementById('gismeteo_api_key').value.trim();" +
                 "currentCfg.api = document.getElementById('api').value.trim();" +
