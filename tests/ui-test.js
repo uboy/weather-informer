@@ -229,12 +229,51 @@ check('конфиг: direct_update_interval_sec читается (путей: ' 
 
 // 7.5 Без сервера и с allow_direct_yandex основной источник — внешний: интервал внешних
 check('нет сервера -> прямой источник использует direct_timeout',
-    /server_url\.trim\(\) === "" && allow_direct_yandex/.test(html));
+    /server_url\.trim\(\) === "" && \(?(?:allow_direct_yandex|is_direct_allowed_for\("yandex"\))/.test(html));
 
 // 7.6 ES5-канарейка: ES6-конструкции в разметке/скрипте запрещены (Android 6.0 WebView)
 check('ES5: нет стрелочных функций', !/=>/.test(html));
 check('ES5: нет const/let объявлений', !/\b(const|let)\s+[A-Za-z_$]/.test(html));
 check('ES5: нет шаблонных строк', !html.includes('`'));
+
+// ===== 8. Группа платных/ограниченных источников (METERED_SOURCES) =====
+// 8.1 Реестр платных/ограниченных источников
+check('METERED_SOURCES определен в JS', /var METERED_SOURCES\s*=\s*\[/.test(html));
+const meteredArrMatch = html.match(/var METERED_SOURCES\s*=\s*\[([^\]]+)\]/);
+const meteredArr = meteredArrMatch ? meteredArrMatch[1].replace(/['"\s]/g, '').split(',') : [];
+check('METERED_SOURCES содержит yandex, gismeteo, foreca',
+    meteredArr.includes('yandex') && meteredArr.includes('gismeteo') && meteredArr.includes('foreca'),
+    meteredArr.join(','));
+
+// 8.2 Функции is_metered_source и is_direct_allowed_for
+const isMeteredMatch = html.match(/^function is_metered_source[\s\S]*?^\}/m);
+check('is_metered_source извлечена', !!isMeteredMatch);
+if (isMeteredMatch) {
+    const fnM = eval('(function(){ var METERED_SOURCES = ' + JSON.stringify(meteredArr) + '; ' + isMeteredMatch[0] + '; return is_metered_source;})()');
+    check('is_metered_source("yandex") === true', fnM('yandex') === true);
+    check('is_metered_source("gismeteo") === true', fnM('gismeteo') === true);
+    check('is_metered_source("foreca") === true', fnM('foreca') === true);
+    check('is_metered_source("om") === false', fnM('om') === false);
+    check('is_metered_source("owm") === false', fnM('owm') === false);
+}
+
+// 8.3 В on_failure (fallback chain) бесплатные источники опрашиваются строго перед metered
+const idxOm = html.indexOf("chain.push({ name: 'Open-Meteo'");
+const idxGis = html.indexOf("metered_chain.push({ name: 'Gismeteo'");
+const idxForeca = html.indexOf("metered_chain.push({ name: 'Foreca'");
+const idxYndx = html.indexOf("metered_chain.push({ name: 'Яндекс.Погода'");
+check('fallback: Open-Meteo перед Gismeteo', idxOm !== -1 && idxGis !== -1 && idxOm < idxGis);
+check('fallback: Open-Meteo перед Foreca', idxOm !== -1 && idxForeca !== -1 && idxOm < idxForeca);
+check('fallback: Open-Meteo перед Яндекс.Погода', idxOm !== -1 && idxYndx !== -1 && idxOm < idxYndx);
+check('fallback: metered источники добавляются в конец chain', /for\s*\([^)]*metered_chain[^)]*\)\s*\{\s*chain\.push/.test(html));
+
+// 8.4 Проверка прав прямого доступа (is_direct_allowed_for) для metered источников
+check('fallback: Gismeteo закрыт is_direct_allowed_for',
+    /is_direct_allowed_for\("gismeteo"\)[\s\S]*?metered_chain\.push\(\{\s*name:\s*'Gismeteo'/.test(html));
+check('fallback: Foreca закрыт is_direct_allowed_for',
+    /is_direct_allowed_for\("foreca"\)[\s\S]*?metered_chain\.push\(\{\s*name:\s*'Foreca'/.test(html));
+check('fallback: Яндекс закрыт is_direct_allowed_for',
+    /is_direct_allowed_for\("yandex"\)[\s\S]*?metered_chain\.push\(\{\s*name:\s*'Яндекс\.Погода'/.test(html));
 
 console.log('\nИТОГ: pass=' + pass + ' fail=' + fail);
 process.exit(fail ? 1 : 0);

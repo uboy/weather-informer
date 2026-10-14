@@ -357,7 +357,7 @@ function hoursSane(hours) {
     check('astro_sun извлечена', !!m);
     if (m) {
         const fn = eval('(function(){' + m[0] + '; return astro_sun;})()');
-        const r = fn(56.3177, 43.9993, new Date());
+        const r = fn(56.3177, 43.9993, new Date(2026, 8, 21, 12, 0, 0));
         check('astro_sun: НН восход в 03-08ч', r.sunrise && parseInt(r.sunrise) >= 3 && parseInt(r.sunrise) <= 8, r.sunrise);
         check('astro_sun: НН закат в 15-21ч', r.sunset && parseInt(r.sunset) >= 15 && parseInt(r.sunset) <= 21, r.sunset);
         const dur = (parseInt(r.sunset) - parseInt(r.sunrise)) * 60 + (parseInt(r.sunset.slice(3)) - parseInt(r.sunrise.slice(3)));

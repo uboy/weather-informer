@@ -680,8 +680,7 @@ function init_menu() {
 		var hasServer = (server_url && server_url.trim() !== "");
 		$(".menu_src").each(function() {
 			var src = $(this).attr("data-src");
-			if (src === "yandex" && !hasServer && !allow_direct_yandex) { $(this).hide(); return; }
-			if (src === "gismeteo" && !hasServer) { $(this).hide(); return; }
+			if (is_metered_source(src) && !hasServer && !is_direct_allowed_for(src)) { $(this).hide(); return; }
 			$(this).show();
 			if (src === pref) $(this).addClass("menu_active");
 			else $(this).removeClass("menu_active");
@@ -924,7 +923,32 @@ function apply_text_color(c) {
 	} catch (e) {}
 }
 var allow_direct_yandex = false; // Прямой доступ планшета к Яндекс API: только явным разрешением в config.json (иначе расход квоты ключа)
+var allow_direct_gismeteo = false; // Прямой доступ к Gismeteo API v2: только явным разрешением
+var allow_direct_foreca = false; // Прямой доступ к Foreca API: только явным разрешением
+var allow_direct_metered = false; // Общее разрешение прямого доступа ко всем квотируемым/платным API
 var enable_wttr_fallback = true; // Резервный источник wttr.in
+
+// Группа платных/ограниченных источников (квоты, платные лимиты, закрытые ключи)
+var METERED_SOURCES = ["yandex", "gismeteo", "foreca"];
+
+function is_metered_source(src) {
+	if (!src) return false;
+	var s = String(src).toLowerCase();
+	for (var i = 0; i < METERED_SOURCES.length; i++) {
+		if (METERED_SOURCES[i] === s) return true;
+	}
+	return false;
+}
+
+function is_direct_allowed_for(src) {
+	if (!is_metered_source(src)) return true;
+	if (allow_direct_metered) return true;
+	var s = String(src).toLowerCase();
+	if (s === "yandex") return Boolean(allow_direct_yandex);
+	if (s === "gismeteo") return Boolean(allow_direct_gismeteo);
+	if (s === "foreca") return Boolean(allow_direct_foreca);
+	return false;
+}
 
 function load_config(callback) {
 	// Приоритет: CONFIG_JS из script tag (работает всегда, даже когда WebView блокирует file:// XHR)
@@ -954,6 +978,9 @@ function load_config(callback) {
 		}
 		if (cfg.enable_wttr_fallback !== undefined) enable_wttr_fallback = Boolean(cfg.enable_wttr_fallback);
 		if (cfg.allow_direct_yandex !== undefined) allow_direct_yandex = Boolean(cfg.allow_direct_yandex);
+		if (cfg.allow_direct_gismeteo !== undefined) allow_direct_gismeteo = Boolean(cfg.allow_direct_gismeteo);
+		if (cfg.allow_direct_foreca !== undefined) allow_direct_foreca = Boolean(cfg.allow_direct_foreca);
+		if (cfg.allow_direct_metered !== undefined) allow_direct_metered = Boolean(cfg.allow_direct_metered);
 		if (cfg.wind_max !== undefined) wind_max = cfg.wind_max;
 		if (cfg.pressure_min !== undefined) pressure_min = cfg.pressure_min;
 		if (cfg.pressure_max !== undefined) pressure_max = cfg.pressure_max;
@@ -989,6 +1016,15 @@ function load_config(callback) {
 		}
 		if (cfg.allow_direct_yandex !== undefined) {
 			allow_direct_yandex = Boolean(cfg.allow_direct_yandex);
+		}
+		if (cfg.allow_direct_gismeteo !== undefined) {
+			allow_direct_gismeteo = Boolean(cfg.allow_direct_gismeteo);
+		}
+		if (cfg.allow_direct_foreca !== undefined) {
+			allow_direct_foreca = Boolean(cfg.allow_direct_foreca);
+		}
+		if (cfg.allow_direct_metered !== undefined) {
+			allow_direct_metered = Boolean(cfg.allow_direct_metered);
 		}
 		if (cfg.wind_max !== undefined) wind_max = cfg.wind_max;
 		if (cfg.pressure_min !== undefined) pressure_min = cfg.pressure_min;
@@ -1870,7 +1906,7 @@ function run() {
 		var _isDirect = ["owm", "om", "7timer", "wttr", "yandex", "foreca", "gismeteo"].indexOf(_curPref) >= 0;
 		// Локального сервера нет, а основной источник — прямой внешний API:
 		// синхронизация идёт с внешним интервалом, а не серверным
-		if (!_isDirect && _curPref !== "server" && server_url.trim() === "" && allow_direct_yandex) {
+		if (!_isDirect && _curPref !== "server" && server_url.trim() === "" && (allow_direct_yandex || is_direct_allowed_for("yandex"))) {
 			_isDirect = true;
 		}
 		var _effTimeout = (_isDirect ? direct_timeout : timeout) * 1000;
@@ -2009,26 +2045,68 @@ function get_data() {
 		return;
 	}
 	if (source_pref === "foreca") {
-		var fkey = safe_get_item("foreca_api_key", "") || foreca_api_key_cfg;
-		if (!fkey) {
-			show_key_dialog("Ключ Foreca (Bearer)", "foreca_api_key", function() { get_data(); });
+		console.log("get_data: source pref = Foreca");
+		function try_direct_foreca(lastXhr, lastStatus, lastErr) {
+			if (!is_direct_allowed_for("foreca")) {
+				show_error(lastXhr, lastStatus || "source_disabled", lastErr || "прямой Foreca отключён конфигом", "Foreca");
+				return;
+			}
+			var fkey = safe_get_item("foreca_api_key", "") || foreca_api_key_cfg;
+			if (!fkey) {
+				show_key_dialog("Ключ Foreca (Bearer)", "foreca_api_key", function() { get_data(); });
+				return;
+			}
+			if (!force_bypass_direct_gate && !direct_gate_ok()) {
+				show_error(lastXhr, lastStatus || "direct_throttled", lastErr || "прямые запросы ограничены интервалом (квота)", "Foreca");
+				return;
+			}
+			direct_gate_mark();
+			fetch_from_foreca_client(function(d) {
+				current_weather_data = d;
+				try {
+					localStorage.setItem('weather_cache_data', JSON.stringify(d));
+					localStorage.setItem('weather_cache_time', String(Date.now()));
+					localStorage.setItem('weather_cache_source', 'Foreca');
+					localStorage.removeItem('weather_last_attempt_error');
+				} catch (e) {}
+				render_weather(d);
+				update_status_bar();
+			}, function(ox, os, oe) {
+				show_error(ox, os, oe, "Foreca");
+			});
+		}
+
+		if (server) {
+			var fUrl = server + (server.indexOf("?") === -1 ? "?" : "&") + "source=foreca";
+			active_data_xhr = $.ajax({
+				url: fUrl,
+				dataType: 'json',
+				timeout: 25 * 1000,
+				success: function(result) {
+					if (result && result.fact && result.forecasts) {
+						current_weather_data = result;
+						try {
+							localStorage.setItem('weather_cache_data', JSON.stringify(result));
+							localStorage.setItem('weather_cache_time', String(Date.now()));
+							localStorage.setItem('weather_cache_source', result.src || 'Foreca');
+							localStorage.removeItem('weather_last_attempt_error');
+						} catch (e) {}
+						render_weather(result);
+						update_status_bar();
+					} else {
+						try_direct_foreca(null, "format", "неверный формат данных сервера");
+					}
+				},
+				error: function(xhr, status, err) {
+					if (status === "abort") return;
+					try_direct_foreca(xhr, status, err);
+				}
+			});
+			return;
+		} else {
+			try_direct_foreca();
 			return;
 		}
-		console.log("get_data: source pref = Foreca (direct)");
-		fetch_from_foreca_client(function(d) {
-			current_weather_data = d;
-			try {
-				localStorage.setItem('weather_cache_data', JSON.stringify(d));
-				localStorage.setItem('weather_cache_time', String(Date.now()));
-				localStorage.setItem('weather_cache_source', 'Foreca');
-				localStorage.removeItem('weather_last_attempt_error');
-			} catch (e) {}
-			render_weather(d);
-			update_status_bar();
-		}, function(ox, os, oe) {
-			show_error(ox, os, oe, "Foreca");
-		});
-		return;
 	}
 	if (source_pref === "7timer") {
 		console.log("get_data: source pref = 7timer (direct)");
@@ -2050,7 +2128,7 @@ function get_data() {
 	if (source_pref === "yandex") {
 		console.log("get_data: source pref = Yandex");
 		function try_direct_yandex(lastXhr, lastStatus, lastErr) {
-			if (!allow_direct_yandex) {
+			if (!is_direct_allowed_for("yandex")) {
 				show_error(lastXhr, lastStatus || "source_disabled", lastErr || "прямой Яндекс отключён конфигом", "Яндекс.Погода");
 				return;
 			}
@@ -2128,6 +2206,10 @@ function get_data() {
 	if (source_pref === "gismeteo") {
 		console.log("get_data: source pref = Gismeteo");
 		function try_direct_gismeteo(lastXhr, lastStatus, lastErr) {
+			if (!is_direct_allowed_for("gismeteo")) {
+				show_error(lastXhr, lastStatus || "source_disabled", lastErr || "прямой Gismeteo отключён конфигом", "Gismeteo");
+				return;
+			}
 			var effKey = safe_get_item("gismeteo_api_key", "") || gismeteo_api_key_cfg;
 			if (!effKey) {
 				show_key_dialog("Ключ Gismeteo API v2", "gismeteo_api_key", function() { get_data(); });
@@ -2221,12 +2303,12 @@ function get_data() {
 		primary_url = server;
 		headers = {};
 		is_direct_yandex = false;
-	} else if (allow_direct_yandex) {
+	} else if (is_direct_allowed_for("yandex")) {
 		primary_url = 'https://api.weather.yandex.ru/v2/forecast?lat=' + lat + '&lon=' + lon;
 		headers = {'X-Yandex-Weather-Key': api};
 		is_direct_yandex = true;
 	} else {
-		console.log("server_url is not set and allow_direct_yandex=false, going to wttr.in fallback");
+		console.log("server_url is not set and direct yandex not allowed, going to free fallbacks");
 		on_failure(null, "no_server_url", "server_url не задан, прямой Яндекс запрещен конфигом", false);
 		return;
 	}
@@ -2292,9 +2374,31 @@ function get_data() {
 		}
 
 		var chain = [];
+		var metered_chain = [];
+
+		// 1. БЕСПЛАТНЫЕ И БЕЗЛИМИТНЫЕ ИСТОЧНИКИ (опрашиваются первыми при отказе сервера)
+		chain.push({ name: 'Open-Meteo', run: function(ok, fail) { fetch_from_om_client(ok, fail); } });
+		if (owm_key) {
+			chain.push({ name: 'OpenWeatherMap', run: function(ok, fail) { fetch_from_owm(ok, fail); } });
+		}
+		chain.push({ name: '7timer', run: function(ok, fail) { fetch_from_7timer_client(ok, fail); } });
+		if (enable_wttr_fallback) {
+			chain.push({ name: 'wttr.in', run: function(ok, fail) { fetch_from_wttr(ok, fail); } });
+		}
+
+		// 2. ПЛАТНЫЕ / ОГРАНИЧЕННЫЕ ИСТОЧНИКИ (METERED): опрашиваются ТОЛЬКО в самом конце
+		// и ТОЛЬКО если прямое обращение к ним явно разрешено в конфиге
+		var effGisKey = safe_get_item("gismeteo_api_key", "") || gismeteo_api_key_cfg;
+		if (effGisKey && is_direct_allowed_for("gismeteo")) {
+			metered_chain.push({ name: 'Gismeteo', run: function(ok, fail) { fetch_from_gismeteo_client(ok, fail); } });
+		}
+		var effForecaKey = safe_get_item("foreca_api_key", "") || foreca_api_key_cfg;
+		if (effForecaKey && is_direct_allowed_for("foreca")) {
+			metered_chain.push({ name: 'Foreca', run: function(ok, fail) { fetch_from_foreca_client(ok, fail); } });
+		}
 		var effFallbackKey = safe_get_item("yandex_api_key", "") || api;
-		if (!is_direct_yandex && allow_direct_yandex && effFallbackKey && effFallbackKey !== 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx') {
-			chain.push({ name: 'Яндекс.Погода', run: function(ok, fail) {
+		if (!is_direct_yandex && is_direct_allowed_for("yandex") && effFallbackKey && effFallbackKey !== 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx') {
+			metered_chain.push({ name: 'Яндекс.Погода', run: function(ok, fail) {
 				$.ajax({
 					url: 'https://api.weather.yandex.ru/v2/forecast?lat=' + lat + '&lon=' + lon,
 					headers: { 'X-Yandex-Weather-Key': effFallbackKey },
@@ -2304,21 +2408,9 @@ function get_data() {
 				  .fail(function(x, st, e) { fail(x, st, e); });
 			}});
 		}
-		var effGisKey = safe_get_item("gismeteo_api_key", "") || gismeteo_api_key_cfg;
-		if (effGisKey) {
-			chain.push({ name: 'Gismeteo', run: function(ok, fail) { fetch_from_gismeteo_client(ok, fail); } });
-		}
-		var effForecaKey = safe_get_item("foreca_api_key", "") || foreca_api_key_cfg;
-		if (effForecaKey) {
-			chain.push({ name: 'Foreca', run: function(ok, fail) { fetch_from_foreca_client(ok, fail); } });
-		}
-		chain.push({ name: 'Open-Meteo', run: function(ok, fail) { fetch_from_om_client(ok, fail); } });
-		if (owm_key) {
-			chain.push({ name: 'OpenWeatherMap', run: function(ok, fail) { fetch_from_owm(ok, fail); } });
-		}
-		chain.push({ name: '7timer', run: function(ok, fail) { fetch_from_7timer_client(ok, fail); } });
-		if (enable_wttr_fallback) {
-			chain.push({ name: 'wttr.in', run: function(ok, fail) { fetch_from_wttr(ok, fail); } });
+
+		for (var mi = 0; mi < metered_chain.length; mi++) {
+			chain.push(metered_chain[mi]);
 		}
 
 		var stepIdx = 0;
