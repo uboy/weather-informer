@@ -922,14 +922,26 @@ function apply_text_color(c) {
 		else document.documentElement.style.removeProperty("--tc");
 	} catch (e) {}
 }
-var allow_direct_yandex = false; // Прямой доступ планшета к Яндекс API: только явным разрешением в config.json (иначе расход квоты ключа)
-var allow_direct_gismeteo = false; // Прямой доступ к Gismeteo API v2: только явным разрешением
-var allow_direct_foreca = false; // Прямой доступ к Foreca API: только явным разрешением
+var allow_direct_map = {}; // Универсальная карта разрешений прямого доступа: "источник" -> boolean
+var allow_direct_yandex = false; // Legacy-алиас для обратной совместимости с существующими скриптами/тестами
 var allow_direct_metered = false; // Общее разрешение прямого доступа ко всем квотируемым/платным API
 var enable_wttr_fallback = true; // Резервный источник wttr.in
 
 // Группа платных/ограниченных источников (квоты, платные лимиты, закрытые ключи)
+var DEFAULT_METERED_SOURCES = ["yandex", "gismeteo", "foreca"];
 var METERED_SOURCES = ["yandex", "gismeteo", "foreca"];
+
+function set_metered_sources(list) {
+	if (!list) return;
+	METERED_SOURCES = [];
+	if (typeof list === "string") list = list.split(",");
+	for (var i = 0; i < list.length; i++) {
+		var item = String(list[i]).trim().toLowerCase();
+		if (item && METERED_SOURCES.indexOf(item) === -1) {
+			METERED_SOURCES.push(item);
+		}
+	}
+}
 
 function is_metered_source(src) {
 	if (!src) return false;
@@ -941,13 +953,69 @@ function is_metered_source(src) {
 }
 
 function is_direct_allowed_for(src) {
-	if (!is_metered_source(src)) return true;
-	if (allow_direct_metered) return true;
+	if (!src) return false;
 	var s = String(src).toLowerCase();
-	if (s === "yandex") return Boolean(allow_direct_yandex);
-	if (s === "gismeteo") return Boolean(allow_direct_gismeteo);
-	if (s === "foreca") return Boolean(allow_direct_foreca);
+	// Если источник не квотируемый — по умолчанию прямой доступ открыт (если явно не запрещен в конфиге)
+	if (!is_metered_source(s)) {
+		if (allow_direct_map[s] !== undefined) return Boolean(allow_direct_map[s]);
+		return true;
+	}
+	// Для квотируемых/платных источников:
+	if (allow_direct_metered) return true;
+	if (allow_direct_map["*"] || allow_direct_map["all"]) return true;
+	if (allow_direct_map[s] !== undefined) return Boolean(allow_direct_map[s]);
+	// Legacy fallback: если в глобальных переменных еще остался флаг
+	if (s === "yandex" && allow_direct_yandex) return true;
 	return false;
+}
+
+function parse_allow_direct_config(cfg) {
+	if (!cfg || typeof cfg !== "object") return;
+	if (cfg.metered_sources !== undefined) {
+		set_metered_sources(cfg.metered_sources);
+	}
+	if (cfg.allow_direct_metered !== undefined) {
+		allow_direct_metered = Boolean(cfg.allow_direct_metered);
+	}
+	// 1. cfg.allow_direct (массив, объект или булево)
+	if (cfg.allow_direct !== undefined) {
+		if (typeof cfg.allow_direct === "boolean") {
+			allow_direct_metered = cfg.allow_direct;
+			allow_direct_map["*"] = cfg.allow_direct;
+		} else if (cfg.allow_direct instanceof Array || Object.prototype.toString.call(cfg.allow_direct) === "[object Array]") {
+			for (var j = 0; j < cfg.allow_direct.length; j++) {
+				var it = String(cfg.allow_direct[j]).trim().toLowerCase();
+				if (it) allow_direct_map[it] = true;
+			}
+		} else if (typeof cfg.allow_direct === "object" && cfg.allow_direct !== null) {
+			for (var ok in cfg.allow_direct) {
+				if (cfg.allow_direct.hasOwnProperty(ok)) {
+					allow_direct_map[String(ok).toLowerCase()] = Boolean(cfg.allow_direct[ok]);
+				}
+			}
+		}
+	}
+	// 2. cfg.allow_direct_sources или cfg.allowed_direct_sources (массив)
+	var list = cfg.allow_direct_sources || cfg.allowed_direct_sources;
+	if (list && list.length) {
+		for (var li = 0; li < list.length; li++) {
+			var lItem = String(list[li]).trim().toLowerCase();
+			if (lItem) allow_direct_map[lItem] = true;
+		}
+	}
+	// 3. Динамический скан любых ключей вида allow_direct_<source> (allow_direct_yandex, allow_direct_gismeteo, etc.)
+	for (var k in cfg) {
+		if (cfg.hasOwnProperty(k) && k.indexOf("allow_direct_") === 0) {
+			var sub = k.substring("allow_direct_".length).toLowerCase();
+			if (sub === "metered") {
+				allow_direct_metered = Boolean(cfg[k]);
+			} else if (sub !== "sources") {
+				allow_direct_map[sub] = Boolean(cfg[k]);
+			}
+		}
+	}
+	// Синхронизируем legacy-переменную
+	allow_direct_yandex = Boolean(allow_direct_map["yandex"]);
 }
 
 function load_config(callback) {
@@ -977,10 +1045,7 @@ function load_config(callback) {
 			max_cache_age_ms = max_cache_age_hours * 60 * 60 * 1000;
 		}
 		if (cfg.enable_wttr_fallback !== undefined) enable_wttr_fallback = Boolean(cfg.enable_wttr_fallback);
-		if (cfg.allow_direct_yandex !== undefined) allow_direct_yandex = Boolean(cfg.allow_direct_yandex);
-		if (cfg.allow_direct_gismeteo !== undefined) allow_direct_gismeteo = Boolean(cfg.allow_direct_gismeteo);
-		if (cfg.allow_direct_foreca !== undefined) allow_direct_foreca = Boolean(cfg.allow_direct_foreca);
-		if (cfg.allow_direct_metered !== undefined) allow_direct_metered = Boolean(cfg.allow_direct_metered);
+		parse_allow_direct_config(cfg);
 		if (cfg.wind_max !== undefined) wind_max = cfg.wind_max;
 		if (cfg.pressure_min !== undefined) pressure_min = cfg.pressure_min;
 		if (cfg.pressure_max !== undefined) pressure_max = cfg.pressure_max;
@@ -1014,18 +1079,7 @@ function load_config(callback) {
 		if (cfg.enable_wttr_fallback !== undefined) {
 			enable_wttr_fallback = Boolean(cfg.enable_wttr_fallback);
 		}
-		if (cfg.allow_direct_yandex !== undefined) {
-			allow_direct_yandex = Boolean(cfg.allow_direct_yandex);
-		}
-		if (cfg.allow_direct_gismeteo !== undefined) {
-			allow_direct_gismeteo = Boolean(cfg.allow_direct_gismeteo);
-		}
-		if (cfg.allow_direct_foreca !== undefined) {
-			allow_direct_foreca = Boolean(cfg.allow_direct_foreca);
-		}
-		if (cfg.allow_direct_metered !== undefined) {
-			allow_direct_metered = Boolean(cfg.allow_direct_metered);
-		}
+		parse_allow_direct_config(cfg);
 		if (cfg.wind_max !== undefined) wind_max = cfg.wind_max;
 		if (cfg.pressure_min !== undefined) pressure_min = cfg.pressure_min;
 		if (cfg.pressure_max !== undefined) pressure_max = cfg.pressure_max;
@@ -1903,10 +1957,10 @@ function run() {
 
 	try {
 		var _curPref = safe_get_item("weather_source_pref", "default");
-		var _isDirect = ["owm", "om", "7timer", "wttr", "yandex", "foreca", "gismeteo"].indexOf(_curPref) >= 0;
+		var _isDirect = (_curPref !== "default" && _curPref !== "server");
 		// Локального сервера нет, а основной источник — прямой внешний API:
 		// синхронизация идёт с внешним интервалом, а не серверным
-		if (!_isDirect && _curPref !== "server" && server_url.trim() === "" && (allow_direct_yandex || is_direct_allowed_for("yandex"))) {
+		if (!_isDirect && _curPref !== "server" && server_url.trim() === "" && is_direct_allowed_for("yandex")) {
 			_isDirect = true;
 		}
 		var _effTimeout = (_isDirect ? direct_timeout : timeout) * 1000;
@@ -2373,32 +2427,19 @@ function get_data() {
 			update_status_bar();
 		}
 
-		var chain = [];
-		var metered_chain = [];
-
-		// 1. БЕСПЛАТНЫЕ И БЕЗЛИМИТНЫЕ ИСТОЧНИКИ (опрашиваются первыми при отказе сервера)
-		chain.push({ name: 'Open-Meteo', run: function(ok, fail) { fetch_from_om_client(ok, fail); } });
-		if (owm_key) {
-			chain.push({ name: 'OpenWeatherMap', run: function(ok, fail) { fetch_from_owm(ok, fail); } });
-		}
-		chain.push({ name: '7timer', run: function(ok, fail) { fetch_from_7timer_client(ok, fail); } });
-		if (enable_wttr_fallback) {
-			chain.push({ name: 'wttr.in', run: function(ok, fail) { fetch_from_wttr(ok, fail); } });
-		}
-
-		// 2. ПЛАТНЫЕ / ОГРАНИЧЕННЫЕ ИСТОЧНИКИ (METERED): опрашиваются ТОЛЬКО в самом конце
-		// и ТОЛЬКО если прямое обращение к ним явно разрешено в конфиге
 		var effGisKey = safe_get_item("gismeteo_api_key", "") || gismeteo_api_key_cfg;
-		if (effGisKey && is_direct_allowed_for("gismeteo")) {
-			metered_chain.push({ name: 'Gismeteo', run: function(ok, fail) { fetch_from_gismeteo_client(ok, fail); } });
-		}
 		var effForecaKey = safe_get_item("foreca_api_key", "") || foreca_api_key_cfg;
-		if (effForecaKey && is_direct_allowed_for("foreca")) {
-			metered_chain.push({ name: 'Foreca', run: function(ok, fail) { fetch_from_foreca_client(ok, fail); } });
-		}
 		var effFallbackKey = safe_get_item("yandex_api_key", "") || api;
-		if (!is_direct_yandex && is_direct_allowed_for("yandex") && effFallbackKey && effFallbackKey !== 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx') {
-			metered_chain.push({ name: 'Яндекс.Погода', run: function(ok, fail) {
+		var hasValidYandexKey = (!is_direct_yandex && effFallbackKey && effFallbackKey !== 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx');
+
+		var candidates = [
+			{ id: 'om', name: 'Open-Meteo', enabled: true, run: function(ok, fail) { fetch_from_om_client(ok, fail); } },
+			{ id: 'owm', name: 'OpenWeatherMap', enabled: Boolean(owm_key), run: function(ok, fail) { fetch_from_owm(ok, fail); } },
+			{ id: '7timer', name: '7timer', enabled: true, run: function(ok, fail) { fetch_from_7timer_client(ok, fail); } },
+			{ id: 'wttr', name: 'wttr.in', enabled: Boolean(enable_wttr_fallback), run: function(ok, fail) { fetch_from_wttr(ok, fail); } },
+			{ id: 'gismeteo', name: 'Gismeteo', enabled: Boolean(effGisKey), run: function(ok, fail) { fetch_from_gismeteo_client(ok, fail); } },
+			{ id: 'foreca', name: 'Foreca', enabled: Boolean(effForecaKey), run: function(ok, fail) { fetch_from_foreca_client(ok, fail); } },
+			{ id: 'yandex', name: 'Яндекс.Погода', enabled: Boolean(hasValidYandexKey), run: function(ok, fail) {
 				$.ajax({
 					url: 'https://api.weather.yandex.ru/v2/forecast?lat=' + lat + '&lon=' + lon,
 					headers: { 'X-Yandex-Weather-Key': effFallbackKey },
@@ -2406,12 +2447,27 @@ function get_data() {
 					timeout: 25 * 1000
 				}).done(function(d) { ok(d, 'Яндекс.Погода'); })
 				  .fail(function(x, st, e) { fail(x, st, e); });
-			}});
+			}}
+		];
+
+		var free_chain = [];
+		var metered_chain = [];
+
+		for (var ci = 0; ci < candidates.length; ci++) {
+			var cand = candidates[ci];
+			if (!cand.enabled) continue;
+			if (is_metered_source(cand.id)) {
+				if (is_direct_allowed_for(cand.id)) {
+					metered_chain.push(cand);
+				}
+			} else {
+				if (is_direct_allowed_for(cand.id)) {
+					free_chain.push(cand);
+				}
+			}
 		}
 
-		for (var mi = 0; mi < metered_chain.length; mi++) {
-			chain.push(metered_chain[mi]);
-		}
+		var chain = free_chain.concat(metered_chain);
 
 		var stepIdx = 0;
 		function tryNext() {
