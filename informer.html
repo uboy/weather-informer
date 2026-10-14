@@ -933,6 +933,7 @@ var METERED_SOURCES = ["yandex", "gismeteo", "foreca"];
 
 function set_metered_sources(list) {
 	if (!list) return;
+	if (typeof list !== "string" && !(list instanceof Array || Object.prototype.toString.call(list) === "[object Array]")) return;
 	METERED_SOURCES = [];
 	if (typeof list === "string") list = list.split(",");
 	for (var i = 0; i < list.length; i++) {
@@ -995,12 +996,15 @@ function parse_allow_direct_config(cfg) {
 			}
 		}
 	}
-	// 2. cfg.allow_direct_sources или cfg.allowed_direct_sources (массив)
+	// 2. cfg.allow_direct_sources или cfg.allowed_direct_sources (массив или строка)
 	var list = cfg.allow_direct_sources || cfg.allowed_direct_sources;
-	if (list && list.length) {
-		for (var li = 0; li < list.length; li++) {
-			var lItem = String(list[li]).trim().toLowerCase();
-			if (lItem) allow_direct_map[lItem] = true;
+	if (list) {
+		if (typeof list === "string") list = list.split(",");
+		if (list.length) {
+			for (var li = 0; li < list.length; li++) {
+				var lItem = String(list[li]).trim().toLowerCase();
+				if (lItem) allow_direct_map[lItem] = true;
+			}
 		}
 	}
 	// 3. Динамический скан любых ключей вида allow_direct_<source> (allow_direct_yandex, allow_direct_gismeteo, etc.)
