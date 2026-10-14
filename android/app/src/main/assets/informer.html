@@ -932,7 +932,10 @@ var DEFAULT_METERED_SOURCES = ["yandex", "gismeteo", "foreca"];
 var METERED_SOURCES = ["yandex", "gismeteo", "foreca"];
 
 function set_metered_sources(list) {
-	if (!list) return;
+	if (!list) {
+		METERED_SOURCES = DEFAULT_METERED_SOURCES.slice(0);
+		return;
+	}
 	if (typeof list !== "string" && !(list instanceof Array || Object.prototype.toString.call(list) === "[object Array]")) return;
 	METERED_SOURCES = [];
 	if (typeof list === "string") list = list.split(",");
@@ -956,18 +959,18 @@ function is_metered_source(src) {
 function is_direct_allowed_for(src) {
 	if (!src) return false;
 	var s = String(src).toLowerCase();
-	// Если источник не квотируемый — по умолчанию прямой доступ открыт (если явно не запрещен в конфиге)
-	if (!is_metered_source(s)) {
-		if (allow_direct_map[s] !== undefined) return Boolean(allow_direct_map[s]);
-		return true;
-	}
-	// Для квотируемых/платных источников:
-	if (allow_direct_metered) return true;
-	if (allow_direct_map["*"] || allow_direct_map["all"]) return true;
+	// 1. Точечная настройка конкретного источника имеет наивысший приоритет (override над мастер-флагами)
 	if (allow_direct_map[s] !== undefined) return Boolean(allow_direct_map[s]);
-	// Legacy fallback: если в глобальных переменных еще остался флаг
+	// 2. Legacy fallback для Яндекса
 	if (s === "yandex" && allow_direct_yandex) return true;
-	return false;
+	// 3. Для квотируемых источников проверяем мастер-флаги
+	if (is_metered_source(s)) {
+		if (allow_direct_metered) return true;
+		if (allow_direct_map["*"] || allow_direct_map["all"]) return true;
+		return false;
+	}
+	// 4. Не-квотируемые источники по умолчанию разрешены
+	return true;
 }
 
 function parse_allow_direct_config(cfg) {
@@ -1964,7 +1967,7 @@ function run() {
 		var _isDirect = (_curPref !== "default" && _curPref !== "server");
 		// Локального сервера нет, а основной источник — прямой внешний API:
 		// синхронизация идёт с внешним интервалом, а не серверным
-		if (!_isDirect && _curPref !== "server" && server_url.trim() === "" && is_direct_allowed_for("yandex")) {
+		if (!_isDirect && _curPref !== "server" && server_url.trim() === "") {
 			_isDirect = true;
 		}
 		var _effTimeout = (_isDirect ? direct_timeout : timeout) * 1000;
@@ -1982,7 +1985,8 @@ function run() {
 				} catch (e) {}
 			}
 		}
-		if ((isForce || lastcall < now - _effTimeout) && (server_url.trim() !== '' || api != 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx')) {
+		var canFetch = (server_url.trim() !== '' || api != 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx' || _isDirect || !is_metered_source(primary_source_cfg || 'yandex') || is_direct_allowed_for(primary_source_cfg || 'yandex') || enable_wttr_fallback);
+		if ((isForce || lastcall < now - _effTimeout) && canFetch) {
 			get_data();
 		}
 

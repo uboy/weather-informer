@@ -229,7 +229,7 @@ check('конфиг: direct_update_interval_sec читается (путей: ' 
 
 // 7.5 Без сервера и с allow_direct_yandex основной источник — внешний: интервал внешних
 check('нет сервера -> прямой источник использует direct_timeout',
-    /server_url\.trim\(\) === "" && \(?(?:allow_direct_yandex|is_direct_allowed_for\("yandex"\))/.test(html));
+    /_curPref !== "server" && server_url\.trim\(\) === ""/.test(html));
 
 // 7.6 ES5-канарейка: ES6-конструкции в разметке/скрипте запрещены (Android 6.0 WebView)
 check('ES5: нет стрелочных функций', !/=>/.test(html));
@@ -258,6 +258,7 @@ if (parseCfgMatch && isDirectMatch && isMeteredMatch && setMeteredMatch) {
         var allow_direct_map = {};
         var allow_direct_yandex = false;
         var allow_direct_metered = false;
+        var DEFAULT_METERED_SOURCES = ${JSON.stringify(meteredArr)};
         var METERED_SOURCES = ${JSON.stringify(meteredArr)};
         ${setMeteredMatch[0]}
         ${isMeteredMatch[0]}
@@ -306,6 +307,23 @@ if (parseCfgMatch && isDirectMatch && isMeteredMatch && setMeteredMatch) {
     sb.parse({ metered_sources: ["foo", "bar"], allow_direct_metered: true });
     check('allow_direct_metered=true: foo разрешен', sb.is_direct('foo') === true);
     check('allow_direct_metered=true: bar разрешен', sb.is_direct('bar') === true);
+
+    // Точечный запрет имеет наивысший приоритет и перебивает allow_direct_metered
+    sb.parse({ allow_direct: { "foo": false } });
+    check('точечный allow_direct foo=false перебивает allow_direct_metered', sb.is_direct('foo') === false);
+    check('bar по-прежнему разрешен через allow_direct_metered', sb.is_direct('bar') === true);
+
+    // Поддержка строк с запятыми для metered_sources и allow_direct_sources
+    sb.parse({ allow_direct_metered: false, metered_sources: "alpha, beta", allow_direct_sources: "alpha" });
+    check('comma-string metered_sources: alpha metered', sb.is_metered('alpha') === true);
+    check('comma-string metered_sources: beta metered', sb.is_metered('beta') === true);
+    check('comma-string allow_direct_sources: alpha разрешен', sb.is_direct('alpha') === true);
+    check('comma-string allow_direct_sources: beta запрещен', sb.is_direct('beta') === false);
+
+    // Сброс к DEFAULT_METERED_SOURCES при пустом аргументе
+    sb.set_metered(null);
+    check('set_metered(null) сбрасывает к дефолтам: yandex metered', sb.is_metered('yandex') === true);
+    check('set_metered(null) сбрасывает к дефолтам: alpha больше не metered', sb.is_metered('alpha') === false);
 }
 
 // 8.3 В on_failure бесплатные источники строго перед metered

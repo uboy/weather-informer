@@ -2,6 +2,9 @@
 # Единый прогон всех тестов. ОБЯЗАТЕЛЕН перед деплоем (deploy/all-tablets.sh вызывает).
 set -eo pipefail
 cd "$(dirname "$0")/.."
+echo "=== mirror sync check ==="
+cmp -s informer.html android/app/src/main/assets/informer.html || { echo "FAIL: android assets out of sync with informer.html"; exit 1; }
+echo "OK"
 echo "=== node icon-test ==="; node tests/icon-test.js | tail -1
 echo "=== node converters-test ==="; node tests/converters-test.js | tail -1
 echo "=== node ui-test ==="; node tests/ui-test.js | tail -1
