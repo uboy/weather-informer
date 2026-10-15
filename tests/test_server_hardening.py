@@ -140,6 +140,9 @@ class TestServerHardening(unittest.TestCase):
         self.assertTrue(rl.is_local("192.168.1.19"))
         self.assertTrue(rl.is_local("10.0.0.100"))
         self.assertTrue(rl.is_local("172.16.0.5"))
+        self.assertTrue(rl.is_local("172.17.0.1"), "Docker bridge subnet must be recognized as local")
+        self.assertTrue(rl.is_local("172.31.255.255"), "Upper 172.16/12 bound must be local")
+        self.assertFalse(rl.is_local("172.32.0.1"), "Outside 172.16/12 must be external")
         self.assertFalse(rl.is_local("203.0.113.195"))
         self.assertFalse(rl.is_local("8.8.8.8"))
         self.assertFalse(rl.is_local(""))
@@ -165,6 +168,37 @@ class TestServerHardening(unittest.TestCase):
         self.assertFalse(allowed, "11th request must be rejected")
         self.assertTrue(retry_after > 0, "retry_after must be positive")
         self.assertEqual(remaining, 0)
+
+    def test_rate_limiter_zero_limit_guard(self):
+        """Лимит 0 не должен вызывать IndexError на первом запросе"""
+        caching_server.save_config({"rate_limit_admin_per_minute": 0})
+        rl = caching_server.RateLimiter()
+        class DummyHandler:
+            client_address = ("203.0.113.50", 12345)
+            headers = {}
+
+        # Первый же запрос должен быть отклонён без падений
+        allowed, retry_after, limit, remaining = rl.check(DummyHandler(), "admin")
+        self.assertFalse(allowed)
+        self.assertTrue(retry_after >= 1)
+        self.assertEqual(limit, 0)
+        self.assertEqual(remaining, 0)
+
+    def test_rate_limiter_string_coercion(self):
+        """Строковые числа в конфиге должны корректно приводиться к int"""
+        caching_server.save_config({"rate_limit_admin_per_minute": "5"})
+        rl = caching_server.RateLimiter()
+        class DummyHandler:
+            client_address = ("203.0.113.50", 12345)
+            headers = {}
+
+        dummy = DummyHandler()
+        for _ in range(5):
+            allowed, _, limit, _ = rl.check(dummy, "admin")
+            self.assertTrue(allowed)
+            self.assertEqual(limit, 5)
+        allowed, _, _, _ = rl.check(dummy, "admin")
+        self.assertFalse(allowed)
 
     def test_rate_limiter_disabled_in_config(self):
         """Если rate_limit_enabled: false, запросы проходят без ограничений"""

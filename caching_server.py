@@ -21,6 +21,7 @@ import logging
 import re
 import shutil
 import tempfile
+import ipaddress
 from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 import urllib.request
@@ -202,15 +203,26 @@ cached_data = None
 last_fetch_time = 0
 last_error_message = None
 fetch_lock = threading.Lock()
+_CONFIG_CACHE = None
+_CONFIG_CACHE_MTIME = 0.0
+_CONFIG_CACHE_LOCK = threading.Lock()
 
 
 def load_config():
+    global _CONFIG_CACHE, _CONFIG_CACHE_MTIME
     cfg = dict(DEFAULT_CONFIG)
     if os.path.isfile(CONFIG_FILE):
         try:
+            mtime = os.path.getmtime(CONFIG_FILE)
+            with _CONFIG_CACHE_LOCK:
+                if _CONFIG_CACHE is not None and mtime == _CONFIG_CACHE_MTIME:
+                    return dict(_CONFIG_CACHE)
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 user_cfg = json.load(f)
                 cfg.update(user_cfg)
+                with _CONFIG_CACHE_LOCK:
+                    _CONFIG_CACHE = dict(cfg)
+                    _CONFIG_CACHE_MTIME = mtime
                 log.debug("Loaded config from %s", CONFIG_FILE)
                 return cfg
         except Exception as e:
@@ -248,6 +260,7 @@ CONFIG_LOCK = threading.Lock()
 
 def save_config(new_cfg):
     """Атомарное сохранение конфигурации в config.json с бэкапом, мьютексом и защитой от затирания ключей."""
+    global _CONFIG_CACHE, _CONFIG_CACHE_MTIME
     with CONFIG_LOCK:
         current = load_config()
         key_fields = ("api", "gismeteo_api_key", "foreca_api_key", "openweathermap_api_key")
@@ -277,6 +290,13 @@ def save_config(new_cfg):
             json.dump(current, f, ensure_ascii=False, indent=2)
             tmp_path = f.name
         os.replace(tmp_path, CONFIG_FILE)
+        try:
+            mtime = os.path.getmtime(CONFIG_FILE)
+            with _CONFIG_CACHE_LOCK:
+                _CONFIG_CACHE = dict(current)
+                _CONFIG_CACHE_MTIME = mtime
+        except Exception:
+            pass
         if "foreca_api_key" in current:
             try:
                 FORECA.token = current.get("foreca_api_key", "")
@@ -1823,12 +1843,23 @@ class BoundedThreadingHTTPServer(ThreadingHTTPServer):
                 pass
 
 
+LOCAL_SUBNETS = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("fe80::/10"),
+    ipaddress.ip_network("::1/128"),
+)
+
+
 class RateLimiter:
     """Внутрисерверный Rate Limiter (скользящее окно 60 сек) для защиты от DoS, перебора и сжигания квот API."""
     def __init__(self):
         self.lock = threading.Lock()
         self.records = {}
-        self.last_cleanup = time.time()
+        self.last_cleanup = time.monotonic()
         self.MAX_TRACKED_ENTRIES = 5000
 
         # Базовые лимиты: (внешний IP, локальная сеть) в запросах за 60 секунд
@@ -1854,24 +1885,29 @@ class RateLimiter:
         clean = ip.strip()
         if clean in ("127.0.0.1", "::1", "localhost"):
             return True
-        if clean.startswith("192.168.") or clean.startswith("10.") or clean.startswith("172.16."):
-            return True
-        return False
+        try:
+            addr = ipaddress.ip_address(clean)
+            return any(addr in net for net in LOCAL_SUBNETS)
+        except Exception:
+            return False
 
     def check(self, handler, category="weather"):
         cfg = load_config()
         if not cfg.get("rate_limit_enabled", True):
             return True, 0, 999999, 999999
 
-        now = time.time()
+        now = time.monotonic()
         ip = self.get_client_ip(handler)
         is_loc = self.is_local(ip)
 
         limits = self.DEFAULT_LIMITS.get(category, (30, 180))
         cfg_key = f"rate_limit_{category}_per_minute"
-        if cfg_key in cfg and isinstance(cfg[cfg_key], (int, float)):
-            ext_limit = int(cfg[cfg_key])
-            limits = (ext_limit, max(ext_limit * 4, limits[1]))
+        if cfg_key in cfg:
+            try:
+                ext_limit = int(cfg[cfg_key])
+                limits = (ext_limit, max(ext_limit * 4, limits[1]))
+            except (ValueError, TypeError):
+                pass
 
         max_requests = limits[1] if is_loc else limits[0]
         window = 60.0
@@ -1886,10 +1922,10 @@ class RateLimiter:
             valid_ts = [t for t in timestamps if t > cutoff]
 
             if len(valid_ts) >= max_requests:
-                earliest = valid_ts[0]
+                earliest = valid_ts[0] if valid_ts else now
                 retry_after = max(1, int(math.ceil(window - (now - earliest))))
                 self.records[key] = valid_ts
-                return False, retry_after, max_requests, 0
+                return False, retry_after, max(0, max_requests), 0
 
             valid_ts.append(now)
             self.records[key] = valid_ts
