@@ -19,7 +19,7 @@ const dupIds = ids.filter((v, i) => ids.indexOf(v) !== i);
 check('все id уникальны', dupIds.length === 0, 'дубликаты: ' + dupIds.join(','));
 
 for (const el of ['temperature', 'feels', 'feels_label', 'min', 'max', 'min_date', 'max_date',
-    'wind', 'humidity', 'pressure', 'rise', 'set', 'duration_hour', 'duration_minute',
+    'wind', 'humidity', 'pressure', 'pressure_norm_zone', 'pressure_norm_mark', 'rise', 'set', 'duration_hour', 'duration_minute',
     'duration_left', 'status_bar', 'weather_menu', 'key_dialog', 'city_search_input',
     'forecast_icon_0', 'forecast_icon_1', 'moon']) {
     check('элемент #' + el + ' существует', ids.includes(el));
@@ -79,6 +79,19 @@ if (flMatch) {
     check('feels_like: граница t=27/hum=39 → факт', fn(27, 39, 2) === 27, String(fn(27, 39, 2)));
     check('feels_like: жара 30°/70% → ≥ +32', fn(30, 70, 2) >= 32, String(fn(30, 70, 2)));
     check('feels_like: жара 30°/30% → факт', fn(30, 30, 2) === 30, String(fn(30, 30, 2)));
+}
+
+// 3.1b calc_pressure_progress: индикация давления и цвета
+const prMatch = html.match(/^function calc_pressure_progress[\s\S]*?^\}/m);
+check('calc_pressure_progress извлечена', !!prMatch);
+if (prMatch) {
+    const fn = eval('(function(){ var pressure_min = 710, pressure_max = 770; ' + prMatch[0] + '; return calc_pressure_progress;})()');
+    check('pressure_progress: null → 0%', fn(null, 743) === 'width: 0%;');
+    check('pressure_progress: норма 743 → ~55%, зеленый', fn(743, 743).includes('width: 55%') && fn(743, 743).includes('#00e676'), fn(743, 743));
+    check('pressure_progress: низкое 720 → ~17%, синий', fn(720, 743).includes('width: 17%') && fn(720, 743).includes('#29b6f6'), fn(720, 743));
+    check('pressure_progress: высокое 760 → ~83%, оранжевый', fn(760, 743).includes('width: 83%') && fn(760, 743).includes('#ff9100'), fn(760, 743));
+    check('pressure_progress: clamp min 700 → 0%', fn(700, 743).includes('width: 0%'), fn(700, 743));
+    check('pressure_progress: clamp max 780 → 100%', fn(780, 743).includes('width: 100%'), fn(780, 743));
 }
 
 // 3.2 astro_sun: polar guard

@@ -258,6 +258,8 @@ body.night-dim #status_bar { opacity: 0.5; }
 						<span><span id="pressure" class="value"></span> мм рт. ст.</span>
 					</div>
 					<div class="wind_humidity_pressure_bar pressure_bar sector_pressure_progress">
+						<div id="pressure_norm_zone" class="pressure_norm_zone"></div>
+						<div id="pressure_norm_mark" class="pressure_norm_mark" title="Норма давления"></div>
 						<div id="pressure_progress" class="value" data-type="style"></div>
 					</div>
 				</div>
@@ -434,6 +436,38 @@ function calc_feels_like(t, hum, wind) {
 	if (hum > 70) adj = (t > 20 ? 1 : 0);
 	if (wind > 5) adj -= 1;
 	return Math.round(t + adj);
+}
+
+function calc_pressure_progress(p_val, norm_val) {
+	if (p_val === undefined || p_val === null || p_val === '' || isNaN(p_val)) {
+		return 'width: 0%;';
+	}
+	var num = Number(p_val);
+	var pct = 0;
+	if (num < pressure_min) pct = 0;
+	else if (num > pressure_max) pct = 100;
+	else pct = Math.round((num - pressure_min) / (pressure_max - pressure_min) * 100);
+
+	var norm = (norm_val != null && !isNaN(norm_val)) ? Number(norm_val) : 743;
+	var color = '#00e676';
+	if (num < norm - 5) {
+		color = '#29b6f6';
+	} else if (num > norm + 5) {
+		color = '#ff9100';
+	}
+	return 'width: ' + pct + '%; background-color: ' + color + ';';
+}
+
+function update_pressure_norm_ui(norm_val) {
+	var norm = (norm_val != null && !isNaN(norm_val)) ? Number(norm_val) : 743;
+	var norm_pct = Math.max(0, Math.min(100, Math.round((norm - pressure_min) / (pressure_max - pressure_min) * 100)));
+	var zone_l = Math.max(0, Math.round((norm - 5 - pressure_min) / (pressure_max - pressure_min) * 100));
+	var zone_r = Math.min(100, Math.round((norm + 5 - pressure_min) / (pressure_max - pressure_min) * 100));
+	$('#pressure_norm_mark').css('left', norm_pct + '%').attr('title', 'Норма давления: ' + norm + ' мм рт. ст.');
+	$('#pressure_norm_zone').css({
+		'left': zone_l + '%',
+		'width': (zone_r - zone_l) + '%'
+	});
 }
 
 function astro_sun(lat, lon, dateObj) {
@@ -2514,6 +2548,8 @@ function render_weather(data) {
 	now = Date.now();
 	var curHour = date.getHours();
 	var result = {};
+	var def_norm = (data.info && data.info.def_pressure_mm != null) ? data.info.def_pressure_mm : 743;
+	update_pressure_norm_ui(def_norm);
 
 	// 1. Определение активного дня прогноза по календарной дате устройства
 	var activeForecastIdx = 0;
@@ -2584,11 +2620,8 @@ function render_weather(data) {
 		} else if (data.hasOwnProperty('info') && data.info.hasOwnProperty('def_pressure_mm') && data.info.def_pressure_mm != null) {
 			result.pressure = data.info.def_pressure_mm;
 		}
-		if (result.pressure !== undefined) {
-			if (result.pressure < pressure_min) result.pressure_progress = 0;
-			else if (result.pressure > pressure_max) result.pressure_progress = 100;
-			else result.pressure_progress = Math.round((result.pressure - pressure_min) / (pressure_max - pressure_min) * 100);
-			result.pressure_progress = 'width: ' + (100 - result.pressure_progress) + '%';
+		if (result.pressure !== undefined && result.pressure !== null) {
+			result.pressure_progress = calc_pressure_progress(result.pressure, def_norm);
 		}
 	} else {
 		// Свежий факт
@@ -2617,11 +2650,8 @@ function render_weather(data) {
 		} else if (data.hasOwnProperty('info') && data.info.hasOwnProperty('def_pressure_mm') && data.info.def_pressure_mm != null) {
 			result.pressure = data.info.def_pressure_mm;
 		}
-		if (result.pressure !== undefined) {
-			if (result.pressure < pressure_min) result.pressure_progress = 0;
-			else if (result.pressure > pressure_max) result.pressure_progress = 100;
-			else result.pressure_progress = Math.round((result.pressure - pressure_min) / (pressure_max - pressure_min) * 100);
-			result.pressure_progress = 'width: ' + (100 - result.pressure_progress) + '%';
+		if (result.pressure !== undefined && result.pressure !== null) {
+			result.pressure_progress = calc_pressure_progress(result.pressure, def_norm);
 		}
 	}
 
@@ -2645,7 +2675,7 @@ function render_weather(data) {
 	}
 	if (result.pressure === undefined || result.pressure === null) {
 		result.pressure = '—';
-		result.pressure_progress = 'width: 100%';
+		result.pressure_progress = 'width: 0%;';
 	}
 
 	// 3. Min и Max по часам активного дня
@@ -3020,23 +3050,55 @@ body {
 	background: linear-gradient(to right, #fff, #ff0000);
 }
 .pressure_bar {
-	background: #006bff;
+	background: #2a2c33;
+	position: relative;
+	overflow: visible;
+}
+.pressure_norm_zone {
+	position: absolute;
+	left: 46.7%;
+	width: 16.6%;
+	top: 0;
+	bottom: 0;
+	height: 100%;
+	background: rgba(0, 230, 118, 0.18);
+	border-left: 1px dashed rgba(255, 255, 255, 0.3);
+	border-right: 1px dashed rgba(255, 255, 255, 0.3);
+	z-index: 1;
+	pointer-events: none;
+}
+.pressure_norm_mark {
+	position: absolute;
+	left: 55%;
+	top: -2px;
+	bottom: -2px;
+	width: 2px;
+	background: #ffffff;
+	box-shadow: 0 0 2px rgba(0, 0, 0, 0.8);
+	opacity: 0.95;
+	z-index: 3;
+	pointer-events: none;
 }
 .humidity_bar {
 	background: linear-gradient(to right, #fff, #006bff);
 }
-.wind_humidity_progress, #pressure_progress {
+.wind_humidity_progress {
 	position: absolute;
 	right: 0;
 	height: 2vw;
 	border-radius: 2vw;
 	border-radius: 0 2vw 2vw 0;
-}
-.wind_humidity_progress {
 	background-color: #444;
 }
 #pressure_progress {
-	background: #ff0000;
+	position: absolute;
+	left: 0;
+	top: 0;
+	bottom: 0;
+	height: 100%;
+	border-radius: 2vw;
+	background: #00e676;
+	z-index: 2;
 }
 .forecast_part {
 	width: 50%;
