@@ -16,8 +16,8 @@ for t in $TABLETS; do
   echo "=== Деплой на $t ==="
   deployed=0
 
-  # 1. Пробуем быстро по Zero-ADB OTA HTTP (порт 8080)
-  if curl -s -m 2 "http://$ip:8080/health" 2>/dev/null | grep -q '"app":"WeatherInformerKiosk"'; then
+  # 1. Пробуем быстро по Zero-ADB OTA HTTP (порт 8080) только если передан IP-адрес
+  if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && curl -s -m 2 "http://$ip:8080/health" 2>/dev/null | grep -q '"app":"WeatherInformerKiosk"'; then
     echo "  [OTA HTTP] Обновление через http://$ip:8080/api/upload..."
     resp=$(curl -s -m 8 -X POST -F "file=@$ROOT_DIR/informer.html" "http://$ip:8080/api/upload" 2>/dev/null || true)
     if echo "$resp" | grep -q '"status":"uploaded"'; then

@@ -111,9 +111,13 @@ if (prMatch) {
     const fn = eval('(function(){ var pressure_min = 710, pressure_max = 770; ' + prMatch[0] + '; return calc_pressure_progress;})()');
     check('pressure_progress: null → 0%', fn(null, 743) === 'width: 0%;');
     check('pressure_progress: норма 743 → ~55%, зеленый', fn(743, 743).includes('width: 55%') && fn(743, 743).includes('#00e676'), fn(743, 743));
-    check('pressure_progress: низкое 720 → ~17%, синий', fn(720, 743).includes('width: 17%') && fn(720, 743).includes('#29b6f6'), fn(720, 743));
-    check('pressure_progress: высокое 760 → ~83%, оранжевый', fn(760, 743).includes('width: 83%') && fn(760, 743).includes('#ff9100'), fn(760, 743));
+    check('pressure_progress: штормовой циклон 720 → ~17%, фиолетовый', fn(720, 743).includes('width: 17%') && fn(720, 743).includes('#ab47bc'), fn(720, 743));
+    check('pressure_progress: пониженное 730 → ~33%, синий', fn(730, 743).includes('width: 33%') && fn(730, 743).includes('#29b6f6'), fn(730, 743));
+    check('pressure_progress: высокое 755 → ~75%, оранжевый', fn(755, 743).includes('width: 75%') && fn(755, 743).includes('#ff9100'), fn(755, 743));
     check('pressure_progress: барический купол 768 → ~97%, темно-красный', fn(768, 743).includes('width: 97%') && fn(768, 743).includes('#b71c1c'), fn(768, 743));
+    check('pressure_progress: уровень моря норма 761 (norm 760) → зеленый', fn(761, 760).includes('#00e676'), fn(761, 760));
+    check('pressure_progress: уровень моря купол 772 (norm 760) → темно-красный', fn(772, 760).includes('#b71c1c'), fn(772, 760));
+    check('pressure_progress: fallback при norm null (710) → фиолетовый', fn(710, null).includes('#ab47bc'), fn(710, null));
     check('pressure_progress: clamp min 700 → 0%', fn(700, 743).includes('width: 0%'), fn(700, 743));
     check('pressure_progress: clamp max 780 → 100%', fn(780, 743).includes('width: 100%'), fn(780, 743));
 }
@@ -153,6 +157,33 @@ if (trendMatch) {
     ]);
     const tr2 = fnTrend(743);
     check('pressure_trend: падение 746 → 743 (-3 за 12ч)', tr2 && tr2.delta === -3 && tr2.hours === 12, JSON.stringify(tr2));
+}
+
+// 3.1e record_pressure_sample: проверка накопления сэмплов каждые 15 минут
+const recordMatch = html.match(/^function record_pressure_sample[\s\S]*?^\}/m);
+check('record_pressure_sample извлечена', !!recordMatch);
+if (recordMatch) {
+    const mockStore = {};
+    const mockLocalStorage = {
+        getItem: function(k) { return mockStore[k] || null; },
+        setItem: function(k, v) { mockStore[k] = v; }
+    };
+    let simTime = 1000000000;
+    const fnRecord = eval('(function(){ var localStorage = mockLocalStorage; var Date = { now: function() { return simTime; } }; ' + recordMatch[0] + '; return record_pressure_sample;})()');
+
+    // 0..14 минут: вызовы каждую минуту (15 вызовов) обновляют последний сэмпл, размер массива = 1
+    for (let m = 0; m <= 14; m++) {
+        simTime = 1000000000 + m * 60 * 1000;
+        fnRecord(743);
+    }
+    const h1 = JSON.parse(mockStore['weather_pressure_history'] || '[]');
+    check('record_pressure_sample: за первые 14 минут ровно 1 сэмпл', h1.length === 1, String(h1.length));
+
+    // 15-я минута: прошло ровно 15 минут от метки старта — создается 2-й сэмпл
+    simTime = 1000000000 + 15 * 60 * 1000;
+    fnRecord(744);
+    const h2 = JSON.parse(mockStore['weather_pressure_history'] || '[]');
+    check('record_pressure_sample: на 15-й минуте добавлен 2-й сэмпл', h2.length === 2 && h2[1].p === 744, JSON.stringify(h2));
 }
 
 // 3.2 astro_sun: polar guard

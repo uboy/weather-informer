@@ -455,15 +455,21 @@ function calc_barometric_norm(elev_m) {
 function fetch_elevation_async(cur_lat, cur_lon) {
 	if (!cur_lat || !cur_lon) return;
 	var key = 'loc_elev_' + Math.round(Number(cur_lat) * 1000) + '_' + Math.round(Number(cur_lon) * 1000);
+	var errKey = 'loc_elev_err_' + Math.round(Number(cur_lat) * 1000) + '_' + Math.round(Number(cur_lon) * 1000);
 	try {
 		if (localStorage.getItem(key)) return;
+		var lastErr = localStorage.getItem(errKey);
+		if (lastErr && (Date.now() - Number(lastErr) < 3600 * 1000)) return;
 	} catch(e) {}
 	var url = 'https://api.open-meteo.com/v1/elevation?latitude=' + encodeURIComponent(cur_lat) + '&longitude=' + encodeURIComponent(cur_lon);
 	$.ajax({ url: url, dataType: 'json', timeout: 8000 })
 		.done(function(resp) {
 			if (resp && resp.elevation && resp.elevation.length > 0 && resp.elevation[0] != null) {
 				var el = resp.elevation[0];
-				try { localStorage.setItem(key, String(el)); } catch(e) {}
+				try {
+					localStorage.setItem(key, String(el));
+					localStorage.removeItem(errKey);
+				} catch(e) {}
 				var norm = calc_barometric_norm(el);
 				if (norm != null) {
 					update_pressure_norm_ui(norm);
@@ -473,7 +479,9 @@ function fetch_elevation_async(cur_lat, cur_lon) {
 				}
 			}
 		})
-		.fail(function() {});
+		.fail(function() {
+			try { localStorage.setItem(errKey, String(Date.now())); } catch(e) {}
+		});
 }
 
 function get_norm_pressure(data, cur_lat, cur_lon) {
@@ -566,7 +574,6 @@ function record_pressure_sample(p_val) {
 		history.push({ t: nowMs, p: num });
 	} else {
 		last.p = num;
-		last.t = nowMs;
 	}
 
 	var cutoff = nowMs - (36 * 3600 * 1000);
@@ -706,18 +713,17 @@ function calc_pressure_progress(p_val, norm_val) {
 	else if (num > pressure_max) pct = 100;
 	else pct = Math.round((num - pressure_min) / (pressure_max - pressure_min) * 100);
 
-	var norm = (norm_val != null && !isNaN(norm_val)) ? Number(norm_val) : null;
+	var norm = (norm_val != null && !isNaN(norm_val)) ? Number(norm_val) : 745;
 	var color = '#00e676';
-	if (norm != null) {
-		if (num > 760) {
-			color = '#b71c1c';
-		} else if (num > norm + 5) {
-			color = '#ff9100';
-		} else if (num < 715) {
-			color = '#ab47bc';
-		} else if (num < norm - 5) {
-			color = '#29b6f6';
-		}
+	var extreme_high = Math.max(760, norm + 10);
+	if (num > extreme_high) {
+		color = '#b71c1c';
+	} else if (num > norm + 5) {
+		color = '#ff9100';
+	} else if (num < 725) {
+		color = '#ab47bc';
+	} else if (num < norm - 5) {
+		color = '#29b6f6';
 	}
 	return 'width: ' + pct + '%; background-color: ' + color + ';';
 }
