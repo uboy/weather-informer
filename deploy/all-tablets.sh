@@ -21,7 +21,6 @@ for t in $TABLETS; do
     echo "  [OTA HTTP] Обновление через http://$ip:8080/api/upload..."
     resp=$(curl -s -m 8 -X POST -F "file=@$ROOT_DIR/informer.html" "http://$ip:8080/api/upload" 2>/dev/null || true)
     if echo "$resp" | grep -q '"status":"uploaded"'; then
-      curl -s -m 4 "http://$ip:8080/api/reload" >/dev/null 2>&1 || true
       echo "  [OTA HTTP] $t: Успешно загружено и перезагружено"
       deployed=1
     else

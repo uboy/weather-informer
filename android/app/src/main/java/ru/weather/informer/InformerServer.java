@@ -20,7 +20,7 @@ public class InformerServer {
     private volatile boolean isRunning = false;
     private final long startTime = System.currentTimeMillis();
     private static InformerServer instance;
-    private MainActivity activity;
+    private volatile java.lang.ref.WeakReference<MainActivity> activityRef;
 
     public InformerServer(Context context) {
         this.context = context.getApplicationContext();
@@ -36,11 +36,12 @@ public class InformerServer {
     }
 
     public void setActivity(MainActivity activity) {
-        this.activity = activity;
+        this.activityRef = (activity != null) ? new java.lang.ref.WeakReference<>(activity) : null;
     }
 
     public MainActivity getActivity() {
-        return activity;
+        java.lang.ref.WeakReference<MainActivity> ref = this.activityRef;
+        return (ref != null) ? ref.get() : null;
     }
 
     public Context getContext() {

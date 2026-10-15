@@ -585,29 +585,30 @@ public class ClientHandler implements Runnable {
     }
 
     private void triggerReload() {
-        try {
-            MainActivity act = server.getActivity();
-            if (act != null) {
+        MainActivity act = server.getActivity();
+        if (act != null && !act.isFinishing()) {
+            try {
                 act.reloadInformer();
+            } catch (Exception e) {
+                Log.e(TAG, "Direct reloadInformer error: " + e.getMessage());
             }
-        } catch (Exception e) {
-            Log.e(TAG, "Direct reloadInformer error: " + e.getMessage());
+        } else {
+            try {
+                Intent launchIntent = new Intent(server.getContext(), MainActivity.class);
+                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                launchIntent.putExtra("force_reload", true);
+                server.getContext().startActivity(launchIntent);
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to start MainActivity from triggerReload: " + e.getMessage());
+            }
         }
 
         try {
             Intent broadcast = new Intent(MainActivity.ACTION_RELOAD);
+            broadcast.setPackage(server.getContext().getPackageName());
             server.getContext().sendBroadcast(broadcast);
         } catch (Exception e) {
             Log.e(TAG, "Failed to send reload broadcast: " + e.getMessage());
-        }
-
-        try {
-            Intent launchIntent = new Intent(server.getContext(), MainActivity.class);
-            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-            launchIntent.putExtra("force_reload", true);
-            server.getContext().startActivity(launchIntent);
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to start MainActivity from triggerReload: " + e.getMessage());
         }
     }
 

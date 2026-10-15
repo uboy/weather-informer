@@ -9,6 +9,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.util.Log;
 import android.view.View;
 import android.view.WindowManager;
@@ -22,6 +23,7 @@ public class MainActivity extends Activity implements Runnable {
 
     private WebView webView;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private long lastReloadMs = 0;
 
     private static class ReloadReceiver extends BroadcastReceiver {
         private final MainActivity activity;
@@ -43,8 +45,10 @@ public class MainActivity extends Activity implements Runnable {
 
     @Override
     public void run() {
+        if (isFinishing() || (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1 && isDestroyed())) {
+            return;
+        }
         if (webView != null) {
-            webView.clearCache(true);
             webView.loadUrl("http://127.0.0.1:8080/?force=1&t=" + System.currentTimeMillis());
         }
     }
@@ -54,6 +58,12 @@ public class MainActivity extends Activity implements Runnable {
     }
 
     public void reloadInformer() {
+        long now = SystemClock.elapsedRealtime();
+        if (now - lastReloadMs < 1000) {
+            Log.d(TAG, "reloadInformer ignored (debounced within 1000ms)");
+            return;
+        }
+        lastReloadMs = now;
         runOnUiThread(this);
     }
 
@@ -61,8 +71,10 @@ public class MainActivity extends Activity implements Runnable {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
-        Log.i(TAG, "onNewIntent called, reloading informer...");
-        reloadInformer();
+        if (intent != null && intent.getBooleanExtra("force_reload", false)) {
+            Log.i(TAG, "onNewIntent with force_reload, reloading informer...");
+            reloadInformer();
+        }
     }
 
     @Override
@@ -127,11 +139,18 @@ public class MainActivity extends Activity implements Runnable {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        mainHandler.removeCallbacksAndMessages(null);
         try {
             unregisterReceiver(reloadReceiver);
         } catch (Exception ignored) {}
         if (InformerServer.getInstance() != null && InformerServer.getInstance().getActivity() == this) {
             InformerServer.getInstance().setActivity(null);
+        }
+        if (webView != null) {
+            webView.stopLoading();
+            webView.setWebViewClient(null);
+            webView.destroy();
+            webView = null;
         }
     }
 
