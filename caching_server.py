@@ -191,7 +191,11 @@ DEFAULT_CONFIG = {
         "192.168.1.31:5555",
         "192.168.1.52:5555"
     ],
-    "ntp_server": "ru.pool.ntp.org"
+    "ntp_server": "ru.pool.ntp.org",
+    "rate_limit_enabled": True,
+    "rate_limit_admin_per_minute": 10,
+    "rate_limit_weather_per_minute": 30,
+    "rate_limit_static_per_minute": 30
 }
 
 cached_data = None
@@ -1819,10 +1823,138 @@ class BoundedThreadingHTTPServer(ThreadingHTTPServer):
                 pass
 
 
+class RateLimiter:
+    """Внутрисерверный Rate Limiter (скользящее окно 60 сек) для защиты от DoS, перебора и сжигания квот API."""
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.records = {}
+        self.last_cleanup = time.time()
+        self.MAX_TRACKED_ENTRIES = 5000
+
+        # Базовые лимиты: (внешний IP, локальная сеть) в запросах за 60 секунд
+        self.DEFAULT_LIMITS = {
+            "admin": (10, 60),      # POST /api/settings, /sync_time, /reverse, /geocode, /accuracy
+            "weather": (30, 180),   # /weather.json, /forecast.json, /v2/forecast
+            "static": (30, 180),    # /settings, /install, /informer.apk, /health, /status
+        }
+
+    def get_client_ip(self, handler):
+        raw_ip = handler.client_address[0] if handler.client_address else "127.0.0.1"
+        if raw_ip in ("127.0.0.1", "::1"):
+            xff = handler.headers.get("X-Forwarded-For")
+            if xff:
+                client = xff.split(",")[0].strip()
+                if client:
+                    return client
+        return raw_ip
+
+    def is_local(self, ip):
+        if not ip or not isinstance(ip, str):
+            return False
+        clean = ip.strip()
+        if clean in ("127.0.0.1", "::1", "localhost"):
+            return True
+        if clean.startswith("192.168.") or clean.startswith("10.") or clean.startswith("172.16."):
+            return True
+        return False
+
+    def check(self, handler, category="weather"):
+        cfg = load_config()
+        if not cfg.get("rate_limit_enabled", True):
+            return True, 0, 999999, 999999
+
+        now = time.time()
+        ip = self.get_client_ip(handler)
+        is_loc = self.is_local(ip)
+
+        limits = self.DEFAULT_LIMITS.get(category, (30, 180))
+        cfg_key = f"rate_limit_{category}_per_minute"
+        if cfg_key in cfg and isinstance(cfg[cfg_key], (int, float)):
+            ext_limit = int(cfg[cfg_key])
+            limits = (ext_limit, max(ext_limit * 4, limits[1]))
+
+        max_requests = limits[1] if is_loc else limits[0]
+        window = 60.0
+
+        with self.lock:
+            if now - self.last_cleanup > 60:
+                self._cleanup(now)
+
+            key = (ip, category)
+            timestamps = self.records.get(key, [])
+            cutoff = now - window
+            valid_ts = [t for t in timestamps if t > cutoff]
+
+            if len(valid_ts) >= max_requests:
+                earliest = valid_ts[0]
+                retry_after = max(1, int(math.ceil(window - (now - earliest))))
+                self.records[key] = valid_ts
+                return False, retry_after, max_requests, 0
+
+            valid_ts.append(now)
+            self.records[key] = valid_ts
+            remaining = max(0, max_requests - len(valid_ts))
+            return True, 0, max_requests, remaining
+
+    def _cleanup(self, now):
+        self.last_cleanup = now
+        cutoff = now - 60.0
+        keys_to_delete = []
+        for key, timestamps in self.records.items():
+            valid = [t for t in timestamps if t > cutoff]
+            if not valid:
+                keys_to_delete.append(key)
+            else:
+                self.records[key] = valid
+        for k in keys_to_delete:
+            del self.records[k]
+
+        if len(self.records) > self.MAX_TRACKED_ENTRIES:
+            self.records.clear()
+
+
+RATE_LIMITER = RateLimiter()
+
+
 class WeatherHTTPHandler(BaseHTTPRequestHandler):
     # Жесткий таймаут сокета 10 с (защита от подвисания при плохом Wi-Fi на планшетах)
     timeout = 10.0
     MAX_BODY_SIZE = 64 * 1024  # Максимальный размер входящего POST (64 КБ)
+
+    @staticmethod
+    def get_path_category(path, method="GET"):
+        if method == "POST":
+            return "admin"
+        if path in ("/sync_time", "/geocode", "/reverse", "/observations/fetch", "/accuracy"):
+            return "admin"
+        if path in ("/", "/weather.json", "/forecast.json", "/v2/forecast"):
+            return "weather"
+        return "static"
+
+    def enforce_rate_limit(self, category):
+        allowed, retry_after, limit, remaining = RATE_LIMITER.check(self, category)
+        if not allowed:
+            try:
+                body = json.dumps({
+                    "error": "Too Many Requests",
+                    "category": category,
+                    "retry_after": retry_after,
+                    "message": f"Rate limit exceeded for category '{category}'. Try again in {retry_after} seconds."
+                }).encode("utf-8")
+                self.send_response(429)
+                self.send_cors_headers()
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Retry-After", str(retry_after))
+                self.send_header("X-RateLimit-Limit", str(limit))
+                self.send_header("X-RateLimit-Remaining", str(remaining))
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return False
+        return True
 
     def send_cors_headers(self):
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -2021,6 +2153,9 @@ doSave();
 
     def do_GET(self):
         path = self.path.split("?")[0]
+        cat = self.get_path_category(path, "GET")
+        if not self.enforce_rate_limit(cat):
+            return
 
         if path == "/sync_time":
             threading.Thread(target=sync_all_tablets_time, daemon=True).start()
@@ -2406,6 +2541,10 @@ code {{ color: #81D4FA; }}
 
     def do_POST(self):
         path = self.path.split("?")[0]
+        cat = self.get_path_category(path, "POST")
+        if not self.enforce_rate_limit(cat):
+            return
+
         if path in ("/api/settings", "/settings"):
             try:
                 content_len_hdr = self.headers.get("Content-Length")
@@ -2455,7 +2594,9 @@ code {{ color: #81D4FA; }}
                     "lat", "lon", "city_name", "primary_source",
                     "gismeteo_api_key", "api", "foreca_api_key", "openweathermap_api_key",
                     "server_url", "cache_interval_minutes",
-                    "fallback_interval_minutes", "ntp_server"
+                    "fallback_interval_minutes", "ntp_server",
+                    "rate_limit_enabled", "rate_limit_admin_per_minute",
+                    "rate_limit_weather_per_minute", "rate_limit_static_per_minute"
                 ]
                 to_update = {}
                 for k in allowed_fields:

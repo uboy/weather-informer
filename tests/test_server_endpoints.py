@@ -272,5 +272,23 @@ class TestServerEndpoints(unittest.TestCase):
         self.assertEqual(status, 404)
 
 
+    # 13. Rate Limiter HTTP 429 Too Many Requests
+    def test_rate_limiter_http_429(self):
+        # Внешний IP через X-Forwarded-For на категорию admin (лимит 10 req/min)
+        ext_headers = {"X-Forwarded-For": "198.51.100.222"}
+        for i in range(10):
+            st, hdrs, _ = self._get("/accuracy?provider=foreca&lead_hours=24", headers=ext_headers)
+            self.assertNotEqual(st, 429, f"Request {i+1} must not be rate limited")
+
+        # 11-й запрос обязан вернуть 429 Too Many Requests
+        st, hdrs, body = self._get("/accuracy?provider=foreca&lead_hours=24", headers=ext_headers)
+        self.assertEqual(st, 429)
+        self.assertTrue(int(hdrs.get("retry-after", 0)) > 0)
+        self.assertEqual(hdrs.get("x-ratelimit-remaining"), "0")
+        data = json.loads(body.decode("utf-8"))
+        self.assertEqual(data.get("error"), "Too Many Requests")
+        self.assertEqual(data.get("category"), "admin")
+
+
 if __name__ == "__main__":
     unittest.main()

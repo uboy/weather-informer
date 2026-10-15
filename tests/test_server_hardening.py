@@ -132,5 +132,52 @@ class TestServerHardening(unittest.TestCase):
         self.assertEqual(recovered.get("city_name"), "Нижний Новгород")
 
 
+    def test_rate_limiter_is_local(self):
+        """Проверка классификации локальных и внешних IP адресов"""
+        rl = caching_server.RateLimiter()
+        self.assertTrue(rl.is_local("127.0.0.1"))
+        self.assertTrue(rl.is_local("::1"))
+        self.assertTrue(rl.is_local("192.168.1.19"))
+        self.assertTrue(rl.is_local("10.0.0.100"))
+        self.assertTrue(rl.is_local("172.16.0.5"))
+        self.assertFalse(rl.is_local("203.0.113.195"))
+        self.assertFalse(rl.is_local("8.8.8.8"))
+        self.assertFalse(rl.is_local(""))
+        self.assertFalse(rl.is_local(None))
+
+    def test_rate_limiter_sliding_window_throttles_external(self):
+        """Внешний IP при превышении лимита получает отказ с retry_after"""
+        rl = caching_server.RateLimiter()
+        # Создаем dummy handler с внешним IP
+        class DummyHandler:
+            client_address = ("203.0.113.50", 12345)
+            headers = {}
+
+        dummy = DummyHandler()
+        # Лимит для admin для внешних IP = 10 req/min
+        for i in range(10):
+            allowed, retry_after, limit, remaining = rl.check(dummy, "admin")
+            self.assertTrue(allowed, f"Request {i+1} must be allowed")
+            self.assertEqual(remaining, 10 - (i + 1))
+
+        # 11-й запрос обязан быть отклонён
+        allowed, retry_after, limit, remaining = rl.check(dummy, "admin")
+        self.assertFalse(allowed, "11th request must be rejected")
+        self.assertTrue(retry_after > 0, "retry_after must be positive")
+        self.assertEqual(remaining, 0)
+
+    def test_rate_limiter_disabled_in_config(self):
+        """Если rate_limit_enabled: false, запросы проходят без ограничений"""
+        caching_server.save_config({"rate_limit_enabled": False})
+        rl = caching_server.RateLimiter()
+        class DummyHandler:
+            client_address = ("203.0.113.50", 12345)
+            headers = {}
+
+        for _ in range(50):
+            allowed, _, _, _ = rl.check(DummyHandler(), "admin")
+            self.assertTrue(allowed)
+
+
 if __name__ == "__main__":
     unittest.main()
