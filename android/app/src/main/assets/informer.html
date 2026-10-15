@@ -255,7 +255,7 @@ body.night-dim #status_bar { opacity: 0.5; }
 					</div>
 					<div class="sector_pressure">
 						<span id="presure_icon" class="presure_icon"></span>
-						<span><span id="pressure" class="value"></span> мм рт. ст. <span id="pressure_norm_badge" class="pressure_norm_badge"></span></span>
+						<span><span id="pressure" class="value"></span> мм рт. ст. <span id="pressure_trend" class="pressure_trend"></span></span>
 					</div>
 					<div class="wind_humidity_pressure_bar pressure_bar sector_pressure_progress">
 						<div id="pressure_norm_zone" class="pressure_norm_zone"></div>
@@ -438,6 +438,228 @@ function calc_feels_like(t, hum, wind) {
 	return Math.round(t + adj);
 }
 
+var last_rendered_pressure = null;
+
+function calc_barometric_norm(elev_m) {
+	if (elev_m === undefined || elev_m === null || elev_m === '' || isNaN(elev_m)) {
+		return null;
+	}
+	// Барометрическая формула (ГОСТ 4401-81 / ICAO Standard Atmosphere)
+	// P = 760 * (1 - 0.0065 * h / 288.15)^5.25588
+	return Math.round(760 * Math.pow(1 - (Number(elev_m) / 44330), 5.25588));
+}
+
+function fetch_elevation_async(cur_lat, cur_lon) {
+	if (!cur_lat || !cur_lon) return;
+	var key = 'loc_elev_' + Math.round(Number(cur_lat) * 1000) + '_' + Math.round(Number(cur_lon) * 1000);
+	try {
+		if (localStorage.getItem(key)) return;
+	} catch(e) {}
+	var url = 'https://api.open-meteo.com/v1/elevation?latitude=' + encodeURIComponent(cur_lat) + '&longitude=' + encodeURIComponent(cur_lon);
+	$.ajax({ url: url, dataType: 'json', timeout: 8000 })
+		.done(function(resp) {
+			if (resp && resp.elevation && resp.elevation.length > 0 && resp.elevation[0] != null) {
+				var el = resp.elevation[0];
+				try { localStorage.setItem(key, String(el)); } catch(e) {}
+				var norm = calc_barometric_norm(el);
+				if (norm != null) {
+					update_pressure_norm_ui(norm);
+					if (last_rendered_pressure != null && !isNaN(last_rendered_pressure)) {
+						$('#pressure_progress').attr('style', calc_pressure_progress(last_rendered_pressure, norm));
+					}
+				}
+			}
+		})
+		.fail(function() {});
+}
+
+function get_norm_pressure(data, cur_lat, cur_lon) {
+	// 1. Провайдер с расчетом климатической нормы для координат точки (Яндекс)
+	if (data && data.info && data.info.def_pressure_mm != null && !isNaN(data.info.def_pressure_mm)) {
+		return Number(data.info.def_pressure_mm);
+	}
+	// 2. Высота местности из ответа погоды (Open-Meteo и др.)
+	var elev = (data && data.info && data.info.elevation != null) ? data.info.elevation :
+	           ((data && data.elevation != null) ? data.elevation : null);
+	if (elev != null && !isNaN(elev)) {
+		var norm = calc_barometric_norm(elev);
+		if (norm != null) {
+			if (cur_lat && cur_lon) {
+				var key = 'loc_elev_' + Math.round(Number(cur_lat) * 1000) + '_' + Math.round(Number(cur_lon) * 1000);
+				try { localStorage.setItem(key, String(elev)); } catch(e) {}
+			}
+			return norm;
+		}
+	}
+	// 3. Высота местности из кэша координат
+	if (cur_lat && cur_lon) {
+		var cKey = 'loc_elev_' + Math.round(Number(cur_lat) * 1000) + '_' + Math.round(Number(cur_lon) * 1000);
+		try {
+			var cached = localStorage.getItem(cKey);
+			if (cached != null && !isNaN(cached)) {
+				var cNorm = calc_barometric_norm(Number(cached));
+				if (cNorm != null) return cNorm;
+			}
+		} catch(e) {}
+		fetch_elevation_async(cur_lat, cur_lon);
+	}
+	return null;
+}
+
+function seed_pressure_history(historyList) {
+	if (!historyList || !historyList.length) return;
+	try {
+		var raw = localStorage.getItem('weather_pressure_history');
+		var existing = raw ? JSON.parse(raw) : [];
+		if (!existing || existing.length < 2) {
+			var nowMs = Date.now();
+			var newestT = historyList[historyList.length - 1].t;
+			var offset = (newestT && (nowMs - newestT > 3 * 3600 * 1000)) ? (nowMs - newestT) : 0;
+			var adjusted = [];
+			for (var i = 0; i < historyList.length; i++) {
+				adjusted.push({
+					t: historyList[i].t + offset,
+					p: historyList[i].p
+				});
+			}
+			localStorage.setItem('weather_pressure_history', JSON.stringify(adjusted));
+		}
+	} catch(e) {}
+}
+
+function check_and_seed_pressure_history() {
+	try {
+		var raw = localStorage.getItem('weather_pressure_history');
+		var existing = raw ? JSON.parse(raw) : [];
+		if (existing && existing.length >= 2) return;
+	} catch(e) {}
+	$.getJSON('weather_cache.json').done(function(cachedJson) {
+		if (cachedJson && cachedJson.pressure_history && cachedJson.pressure_history.length >= 2) {
+			seed_pressure_history(cachedJson.pressure_history);
+			if (typeof last_rendered_pressure !== 'undefined' && last_rendered_pressure != null) {
+				update_pressure_trend_ui(last_rendered_pressure);
+			}
+		}
+	});
+}
+
+function record_pressure_sample(p_val) {
+	if (p_val === undefined || p_val === null || p_val === '' || p_val === '—' || isNaN(p_val)) {
+		return;
+	}
+	var num = Number(p_val);
+	var nowMs = Date.now();
+	var history = [];
+	try {
+		var raw = localStorage.getItem('weather_pressure_history');
+		if (raw) history = JSON.parse(raw);
+		if (!Array.isArray(history)) history = [];
+	} catch(e) {
+		history = [];
+	}
+
+	var last = history.length > 0 ? history[history.length - 1] : null;
+	if (!last || (nowMs - last.t >= 15 * 60 * 1000)) {
+		history.push({ t: nowMs, p: num });
+	} else {
+		last.p = num;
+		last.t = nowMs;
+	}
+
+	var cutoff = nowMs - (36 * 3600 * 1000);
+	var pruned = [];
+	for (var i = 0; i < history.length; i++) {
+		if (history[i].t >= cutoff) {
+			pruned.push(history[i]);
+		}
+	}
+
+	try {
+		localStorage.setItem('weather_pressure_history', JSON.stringify(pruned));
+	} catch(e) {}
+}
+
+function calc_pressure_trend(current_p) {
+	if (current_p === undefined || current_p === null || current_p === '' || current_p === '—' || isNaN(current_p)) {
+		return null;
+	}
+	var cur = Number(current_p);
+	var nowMs = Date.now();
+	var history = [];
+	try {
+		var raw = localStorage.getItem('weather_pressure_history');
+		if (raw) history = JSON.parse(raw);
+		if (!Array.isArray(history)) history = [];
+	} catch(e) {
+		history = [];
+	}
+	if (history.length < 2) return null;
+
+	var targetMs = nowMs - (12 * 3600 * 1000);
+	var bestItem = null;
+	var bestDiff = Infinity;
+	for (var i = 0; i < history.length; i++) {
+		var ageMs = nowMs - history[i].t;
+		if (ageMs >= 3 * 3600 * 1000 && ageMs <= 18 * 3600 * 1000) {
+			var diff = Math.abs(history[i].t - targetMs);
+			if (diff < bestDiff) {
+				bestDiff = diff;
+				bestItem = history[i];
+			}
+		}
+	}
+	if (!bestItem && history.length > 0) {
+		var oldest = history[0];
+		var oldestAgeHours = (nowMs - oldest.t) / (3600 * 1000);
+		if (oldestAgeHours >= 1.0) {
+			bestItem = oldest;
+		}
+	}
+	if (!bestItem) return null;
+
+	var diff_val = Math.round((cur - bestItem.p) * 10) / 10;
+	var hours_ago = Math.max(1, Math.round((nowMs - bestItem.t) / (3600 * 1000)));
+	return {
+		delta: diff_val,
+		hours: hours_ago,
+		past_p: bestItem.p
+	};
+}
+
+function update_pressure_trend_ui(p_val) {
+	if (p_val === undefined || p_val === null || p_val === '' || p_val === '—' || isNaN(p_val)) {
+		$('#pressure_trend').hide();
+		return;
+	}
+	record_pressure_sample(p_val);
+	var trend = calc_pressure_trend(p_val);
+	if (!trend) {
+		$('#pressure_trend').hide();
+		return;
+	}
+	var arrow = '→';
+	var color = '#b0bec5';
+	var sign = '';
+	var delta = trend.delta;
+	if (delta >= 0.5) {
+		arrow = '↑';
+		color = '#81c784';
+		sign = '+';
+	} else if (delta <= -0.5) {
+		arrow = '↓';
+		color = '#ff8a65';
+		sign = '';
+	} else {
+		arrow = '→';
+		color = '#b0bec5';
+		sign = '';
+	}
+	var numStr = (Math.abs(delta) % 1 === 0) ? delta.toFixed(0) : delta.toFixed(1);
+	var text = '<span class="trend_arrow">' + arrow + '</span>' + sign + numStr;
+	var tip = 'Динамика за ~' + trend.hours + ' ч: ' + (delta >= 0 ? '+' : '') + delta + ' мм рт. ст. (было ' + trend.past_p + ')';
+	$('#pressure_trend').html(text).css('color', color).attr('title', tip).show();
+}
+
 function calc_pressure_progress(p_val, norm_val) {
 	if (p_val === undefined || p_val === null || p_val === '' || isNaN(p_val)) {
 		return 'width: 0%;';
@@ -448,41 +670,33 @@ function calc_pressure_progress(p_val, norm_val) {
 	else if (num > pressure_max) pct = 100;
 	else pct = Math.round((num - pressure_min) / (pressure_max - pressure_min) * 100);
 
-	var norm = (norm_val != null && !isNaN(norm_val)) ? Number(norm_val) : 743;
+	var norm = (norm_val != null && !isNaN(norm_val)) ? Number(norm_val) : null;
 	var color = '#00e676';
-	if (num < norm - 5) {
-		color = '#29b6f6';
-	} else if (num > norm + 5) {
-		color = '#ff9100';
+	if (norm != null) {
+		if (num < norm - 5) {
+			color = '#29b6f6';
+		} else if (num > norm + 5) {
+			color = '#ff9100';
+		}
 	}
 	return 'width: ' + pct + '%; background-color: ' + color + ';';
 }
 
-function update_pressure_norm_ui(norm_val, p_val) {
-	var norm = (norm_val != null && !isNaN(norm_val)) ? Number(norm_val) : 743;
+function update_pressure_norm_ui(norm_val) {
+	if (norm_val == null || isNaN(norm_val)) {
+		$('#pressure_norm_mark').hide();
+		$('#pressure_norm_zone').hide();
+		return;
+	}
+	var norm = Number(norm_val);
 	var norm_pct = Math.max(0, Math.min(100, Math.round((norm - pressure_min) / (pressure_max - pressure_min) * 100)));
 	var zone_l = Math.max(0, Math.round((norm - 5 - pressure_min) / (pressure_max - pressure_min) * 100));
 	var zone_r = Math.min(100, Math.round((norm + 5 - pressure_min) / (pressure_max - pressure_min) * 100));
-	$('#pressure_norm_mark').css('left', norm_pct + '%').attr('title', 'Норма давления: ' + norm + ' мм рт. ст.');
+	$('#pressure_norm_mark').css('left', norm_pct + '%').attr('title', 'Норма давления: ' + norm + ' мм рт. ст.').show();
 	$('#pressure_norm_zone').css({
 		'left': zone_l + '%',
 		'width': (zone_r - zone_l) + '%'
-	});
-	if (p_val !== undefined && p_val !== null && p_val !== '—' && !isNaN(p_val)) {
-		var num = Number(p_val);
-		var label = 'норма';
-		var color = '#00e676';
-		if (num < norm - 5) {
-			label = 'ниже нормы';
-			color = '#29b6f6';
-		} else if (num > norm + 5) {
-			label = 'выше нормы';
-			color = '#ff9100';
-		}
-		$('#pressure_norm_badge').text('(' + label + ')').css('color', color).show();
-	} else {
-		$('#pressure_norm_badge').hide();
-	}
+	}).show();
 }
 
 function astro_sun(lat, lon, dateObj) {
@@ -1958,6 +2172,7 @@ window.onload = function() {
 			if (current_weather_data) {
 				render_weather(current_weather_data);
 			}
+			check_and_seed_pressure_history();
 			update_status_bar();
 			startBurnInProtection();
 run();
@@ -2563,7 +2778,13 @@ function render_weather(data) {
 	now = Date.now();
 	var curHour = date.getHours();
 	var result = {};
-	var def_norm = (data.info && data.info.def_pressure_mm != null) ? data.info.def_pressure_mm : 743;
+	var cur_lat = (data && data.info && data.info.lat != null) ? data.info.lat : (typeof lat !== 'undefined' ? lat : null);
+	var cur_lon = (data && data.info && data.info.lon != null) ? data.info.lon : (typeof lon !== 'undefined' ? lon : null);
+	var def_norm = get_norm_pressure(data, cur_lat, cur_lon);
+
+	if (data && data.pressure_history && Array.isArray(data.pressure_history)) {
+		seed_pressure_history(data.pressure_history);
+	}
 	update_pressure_norm_ui(def_norm);
 
 	// 1. Определение активного дня прогноза по календарной дате устройства
@@ -2803,7 +3024,9 @@ function render_weather(data) {
 		}
 	}
 
-	update_pressure_norm_ui(def_norm, result.pressure);
+	update_pressure_norm_ui(def_norm);
+	last_rendered_pressure = result.pressure;
+	update_pressure_trend_ui(result.pressure);
 	update(result);
 	update_status_bar();
 }
@@ -3110,13 +3333,17 @@ body {
 	border-right: 4px solid transparent;
 	border-top: 5px solid #ffffff;
 }
-.pressure_norm_badge {
-	font-size: 0.55em;
-	vertical-align: middle;
-	margin-left: 0.4vw;
-	font-weight: normal;
-	opacity: 0.95;
+.pressure_trend {
+	font-size: 0.65em;
+	vertical-align: baseline;
+	margin-left: 0.5vw;
+	font-weight: 600;
 	display: inline-block;
+}
+.pressure_trend .trend_arrow {
+	font-size: 1.15em;
+	margin-right: 0.15em;
+	font-weight: bold;
 }
 .humidity_bar {
 	background: linear-gradient(to right, #fff, #006bff);

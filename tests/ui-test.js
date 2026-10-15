@@ -94,6 +94,43 @@ if (prMatch) {
     check('pressure_progress: clamp max 780 → 100%', fn(780, 743).includes('width: 100%'), fn(780, 743));
 }
 
+// 3.1c calc_barometric_norm: барометрическая формула по высоте местности
+const normMatch = html.match(/^function calc_barometric_norm[\s\S]*?^\}/m);
+check('calc_barometric_norm извлечена', !!normMatch);
+if (normMatch) {
+    const fnNorm = eval('(function(){ ' + normMatch[0] + '; return calc_barometric_norm;})()');
+    check('barometric_norm: уровень моря 0м → 760 мм', fnNorm(0) === 760, String(fnNorm(0)));
+    check('barometric_norm: высота 160м → 746 мм', fnNorm(160) === 746, String(fnNorm(160)));
+    check('barometric_norm: плато 190м → 743 мм', fnNorm(190) === 743, String(fnNorm(190)));
+    check('barometric_norm: null/invalid → null', fnNorm(null) === null && fnNorm('abc') === null);
+}
+
+// 3.1d calc_pressure_trend: барометрический тренд за 12 часов
+const trendMatch = html.match(/^function calc_pressure_trend[\s\S]*?^\}/m);
+check('calc_pressure_trend извлечена', !!trendMatch);
+if (trendMatch) {
+    const mockStore = {};
+    const mockLocalStorage = {
+        getItem: function(k) { return mockStore[k] || null; },
+        setItem: function(k, v) { mockStore[k] = v; }
+    };
+    const now = Date.now();
+    mockStore['weather_pressure_history'] = JSON.stringify([
+        { t: now - 12 * 3600 * 1000, p: 741 },
+        { t: now, p: 743 }
+    ]);
+    const fnTrend = eval('(function(){ var localStorage = mockLocalStorage; ' + trendMatch[0] + '; return calc_pressure_trend;})()');
+    const tr1 = fnTrend(743);
+    check('pressure_trend: рост 741 → 743 (+2 за 12ч)', tr1 && tr1.delta === 2 && tr1.hours === 12, JSON.stringify(tr1));
+
+    mockStore['weather_pressure_history'] = JSON.stringify([
+        { t: now - 12 * 3600 * 1000, p: 746 },
+        { t: now, p: 743 }
+    ]);
+    const tr2 = fnTrend(743);
+    check('pressure_trend: падение 746 → 743 (-3 за 12ч)', tr2 && tr2.delta === -3 && tr2.hours === 12, JSON.stringify(tr2));
+}
+
 // 3.2 astro_sun: polar guard
 const astroMatch = html.match(/^function astro_sun[\s\S]*?^\}/m);
 check('astro_sun извлечена', !!astroMatch);
