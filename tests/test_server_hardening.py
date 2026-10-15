@@ -106,5 +106,31 @@ class TestServerHardening(unittest.TestCase):
                 sem.release()
 
 
+    def test_save_config_explicit_clear_key(self):
+        """Явная передача null или __CLEAR__ очищает ключ"""
+        caching_server.save_config({"gismeteo_api_key": None, "api": "__CLEAR__"})
+        with open(self.config_path, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        self.assertEqual(cfg["gismeteo_api_key"], "", "Explicit None must clear key to empty string")
+        self.assertEqual(cfg["api"], "", "Explicit __CLEAR__ must clear key to empty string")
+        self.assertEqual(cfg["foreca_api_key"], "secret_foreca_key_789", "Untouched key must remain preserved")
+
+    def test_load_config_recovers_from_backup_on_corruption(self):
+        """При повреждении config.json load_config восстанавливается из config.json.bak"""
+        # Сначала создаем .bak через валидный save
+        caching_server.save_config({"city_name": "Павлово"})
+        bak_path = self.config_path + ".bak"
+        self.assertTrue(os.path.isfile(bak_path))
+
+        # Повреждаем основной файл мусором
+        with open(self.config_path, "w", encoding="utf-8") as f:
+            f.write("CORRUPTED_NOT_A_JSON{{{")
+
+        # load_config должен восстановить данные из .bak
+        recovered = caching_server.load_config()
+        self.assertEqual(recovered["api"], "secret_yandex_key_123")
+        self.assertEqual(recovered.get("city_name"), "Нижний Новгород")
+
+
 if __name__ == "__main__":
     unittest.main()

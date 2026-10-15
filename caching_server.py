@@ -20,6 +20,7 @@ import math
 import logging
 import re
 import shutil
+import tempfile
 from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 import urllib.request
@@ -207,8 +208,19 @@ def load_config():
                 user_cfg = json.load(f)
                 cfg.update(user_cfg)
                 log.debug("Loaded config from %s", CONFIG_FILE)
+                return cfg
         except Exception as e:
-            log.warning("Could not parse %s: %s (using defaults)", CONFIG_FILE, e)
+            log.warning("Could not parse %s: %s (trying backup)", CONFIG_FILE, e)
+            bak_file = CONFIG_FILE + ".bak"
+            if os.path.isfile(bak_file):
+                try:
+                    with open(bak_file, "r", encoding="utf-8") as f:
+                        bak_cfg = json.load(f)
+                        cfg.update(bak_cfg)
+                        log.info("Successfully recovered configuration from backup %s", bak_file)
+                        return cfg
+                except Exception as be:
+                    log.error("Could not parse backup %s: %s (using defaults)", bak_file, be)
     return cfg
 
 
@@ -227,38 +239,47 @@ def mask_key(key):
         return "••••"
 
 
+CONFIG_LOCK = threading.Lock()
+
+
 def save_config(new_cfg):
-    """Атомарное сохранение конфигурации в config.json с бэкапом и защитой от затирания ключей."""
-    current = load_config()
-    key_fields = ("api", "gismeteo_api_key", "foreca_api_key", "openweathermap_api_key")
-    for k, v in new_cfg.items():
-        if k in key_fields:
-            # Защита от стирания боевых ключей пустыми или маскированными значениями
-            if not v or not isinstance(v, str) or not v.strip():
-                continue
-            if "•" in v or "*" in v:
-                continue
-        current[k] = v
+    """Атомарное сохранение конфигурации в config.json с бэкапом, мьютексом и защитой от затирания ключей."""
+    with CONFIG_LOCK:
+        current = load_config()
+        key_fields = ("api", "gismeteo_api_key", "foreca_api_key", "openweathermap_api_key")
+        for k, v in new_cfg.items():
+            if k in key_fields:
+                # Явная очистка ключа пользователем
+                if v is None or v == "__CLEAR__":
+                    current[k] = ""
+                    continue
+                # Защита от случайного стирания боевых ключей пустыми или маскированными значениями
+                if not v or not isinstance(v, str) or not v.strip():
+                    continue
+                if "•" in v or "*" in v:
+                    continue
+            current[k] = v
 
-    # 1. Сохранение резервной копии перед перезаписью
-    if os.path.isfile(CONFIG_FILE):
-        try:
-            shutil.copy2(CONFIG_FILE, CONFIG_FILE + ".bak")
-        except Exception as e:
-            log.warning("Failed to create config backup: %s", e)
+        # 1. Сохранение резервной копии перед перезаписью
+        if os.path.isfile(CONFIG_FILE):
+            try:
+                shutil.copy2(CONFIG_FILE, CONFIG_FILE + ".bak")
+            except Exception as e:
+                log.warning("Failed to create config backup: %s", e)
 
-    # 2. Атомарная запись через временный файл
-    tmp_file = CONFIG_FILE + ".tmp"
-    with open(tmp_file, "w", encoding="utf-8") as f:
-        json.dump(current, f, ensure_ascii=False, indent=2)
-    os.replace(tmp_file, CONFIG_FILE)
-    if "foreca_api_key" in current:
-        try:
-            FORECA.token = current.get("foreca_api_key", "")
-        except Exception:
-            pass
-    log.info("Saved updated configuration to %s", CONFIG_FILE)
-    return current
+        # 2. Атомарная запись через именованный временный файл в той же директории
+        dir_name = os.path.dirname(os.path.abspath(CONFIG_FILE)) or "."
+        with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False, encoding="utf-8") as f:
+            json.dump(current, f, ensure_ascii=False, indent=2)
+            tmp_path = f.name
+        os.replace(tmp_path, CONFIG_FILE)
+        if "foreca_api_key" in current:
+            try:
+                FORECA.token = current.get("foreca_api_key", "")
+            except Exception:
+                pass
+        log.info("Saved updated configuration to %s", CONFIG_FILE)
+        return current
 
 
 def sanitize_secrets(text):
@@ -1764,12 +1785,13 @@ class BoundedThreadingHTTPServer(ThreadingHTTPServer):
         if not CLIENT_SEMAPHORE.acquire(blocking=False):
             try:
                 request.settimeout(2.0)
+                body = b'{"error":"Server overloaded (max 32)"}\n'
                 resp = (
                     b"HTTP/1.1 503 Service Unavailable\r\n"
                     b"Content-Type: application/json; charset=utf-8\r\n"
                     b"Connection: close\r\n"
-                    b"Content-Length: 40\r\n\r\n"
-                    b'{"error":"Server overloaded (max 32)"}\n'
+                    b"Retry-After: 5\r\n"
+                    b"Content-Length: " + str(len(body)).encode("ascii") + b"\r\n\r\n" + body
                 )
                 request.sendall(resp)
             except Exception:
@@ -1784,9 +1806,17 @@ class BoundedThreadingHTTPServer(ThreadingHTTPServer):
             finally:
                 CLIENT_SEMAPHORE.release()
 
-        t = threading.Thread(target=run_with_semaphore)
-        t.daemon = True
-        t.start()
+        try:
+            t = threading.Thread(target=run_with_semaphore)
+            t.daemon = True
+            t.start()
+        except Exception as e:
+            CLIENT_SEMAPHORE.release()
+            log.error("Failed to spawn request worker thread: %s", e)
+            try:
+                self.shutdown_request(request)
+            except Exception:
+                pass
 
 
 class WeatherHTTPHandler(BaseHTTPRequestHandler):
@@ -1879,21 +1909,22 @@ document.getElementById('openweathermap_api_key').value = c.openweathermap_api_k
 document.getElementById('cache_interval_minutes').value = c.cache_interval_minutes || 60;
 document.getElementById('fallback_interval_minutes').value = c.fallback_interval_minutes || 15;
 });
+var explicitClear = {};
 document.getElementById('btn_clear_gismeteo').onclick = function(){
 document.getElementById('gismeteo_api_key').value = '';
-currentCfg.gismeteo_api_key = '';
+explicitClear.gismeteo_api_key = true;
 };
 document.getElementById('btn_clear_yandex').onclick = function(){
 document.getElementById('api').value = '';
-currentCfg.api = '';
+explicitClear.api = true;
 };
 document.getElementById('btn_clear_foreca').onclick = function(){
 document.getElementById('foreca_api_key').value = '';
-currentCfg.foreca_api_key = '';
+explicitClear.foreca_api_key = true;
 };
 document.getElementById('btn_clear_owm').onclick = function(){
 document.getElementById('openweathermap_api_key').value = '';
-currentCfg.openweathermap_api_key = '';
+explicitClear.openweathermap_api_key = true;
 };
 function detectCity(la, lo){
 if(!la || !lo) return Promise.resolve(null);
@@ -1940,13 +1971,16 @@ currentCfg.lat = parseFloat(document.getElementById('lat').value);
 currentCfg.lon = parseFloat(document.getElementById('lon').value);
 currentCfg.city_name = document.getElementById('city_name').value.trim();
 currentCfg.primary_source = document.getElementById('primary_source').value;
-currentCfg.gismeteo_api_key = document.getElementById('gismeteo_api_key').value.trim();
-currentCfg.foreca_api_key = document.getElementById('foreca_api_key').value.trim();
-currentCfg.openweathermap_api_key = document.getElementById('openweathermap_api_key').value.trim();
+var gk = document.getElementById('gismeteo_api_key').value.trim();
+currentCfg.gismeteo_api_key = gk || (explicitClear.gismeteo_api_key ? '__CLEAR__' : '');
+var fk = document.getElementById('foreca_api_key').value.trim();
+currentCfg.foreca_api_key = fk || (explicitClear.foreca_api_key ? '__CLEAR__' : '');
+var ok = document.getElementById('openweathermap_api_key').value.trim();
+currentCfg.openweathermap_api_key = ok || (explicitClear.openweathermap_api_key ? '__CLEAR__' : '');
 currentCfg.cache_interval_minutes = parseInt(document.getElementById('cache_interval_minutes').value, 10) || 60;
 currentCfg.fallback_interval_minutes = parseInt(document.getElementById('fallback_interval_minutes').value, 10) || 15;
 var yk = document.getElementById('api').value.trim();
-currentCfg.api = yk;
+currentCfg.api = yk || (explicitClear.api ? '__CLEAR__' : '');
 var s = document.getElementById('status');
 fetch('/api/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(currentCfg)})
 .then(function(r){return r.json();}).then(function(res){
@@ -2405,7 +2439,17 @@ code {{ color: #81D4FA; }}
                     return
 
                 body = self.rfile.read(length) if length > 0 else b"{}"
-                payload = json.loads(body.decode("utf-8")) if body else {}
+                try:
+                    payload = json.loads(body.decode("utf-8")) if body else {}
+                    if not isinstance(payload, dict):
+                        raise ValueError("Payload must be a JSON object")
+                except Exception as e:
+                    self.send_response(400)
+                    self.send_cors_headers()
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": f"Invalid JSON payload: {e}"}).encode("utf-8"))
+                    return
 
                 allowed_fields = [
                     "lat", "lon", "city_name", "primary_source",

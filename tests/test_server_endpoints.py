@@ -179,6 +179,41 @@ class TestServerEndpoints(unittest.TestCase):
         self.assertIn(b"Negative Content-Length", resp.read())
         conn.close()
 
+        # 5c. Malformed JSON -> 400 Bad Request
+        status, _, body = self._post("/api/settings", raw_body=b"{malformed json...")
+        self.assertEqual(status, 400)
+        self.assertIn(b"Invalid JSON payload", body)
+
+        # 5d. Explicit key wipe via __CLEAR__ -> 200 and key cleared
+        status, _, _ = self._post("/api/settings", data_dict={"gismeteo_api_key": "__CLEAR__"})
+        self.assertEqual(status, 200)
+        with open(self.config_path, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        self.assertEqual(cfg["gismeteo_api_key"], "")
+
+    # 5e. Server saturation HTTP 503 fast-fail and exact Content-Length
+    def test_server_overload_503(self):
+        sem = caching_server.CLIENT_SEMAPHORE
+        slots = 0
+        try:
+            time.sleep(0.05)
+            while sem.acquire(blocking=False):
+                slots += 1
+            self.assertTrue(slots > 0, "Should have acquired at least one slot")
+
+            conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+            conn.request("GET", "/health")
+            resp = conn.getresponse()
+            self.assertEqual(resp.status, 503)
+            self.assertEqual(resp.getheader("retry-after"), "5")
+            data = resp.read()
+            self.assertEqual(len(data), int(resp.getheader("content-length")))
+            self.assertIn(b"Server overloaded", data)
+            conn.close()
+        finally:
+            for _ in range(slots):
+                sem.release()
+
     # 6. GET /weather.json (кэш, валидация)
     def test_weather_endpoints(self):
         # 6a. Нормальный запрос
