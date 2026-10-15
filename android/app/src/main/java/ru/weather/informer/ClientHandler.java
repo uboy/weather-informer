@@ -1,5 +1,6 @@
 package ru.weather.informer;
 
+import android.content.Intent;
 import android.util.Log;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -205,6 +206,14 @@ public class ClientHandler implements Runnable {
         if (path.equals("/api/reload")) {
             if (server.getActivity() != null) {
                 server.getActivity().reloadInformer();
+            } else {
+                try {
+                    Intent launchIntent = new Intent(server.getContext(), MainActivity.class);
+                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    server.getContext().startActivity(launchIntent);
+                } catch (Exception e) {
+                    Log.e(TAG, "Failed to start MainActivity from /api/reload: " + e.getMessage());
+                }
             }
             sendResponse(out, 200, "OK", "application/json; charset=utf-8",
                     "{\"status\":\"reloaded\"}".getBytes(StandardCharsets.UTF_8));
