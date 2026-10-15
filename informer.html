@@ -251,6 +251,7 @@ body.night-dim #status_bar { opacity: 0.5; }
 						<span><span id="humidity" class="value"></span> %</span>
 					</div>
 					<div class="wind_humidity_pressure_bar humidity_bar sector_humidity_progress">
+						<div id="humidity_norm_zone" class="humidity_norm_zone" title="Зона комфорта: 35–65%"></div>
 						<div id="humidity_progress" class="value wind_humidity_progress" data-type="style"></div>
 					</div>
 					<div class="sector_pressure">
@@ -258,6 +259,8 @@ body.night-dim #status_bar { opacity: 0.5; }
 						<span><span id="pressure" class="value"></span> мм рт. ст. <span id="pressure_trend" class="pressure_trend"></span></span>
 					</div>
 					<div class="wind_humidity_pressure_bar pressure_bar sector_pressure_progress">
+						<div class="pressure_deep_low_zone" title="Штормовой циклон (&lt;725 мм)"></div>
+						<div class="pressure_extreme_high_zone" title="Барический купол (&gt;760 мм)"></div>
 						<div id="pressure_norm_zone" class="pressure_norm_zone"></div>
 						<div id="pressure_norm_mark" class="pressure_norm_mark" title="Норма давления"></div>
 						<div id="pressure_progress" class="value" data-type="style"></div>
@@ -660,6 +663,39 @@ function update_pressure_trend_ui(p_val) {
 	$('#pressure_trend').html(text).css('color', color).attr('title', tip).show();
 }
 
+function calc_wind_progress(w_val) {
+	if (w_val === undefined || w_val === null || w_val === '' || isNaN(w_val)) {
+		return 'width: 0%;';
+	}
+	var num = Number(w_val);
+	var maxW = (typeof wind_max !== 'undefined' && wind_max > 0) ? wind_max : 15;
+	var pct = Math.max(0, Math.min(100, Math.round(num / maxW * 100)));
+	var color = '#00e676';
+	if (num >= 15) {
+		color = '#ff1744';
+	} else if (num >= 10) {
+		color = '#ff9100';
+	} else if (num >= 5) {
+		color = '#ffd600';
+	}
+	return 'width: ' + pct + '%; background-color: ' + color + ';';
+}
+
+function calc_humidity_progress(h_val) {
+	if (h_val === undefined || h_val === null || h_val === '' || isNaN(h_val)) {
+		return 'width: 0%;';
+	}
+	var num = Number(h_val);
+	var pct = Math.max(0, Math.min(100, Math.round(num)));
+	var color = '#00e676';
+	if (num < 35) {
+		color = '#ff9100';
+	} else if (num > 65) {
+		color = '#29b6f6';
+	}
+	return 'width: ' + pct + '%; background-color: ' + color + ';';
+}
+
 function calc_pressure_progress(p_val, norm_val) {
 	if (p_val === undefined || p_val === null || p_val === '' || isNaN(p_val)) {
 		return 'width: 0%;';
@@ -673,10 +709,14 @@ function calc_pressure_progress(p_val, norm_val) {
 	var norm = (norm_val != null && !isNaN(norm_val)) ? Number(norm_val) : null;
 	var color = '#00e676';
 	if (norm != null) {
-		if (num < norm - 5) {
-			color = '#29b6f6';
+		if (num > 760) {
+			color = '#b71c1c';
 		} else if (num > norm + 5) {
 			color = '#ff9100';
+		} else if (num < 715) {
+			color = '#ab47bc';
+		} else if (num < norm - 5) {
+			color = '#29b6f6';
 		}
 	}
 	return 'width: ' + pct + '%; background-color: ' + color + ';';
@@ -696,7 +736,7 @@ function update_pressure_norm_ui(norm_val) {
 	$('#pressure_norm_zone').css({
 		'left': zone_l + '%',
 		'width': (zone_r - zone_l) + '%'
-	}).show();
+	}).attr('title', 'Коридор нормы: ' + (norm - 5) + '–' + (norm + 5) + ' мм рт. ст.').show();
 }
 
 function astro_sun(lat, lon, dateObj) {
@@ -2831,22 +2871,24 @@ function render_weather(data) {
 
 		if (hourForecast.hasOwnProperty('wind_speed') && hourForecast.wind_speed != null) {
 			result.wind = hourForecast.wind_speed;
-			result.wind_progress = 'width: ' + (100 - Math.round(hourForecast.wind_speed / wind_max * 100)) + '%';
 			if (hourForecast.hasOwnProperty('wind_angle') && hourForecast.wind_angle != null) result.wind_icon = 'transform: rotate(' + (hourForecast.wind_angle - 180) + 'deg)';
 			else result.wind_icon = 'transform: rotate(0deg)';
 		} else if (data.fact.hasOwnProperty('wind_speed') && data.fact.wind_speed != null) {
 			result.wind = data.fact.wind_speed;
-			result.wind_progress = 'width: ' + (100 - Math.round(data.fact.wind_speed / wind_max * 100)) + '%';
 			if (data.fact.hasOwnProperty('wind_angle') && data.fact.wind_angle != null) result.wind_icon = 'transform: rotate(' + (data.fact.wind_angle - 180) + 'deg)';
 			else result.wind_icon = 'transform: rotate(0deg)';
+		}
+		if (result.wind !== undefined && result.wind !== null) {
+			result.wind_progress = calc_wind_progress(result.wind);
 		}
 
 		if (hourForecast.hasOwnProperty('humidity') && hourForecast.humidity != null) {
 			result.humidity = hourForecast.humidity;
-			result.humidity_progress = 'width: ' + (100 - hourForecast.humidity) + '%';
 		} else if (data.fact.hasOwnProperty('humidity') && data.fact.humidity != null) {
 			result.humidity = data.fact.humidity;
-			result.humidity_progress = 'width: ' + (100 - data.fact.humidity) + '%';
+		}
+		if (result.humidity !== undefined && result.humidity !== null) {
+			result.humidity_progress = calc_humidity_progress(result.humidity);
 		}
 
 		if (hourForecast.hasOwnProperty('pressure_mm') && hourForecast.pressure_mm != null) {
@@ -2873,13 +2915,13 @@ function render_weather(data) {
 		result.feels = (feels != null) ? ((feels > 0 ? '+' : '') + feels + '°') : '—';
 		if (data.fact.hasOwnProperty('wind_speed') && data.fact.wind_speed != null) {
 			result.wind = data.fact.wind_speed;
-			result.wind_progress = 'width: ' + (100 - Math.round(data.fact.wind_speed / wind_max * 100)) + '%';
+			result.wind_progress = calc_wind_progress(result.wind);
 			if (data.fact.hasOwnProperty('wind_angle') && data.fact.wind_angle != null) result.wind_icon = 'transform: rotate(' + (data.fact.wind_angle - 180) + 'deg)';
 			else result.wind_icon = 'transform: rotate(0deg)';
 		}
 		if (data.fact.hasOwnProperty('humidity') && data.fact.humidity != null) {
 			result.humidity = data.fact.humidity;
-			result.humidity_progress = 'width: ' + (100 - data.fact.humidity) + '%';
+			result.humidity_progress = calc_humidity_progress(result.humidity);
 		}
 		if (data.fact.hasOwnProperty('pressure_mm') && data.fact.pressure_mm != null) {
 			result.pressure = data.fact.pressure_mm;
@@ -2902,12 +2944,12 @@ function render_weather(data) {
 	}
 	if (result.wind === undefined || result.wind === null) {
 		result.wind = '—';
-		result.wind_progress = 'width: 100%';
+		result.wind_progress = 'width: 0%;';
 		result.wind_icon = 'transform: rotate(0deg)';
 	}
 	if (result.humidity === undefined || result.humidity === null) {
 		result.humidity = '—';
-		result.humidity_progress = 'width: 100%';
+		result.humidity_progress = 'width: 0%;';
 	}
 	if (result.pressure === undefined || result.pressure === null) {
 		result.pressure = '—';
@@ -3279,34 +3321,77 @@ body {
 }
 .wind_humidity_pressure_bar {
 	position: relative;
-	height: 2vw;
-	background: linear-gradient(to right, #fff, #ff0000);
-	border-radius: 2vw;
+	height: 1.0vw;
+	background: #2a2c33;
+	border-radius: 0.5vw;
 	margin: 1vw 0 3vw;
 	width: 100%;
+	overflow: visible;
 }
 .wind_bar {
-	background: linear-gradient(to right, #fff, #ff0000);
+	background: #2a2c33;
+	position: relative;
+}
+.humidity_bar {
+	background: #2a2c33;
+	position: relative;
 }
 .pressure_bar {
 	background: #2a2c33;
 	position: relative;
 	overflow: visible;
-	height: 1.0vw;
-	border-radius: 0.5vw;
+}
+.humidity_norm_zone {
+	position: absolute;
+	left: 35%;
+	width: 30%;
+	top: -2px;
+	bottom: -2px;
+	height: calc(100% + 4px);
+	background: rgba(0, 230, 118, 0.16);
+	border-left: 2px solid rgba(255, 255, 255, 0.7);
+	border-right: 2px solid rgba(255, 255, 255, 0.7);
+	z-index: 2;
+	pointer-events: none;
+	box-sizing: border-box;
+}
+.pressure_deep_low_zone {
+	position: absolute;
+	left: 0;
+	width: 25%;
+	top: 0;
+	bottom: 0;
+	background: rgba(171, 71, 188, 0.16);
+	border-right: 1px dashed rgba(171, 71, 188, 0.45);
+	border-radius: 0.5vw 0 0 0.5vw;
+	z-index: 0;
+	pointer-events: none;
+}
+.pressure_extreme_high_zone {
+	position: absolute;
+	left: 83.3%;
+	right: 0;
+	top: 0;
+	bottom: 0;
+	background: rgba(183, 28, 28, 0.22);
+	border-left: 1px dashed rgba(255, 23, 68, 0.5);
+	border-radius: 0 0.5vw 0.5vw 0;
+	z-index: 0;
+	pointer-events: none;
 }
 .pressure_norm_zone {
 	position: absolute;
 	left: 46.7%;
 	width: 16.6%;
-	top: 0;
-	bottom: 0;
-	height: 100%;
-	background: rgba(0, 230, 118, 0.22);
-	border-left: 2px dashed rgba(255, 255, 255, 0.45);
-	border-right: 2px dashed rgba(255, 255, 255, 0.45);
-	z-index: 1;
+	top: -2px;
+	bottom: -2px;
+	height: calc(100% + 4px);
+	background: rgba(0, 230, 118, 0.16);
+	border-left: 2px solid rgba(255, 255, 255, 0.7);
+	border-right: 2px solid rgba(255, 255, 255, 0.7);
+	z-index: 2;
 	pointer-events: none;
+	box-sizing: border-box;
 }
 .pressure_norm_mark {
 	position: absolute;
@@ -3345,26 +3430,15 @@ body {
 	margin-right: 0.15em;
 	font-weight: bold;
 }
-.humidity_bar {
-	background: linear-gradient(to right, #fff, #006bff);
-}
-.wind_humidity_progress {
-	position: absolute;
-	right: 0;
-	height: 2vw;
-	border-radius: 2vw;
-	border-radius: 0 2vw 2vw 0;
-	background-color: #444;
-}
-#pressure_progress {
+.wind_humidity_progress, #wind_progress, #humidity_progress, #pressure_progress {
 	position: absolute;
 	left: 0;
 	top: 0;
 	bottom: 0;
 	height: 100%;
 	border-radius: 0.5vw;
-	background: #00e676;
-	z-index: 2;
+	z-index: 1;
+	transition: width 0.3s ease, background-color 0.3s ease;
 }
 .forecast_part {
 	width: 50%;
@@ -3801,21 +3875,17 @@ body {
 		background-size: 3vw 3vw !important;
 	}
 	.wind_humidity_pressure_bar {
-		height: 0.55vw !important;
-		border-radius: 0.4vw !important;
-		margin: 0.2vh 0 0.5vh !important;
+		height: 1.0vw !important;
+		border-radius: 0.5vw !important;
+		margin: 0.3vh 0 0.6vh !important;
 	}
 	.wind_humidity_pressure_bar.pressure_bar {
 		height: 1.0vw !important;
 		border-radius: 0.5vw !important;
 		margin: 0.3vh 0 0.6vh !important;
 	}
-	.wind_humidity_progress {
-		height: 0.55vw !important;
-		border-radius: 0.4vw !important;
-	}
-	#pressure_progress {
-		height: 1.0vw !important;
+	.wind_humidity_progress, #wind_progress, #humidity_progress, #pressure_progress {
+		height: 100% !important;
 		border-radius: 0.5vw !important;
 	}
 
@@ -4079,19 +4149,17 @@ body {
 			background-size: 3.8vh 3.8vh !important;
 		}
 		.wind_humidity_pressure_bar {
-			height: 0.8vh !important;
-			margin: 0.3vh 0 0.8vh !important;
+			height: 1.4vh !important;
+			border-radius: 0.7vh !important;
+			margin: 0.4vh 0 0.8vh !important;
 		}
 		.wind_humidity_pressure_bar.pressure_bar {
 			height: 1.4vh !important;
 			border-radius: 0.7vh !important;
 			margin: 0.4vh 0 0.8vh !important;
 		}
-		.wind_humidity_progress {
-			height: 0.8vh !important;
-		}
-		#pressure_progress {
-			height: 1.4vh !important;
+		.wind_humidity_progress, #wind_progress, #humidity_progress, #pressure_progress {
+			height: 100% !important;
 			border-radius: 0.7vh !important;
 		}
 		#weather_right {
@@ -4262,18 +4330,16 @@ body {
 		background-size: 5.5vw 5.5vw !important;
 	}
 	.wind_humidity_pressure_bar {
-		height: 1.2vw !important;
+		height: 2.0vw !important;
+		border-radius: 1vw !important;
 		margin: 0.5vh 0 1vh !important;
 	}
 	.wind_humidity_pressure_bar.pressure_bar {
 		height: 2.0vw !important;
 		border-radius: 1vw !important;
 	}
-	.wind_humidity_progress {
-		height: 1.2vw !important;
-	}
-	#pressure_progress {
-		height: 2.0vw !important;
+	.wind_humidity_progress, #wind_progress, #humidity_progress, #pressure_progress {
+		height: 100% !important;
 		border-radius: 1vw !important;
 	}
 	#weather_right {

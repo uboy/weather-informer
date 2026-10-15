@@ -81,6 +81,29 @@ if (flMatch) {
     check('feels_like: жара 30°/30% → факт', fn(30, 30, 2) === 30, String(fn(30, 30, 2)));
 }
 
+// 3.1a calc_wind_progress: прогрессивная шкала ветра
+const windMatch = html.match(/^function calc_wind_progress[\s\S]*?^\}/m);
+check('calc_wind_progress извлечена', !!windMatch);
+if (windMatch) {
+    const fnW = eval('(function(){ var wind_max = 15; ' + windMatch[0] + '; return calc_wind_progress;})()');
+    check('wind_progress: null → 0%', fnW(null) === 'width: 0%;');
+    check('wind_progress: штиль 2 м/с → ~13%, зеленый', fnW(2).includes('width: 13%') && fnW(2).includes('#00e676'), fnW(2));
+    check('wind_progress: умеренный 7 м/с → ~47%, желтый', fnW(7).includes('width: 47%') && fnW(7).includes('#ffd600'), fnW(7));
+    check('wind_progress: сильный 12 м/с → 80%, оранжевый', fnW(12).includes('width: 80%') && fnW(12).includes('#ff9100'), fnW(12));
+    check('wind_progress: шторм 18 м/с → 100%, красный', fnW(18).includes('width: 100%') && fnW(18).includes('#ff1744'), fnW(18));
+}
+
+// 3.1a2 calc_humidity_progress: зоны комфорта влажности
+const humMatch = html.match(/^function calc_humidity_progress[\s\S]*?^\}/m);
+check('calc_humidity_progress извлечена', !!humMatch);
+if (humMatch) {
+    const fnH = eval('(function(){ ' + humMatch[0] + '; return calc_humidity_progress;})()');
+    check('humidity_progress: null → 0%', fnH(null) === 'width: 0%;');
+    check('humidity_progress: сухо 25% → оранжевый', fnH(25).includes('width: 25%') && fnH(25).includes('#ff9100'), fnH(25));
+    check('humidity_progress: комфорт 50% → зеленый', fnH(50).includes('width: 50%') && fnH(50).includes('#00e676'), fnH(50));
+    check('humidity_progress: сыро 80% → синий', fnH(80).includes('width: 80%') && fnH(80).includes('#29b6f6'), fnH(80));
+}
+
 // 3.1b calc_pressure_progress: индикация давления и цвета
 const prMatch = html.match(/^function calc_pressure_progress[\s\S]*?^\}/m);
 check('calc_pressure_progress извлечена', !!prMatch);
@@ -90,6 +113,7 @@ if (prMatch) {
     check('pressure_progress: норма 743 → ~55%, зеленый', fn(743, 743).includes('width: 55%') && fn(743, 743).includes('#00e676'), fn(743, 743));
     check('pressure_progress: низкое 720 → ~17%, синий', fn(720, 743).includes('width: 17%') && fn(720, 743).includes('#29b6f6'), fn(720, 743));
     check('pressure_progress: высокое 760 → ~83%, оранжевый', fn(760, 743).includes('width: 83%') && fn(760, 743).includes('#ff9100'), fn(760, 743));
+    check('pressure_progress: барический купол 768 → ~97%, темно-красный', fn(768, 743).includes('width: 97%') && fn(768, 743).includes('#b71c1c'), fn(768, 743));
     check('pressure_progress: clamp min 700 → 0%', fn(700, 743).includes('width: 0%'), fn(700, 743));
     check('pressure_progress: clamp max 780 → 100%', fn(780, 743).includes('width: 100%'), fn(780, 743));
 }
