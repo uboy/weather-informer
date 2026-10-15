@@ -19,6 +19,7 @@ import threading
 import math
 import logging
 import re
+import shutil
 from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 import urllib.request
@@ -40,6 +41,10 @@ log = logging.getLogger("WeatherCache")
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(SCRIPT_DIR, "config.json")
 CACHE_FILE = os.path.join(SCRIPT_DIR, "weather_cache.json")
+
+# Защита от исчерпания потоков хоста (не более 32 одновременных клиентов)
+MAX_CONCURRENT_CLIENTS = 32
+CLIENT_SEMAPHORE = threading.BoundedSemaphore(MAX_CONCURRENT_CLIENTS)
 
 # Кэш погоды по точкам (выбор города на планшете): ключ "lat:lon" с точностью 0.01°
 LOCATION_CACHE = {}
@@ -223,14 +228,26 @@ def mask_key(key):
 
 
 def save_config(new_cfg):
-    """Атомарное сохранение конфигурации в config.json с защитой от перезаписи маскированными значениями"""
+    """Атомарное сохранение конфигурации в config.json с бэкапом и защитой от затирания ключей."""
     current = load_config()
     key_fields = ("api", "gismeteo_api_key", "foreca_api_key", "openweathermap_api_key")
     for k, v in new_cfg.items():
-        if k in key_fields and isinstance(v, str):
+        if k in key_fields:
+            # Защита от стирания боевых ключей пустыми или маскированными значениями
+            if not v or not isinstance(v, str) or not v.strip():
+                continue
             if "•" in v or "*" in v:
                 continue
         current[k] = v
+
+    # 1. Сохранение резервной копии перед перезаписью
+    if os.path.isfile(CONFIG_FILE):
+        try:
+            shutil.copy2(CONFIG_FILE, CONFIG_FILE + ".bak")
+        except Exception as e:
+            log.warning("Failed to create config backup: %s", e)
+
+    # 2. Атомарная запись через временный файл
     tmp_file = CONFIG_FILE + ".tmp"
     with open(tmp_file, "w", encoding="utf-8") as f:
         json.dump(current, f, ensure_ascii=False, indent=2)
@@ -1738,10 +1755,44 @@ def tablets_time_sync_loop():
         interval_sec = max(300, int(interval_hours * 3600))
         time.sleep(interval_sec)
 
+
+class BoundedThreadingHTTPServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer с жестким ограничением параллельных потоков и защитой хоста."""
+    daemon_threads = True
+
+    def process_request(self, request, client_address):
+        if not CLIENT_SEMAPHORE.acquire(blocking=False):
+            try:
+                request.settimeout(2.0)
+                resp = (
+                    b"HTTP/1.1 503 Service Unavailable\r\n"
+                    b"Content-Type: application/json; charset=utf-8\r\n"
+                    b"Connection: close\r\n"
+                    b"Content-Length: 40\r\n\r\n"
+                    b'{"error":"Server overloaded (max 32)"}\n'
+                )
+                request.sendall(resp)
+            except Exception:
+                pass
+            finally:
+                self.shutdown_request(request)
+            return
+
+        def run_with_semaphore():
+            try:
+                self.process_request_thread(request, client_address)
+            finally:
+                CLIENT_SEMAPHORE.release()
+
+        t = threading.Thread(target=run_with_semaphore)
+        t.daemon = True
+        t.start()
+
+
 class WeatherHTTPHandler(BaseHTTPRequestHandler):
-    # Заморозка однопоточного сервера на полумёртвом клиентском сокете
-    # (keep-alive readline без таймаута) — закрываем соединение через 30 с
-    timeout = 30
+    # Жесткий таймаут сокета 10 с (защита от подвисания при плохом Wi-Fi на планшетах)
+    timeout = 10.0
+    MAX_BODY_SIZE = 64 * 1024  # Максимальный размер входящего POST (64 КБ)
 
     def send_cors_headers(self):
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -2323,9 +2374,38 @@ code {{ color: #81D4FA; }}
         path = self.path.split("?")[0]
         if path in ("/api/settings", "/settings"):
             try:
-                length = int(self.headers.get("Content-Length", 0))
-                body = self.rfile.read(length)
-                payload = json.loads(body.decode("utf-8"))
+                content_len_hdr = self.headers.get("Content-Length")
+                if not content_len_hdr:
+                    length = 0
+                else:
+                    try:
+                        length = int(content_len_hdr)
+                    except (ValueError, TypeError):
+                        self.send_response(400)
+                        self.send_cors_headers()
+                        self.send_header("Content-Type", "application/json; charset=utf-8")
+                        self.end_headers()
+                        self.wfile.write(b'{"error":"Invalid Content-Length"}')
+                        return
+
+                if length > self.MAX_BODY_SIZE:
+                    self.send_response(413)  # Payload Too Large
+                    self.send_cors_headers()
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self.end_headers()
+                    self.wfile.write(b'{"error":"Payload too large (max 64KB)"}')
+                    return
+
+                if length < 0:
+                    self.send_response(400)
+                    self.send_cors_headers()
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self.end_headers()
+                    self.wfile.write(b'{"error":"Negative Content-Length"}')
+                    return
+
+                body = self.rfile.read(length) if length > 0 else b"{}"
+                payload = json.loads(body.decode("utf-8")) if body else {}
 
                 allowed_fields = [
                     "lat", "lon", "city_name", "primary_source",
@@ -2383,7 +2463,7 @@ def main():
     # Биндим порт ДО старта фоновых потоков: вторая копия сервера умирает
     # здесь же мгновенно — без потоков и без запросов к источникам
     # (защита от дублей: ручные запуски поверх systemd-инстанса)
-    server = ThreadingHTTPServer(("0.0.0.0", port), WeatherHTTPHandler)
+    server = BoundedThreadingHTTPServer(("0.0.0.0", port), WeatherHTTPHandler)
     log.info("WeatherInformer Caching Proxy listening on port %d...", port)
 
     # Фоновая синхронизация времени на планшетах (каждые 6 часов)

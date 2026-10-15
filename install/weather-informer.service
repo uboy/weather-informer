@@ -11,6 +11,11 @@ WorkingDirectory=/home/dmazur/services/weather-informer
 ExecStart=/usr/bin/python3 /home/dmazur/services/weather-informer/caching_server.py
 Restart=always
 RestartSec=5
+# Защита хоста Asrock от OOM и исчерпания ресурсов (cgroups v2)
+MemoryMax=256M
+MemoryHigh=192M
+TasksMax=64
+LimitNOFILE=1024
 
 [Install]
 WantedBy=default.target
