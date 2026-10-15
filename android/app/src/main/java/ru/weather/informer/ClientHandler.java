@@ -204,17 +204,7 @@ public class ClientHandler implements Runnable {
 
         // 6. Перезагрузка информера /api/reload
         if (path.equals("/api/reload")) {
-            if (server.getActivity() != null) {
-                server.getActivity().reloadInformer();
-            } else {
-                try {
-                    Intent launchIntent = new Intent(server.getContext(), MainActivity.class);
-                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                    server.getContext().startActivity(launchIntent);
-                } catch (Exception e) {
-                    Log.e(TAG, "Failed to start MainActivity from /api/reload: " + e.getMessage());
-                }
-            }
+            triggerReload();
             sendResponse(out, 200, "OK", "application/json; charset=utf-8",
                     "{\"status\":\"reloaded\"}".getBytes(StandardCharsets.UTF_8));
             return;
@@ -583,9 +573,7 @@ public class ClientHandler implements Runnable {
                 fos.write(fileContent);
             }
 
-            if (server.getActivity() != null) {
-                server.getActivity().reloadInformer();
-            }
+            triggerReload();
 
             sendResponse(out, 200, "OK", "application/json; charset=utf-8",
                     ("{\"status\":\"uploaded\",\"file\":\"" + filename + "\",\"size\":" + fileContent.length + "}").getBytes(StandardCharsets.UTF_8));
@@ -593,6 +581,33 @@ public class ClientHandler implements Runnable {
         } catch (Exception e) {
             sendResponse(out, 500, "Server Error", "application/json",
                     ("{\"error\":\"Upload error: " + e.getMessage() + "\"}").getBytes(StandardCharsets.UTF_8));
+        }
+    }
+
+    private void triggerReload() {
+        try {
+            MainActivity act = server.getActivity();
+            if (act != null) {
+                act.reloadInformer();
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Direct reloadInformer error: " + e.getMessage());
+        }
+
+        try {
+            Intent broadcast = new Intent(MainActivity.ACTION_RELOAD);
+            server.getContext().sendBroadcast(broadcast);
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to send reload broadcast: " + e.getMessage());
+        }
+
+        try {
+            Intent launchIntent = new Intent(server.getContext(), MainActivity.class);
+            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            launchIntent.putExtra("force_reload", true);
+            server.getContext().startActivity(launchIntent);
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to start MainActivity from triggerReload: " + e.getMessage());
         }
     }
 

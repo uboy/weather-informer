@@ -1,11 +1,15 @@
 package ru.weather.informer;
 
 import android.app.Activity;
+import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Log;
 import android.view.View;
 import android.view.WindowManager;
 import android.webkit.WebSettings;
@@ -13,14 +17,35 @@ import android.webkit.WebView;
 import android.widget.FrameLayout;
 
 public class MainActivity extends Activity implements Runnable {
+    private static final String TAG = "MainActivity";
+    public static final String ACTION_RELOAD = "ru.weather.informer.RELOAD";
+
     private WebView webView;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+
+    private static class ReloadReceiver extends BroadcastReceiver {
+        private final MainActivity activity;
+
+        public ReloadReceiver(MainActivity activity) {
+            this.activity = activity;
+        }
+
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            Log.i(TAG, "Reload broadcast received, reloading informer...");
+            if (activity != null) {
+                activity.reloadInformer();
+            }
+        }
+    }
+
+    private final ReloadReceiver reloadReceiver = new ReloadReceiver(this);
 
     @Override
     public void run() {
         if (webView != null) {
             webView.clearCache(true);
-            webView.loadUrl("http://127.0.0.1:8080/?force=1");
+            webView.loadUrl("http://127.0.0.1:8080/?force=1&t=" + System.currentTimeMillis());
         }
     }
 
@@ -30,6 +55,14 @@ public class MainActivity extends Activity implements Runnable {
 
     public void reloadInformer() {
         runOnUiThread(this);
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        Log.i(TAG, "onNewIntent called, reloading informer...");
+        reloadInformer();
     }
 
     @Override
@@ -50,7 +83,14 @@ public class MainActivity extends Activity implements Runnable {
             startService(serviceIntent);
         }
 
-        // 4. Настройка WebView Kiosk
+        // 4. Регистрация приемника broadcast на перезагрузку
+        try {
+            registerReceiver(reloadReceiver, new IntentFilter(ACTION_RELOAD));
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to register reloadReceiver: " + e.getMessage());
+        }
+
+        // 5. Настройка WebView Kiosk
         webView = new WebView(this);
         setContentView(webView, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
@@ -81,6 +121,17 @@ public class MainActivity extends Activity implements Runnable {
         hideSystemUI();
         if (InformerServer.getInstance() != null) {
             InformerServer.getInstance().setActivity(this);
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        try {
+            unregisterReceiver(reloadReceiver);
+        } catch (Exception ignored) {}
+        if (InformerServer.getInstance() != null && InformerServer.getInstance().getActivity() == this) {
+            InformerServer.getInstance().setActivity(null);
         }
     }
 
