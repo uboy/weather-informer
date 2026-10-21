@@ -376,11 +376,27 @@ def load_pressure_cache():
             log.warning("Could not load pressure cache: %s", e)
 
 
+MAX_PRESSURE_ENTRIES = 32
+
+
 def save_pressure_cache():
     try:
-        tmp = PRESSURE_CACHE_FILE + ".tmp"
+        now = time.time()
         with LAST_KNOWN_PRESSURE_LOCK:
+            expired = [k for k, v in LAST_KNOWN_PRESSURE.items()
+                       if now - v.get("ts", 0) > PRESSURE_HOLD_MAX_AGE_SEC]
+            for k in expired:
+                del LAST_KNOWN_PRESSURE[k]
+
+            if len(LAST_KNOWN_PRESSURE) > MAX_PRESSURE_ENTRIES:
+                oldest = sorted(LAST_KNOWN_PRESSURE.keys(),
+                                key=lambda k: LAST_KNOWN_PRESSURE[k].get("ts", 0))
+                for k in oldest[:len(LAST_KNOWN_PRESSURE) - MAX_PRESSURE_ENTRIES]:
+                    del LAST_KNOWN_PRESSURE[k]
+
             data = dict(LAST_KNOWN_PRESSURE)
+
+        tmp = f"{PRESSURE_CACHE_FILE}.{os.getpid()}_{threading.get_ident()}.tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
         os.replace(tmp, PRESSURE_CACHE_FILE)
@@ -442,38 +458,74 @@ def get_held_pressure(lat, lon):
 
 
 def fetch_fallback_pressure(lat, lon):
-    """Резервное получение фактического атмосферного давления из Open-Meteo при отсутствии замера станции > 6 часов"""
+    """Резервное получение фактического атмосферного давления из настроенных резервных источников"""
     if lat is None or lon is None:
         return None
     cfg = load_config()
-    proxy = cfg.get("om_proxy", "") or None
-    try:
-        url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=surface_pressure"
-        text = fetch_url_via(url, proxy, 10)
-        data = json.loads(text)
-        sp = data.get("current", {}).get("surface_pressure")
-        if sp is not None:
-            p_mm = int(round(float(sp) * 0.750062))
-            if 600 <= p_mm <= 850:
-                log.info("Fetched fallback surface pressure from Open-Meteo for (%s, %s): %s mmHg (%.1f hPa)",
-                         lat, lon, p_mm, sp)
-                return p_mm
-    except Exception as e:
-        log.warning("fetch_fallback_pressure failed: %s", sanitize_secrets(e))
+
+    # 1. Open-Meteo (если включен в конфигурации)
+    if cfg.get("enable_openmeteo_fallback", True):
+        proxy = cfg.get("om_proxy", "") or None
+        try:
+            url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=surface_pressure"
+            text = fetch_url_via(url, proxy, 10)
+            data = json.loads(text)
+            sp = data.get("current", {}).get("surface_pressure")
+            if sp is not None:
+                p_mm = int(round(float(sp) * 0.750062))
+                if 600 <= p_mm <= 850:
+                    log.info("Fetched fallback surface pressure from Open-Meteo for (%s, %s): %s mmHg (%.1f hPa)",
+                             lat, lon, p_mm, sp)
+                    return p_mm
+        except Exception as e:
+            log.warning("fetch_fallback_pressure (Open-Meteo) failed: %s", sanitize_secrets(e))
+
+    # 2. OpenWeatherMap (если есть ключ и включен в конфигурации)
+    owm_key = cfg.get("openweathermap_api_key", "").strip()
+    if owm_key and cfg.get("enable_openweathermap_fallback", True):
+        try:
+            url = f"https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={owm_key}"
+            text = fetch_url_via(url, None, 10)
+            data = json.loads(text)
+            press = data.get("main", {}).get("pressure")
+            if press is not None:
+                p_mm = int(round(float(press) * 0.750062))
+                if 600 <= p_mm <= 850:
+                    log.info("Fetched fallback surface pressure from OWM for (%s, %s): %s mmHg", lat, lon, p_mm)
+                    return p_mm
+        except Exception as e:
+            log.warning("fetch_fallback_pressure (OWM) failed: %s", sanitize_secrets(e))
+
     return None
 
 
-def normalize_weather_data(data, lat=None, lon=None):
+def normalize_weather_data(data, lat=None, lon=None, allow_network=True):
     if not isinstance(data, dict):
         return data
     fact = data.get("fact")
     info = data.get("info", {})
     if isinstance(fact, dict):
         p = fact.get("pressure_mm")
+        # Санитизация аномального значения: отсекаем мусор вне диапазона
+        if p is not None:
+            try:
+                p_num = int(round(float(p)))
+                if 600 <= p_num <= 850:
+                    p = p_num
+                    fact["pressure_mm"] = p_num
+                else:
+                    p = None
+                    fact["pressure_mm"] = None
+            except (ValueError, TypeError):
+                p = None
+                fact["pressure_mm"] = None
+
         if p is None and "pressure_pa" in fact and fact["pressure_pa"] is not None:
             try:
-                p = int(round(float(fact["pressure_pa"]) * 0.750062))
-                fact["pressure_mm"] = p
+                p_pa = int(round(float(fact["pressure_pa"]) * 0.750062))
+                if 600 <= p_pa <= 850:
+                    p = p_pa
+                    fact["pressure_mm"] = p_pa
             except (ValueError, TypeError):
                 pass
 
@@ -489,14 +541,16 @@ def normalize_weather_data(data, lat=None, lon=None):
             held = get_held_pressure(lat, lon) if (lat is not None and lon is not None) else None
             if held is not None:
                 fact["pressure_mm"] = held
-            else:
-                # Если замера станции нет > 6 часов (или холодный старт) — резерв из Open-Meteo
+            elif allow_network:
+                # Если замера станции нет > 6 часов (или холодный старт) — резерв из настроенных фоллбэков
                 fallback_p = fetch_fallback_pressure(lat, lon) if (lat is not None and lon is not None) else None
                 if fallback_p is not None:
                     fact["pressure_mm"] = fallback_p
-                    record_known_pressure(lat, lon, fallback_p, src="Open-Meteo")
+                    record_known_pressure(lat, lon, fallback_p, src="Fallback")
                 else:
                     fact["pressure_mm"] = None
+            else:
+                fact["pressure_mm"] = None
     return data
 
 
@@ -511,7 +565,7 @@ def load_disk_cache():
                     cfg0 = load_config()
                     lat0 = cfg0.get("lat", 56.317722)
                     lon0 = cfg0.get("lon", 43.999303)
-                    cached_data = normalize_weather_data(data, lat=lat0, lon=lon0)
+                    cached_data = normalize_weather_data(data, lat=lat0, lon=lon0, allow_network=False)
                     last_fetch_time = os.path.getmtime(CACHE_FILE)
                     dk = loc_key(lat0, lon0)
                     is_fallback = cached_data.get("src") != "Yandex"
@@ -1559,7 +1613,6 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
             with urllib.request.urlopen(req, timeout=20) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 if isinstance(data, dict) and "fact" in data and "forecasts" in data:
-                    data = normalize_weather_data(data, lat=lat, lon=lon)
                     data["src"] = "Yandex"
                     geo_obj = data.get("geo_object") or {}
                     locality = (geo_obj.get("locality") or {}).get("name") or (geo_obj.get("province") or {}).get("name")
