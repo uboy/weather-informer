@@ -444,5 +444,9 @@ check('fallback: разделение через is_metered_source и объед
 check('fallback: metered_chain защищен is_direct_allowed_for(cand.id)',
     /is_metered_source\(cand\.id\)[\s\S]*?is_direct_allowed_for\(cand\.id\)[\s\S]*?metered_chain\.push\(cand\)/.test(html));
 
+// 8.4 render_weather: отсутствие fact.pressure_mm не подменяется info.def_pressure_mm (no fake data)
+check('informer.html не содержит фоллбэка на info.def_pressure_mm в result.pressure',
+    !html.includes("result.pressure = data.info.def_pressure_mm"));
+
 console.log('\nИТОГ: pass=' + pass + ' fail=' + fail);
 process.exit(fail ? 1 : 0);

@@ -2901,8 +2901,6 @@ function render_weather(data) {
 			result.pressure = hourForecast.pressure_mm;
 		} else if (data.fact.hasOwnProperty('pressure_mm') && data.fact.pressure_mm != null) {
 			result.pressure = data.fact.pressure_mm;
-		} else if (data.hasOwnProperty('info') && data.info.hasOwnProperty('def_pressure_mm') && data.info.def_pressure_mm != null) {
-			result.pressure = data.info.def_pressure_mm;
 		}
 		if (result.pressure !== undefined && result.pressure !== null) {
 			result.pressure_progress = calc_pressure_progress(result.pressure, def_norm);
@@ -2931,8 +2929,6 @@ function render_weather(data) {
 		}
 		if (data.fact.hasOwnProperty('pressure_mm') && data.fact.pressure_mm != null) {
 			result.pressure = data.fact.pressure_mm;
-		} else if (data.hasOwnProperty('info') && data.info.hasOwnProperty('def_pressure_mm') && data.info.def_pressure_mm != null) {
-			result.pressure = data.info.def_pressure_mm;
 		}
 		if (result.pressure !== undefined && result.pressure !== null) {
 			result.pressure_progress = calc_pressure_progress(result.pressure, def_norm);

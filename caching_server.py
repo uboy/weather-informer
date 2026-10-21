@@ -338,35 +338,182 @@ FORECA = ForecaProvider(
 
 
 
-def normalize_weather_data(data):
+def fetch_url_via(url, proxy, timeout, headers=None):
+    """GET с опциональным HTTP-прокси, возвращает decoded text"""
+    hdrs = {"User-Agent": "WeatherInformerLocal/1.0"}
+    if headers:
+        hdrs.update(headers)
+    req = urllib.request.Request(url, headers=hdrs)
+    if proxy:
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
+    else:
+        opener = urllib.request.build_opener()
+    with opener.open(req, timeout=timeout) as resp:
+        return resp.read().decode("utf-8")
+
+
+PRESSURE_CACHE_FILE = os.path.join(SCRIPT_DIR, "pressure_cache.json")
+PRESSURE_HOLD_MAX_AGE_SEC = 6 * 3600
+LAST_KNOWN_PRESSURE = {}
+LAST_KNOWN_PRESSURE_LOCK = threading.Lock()
+
+
+def load_pressure_cache():
+    global LAST_KNOWN_PRESSURE
+    if os.path.isfile(PRESSURE_CACHE_FILE):
+        try:
+            with open(PRESSURE_CACHE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    now = time.time()
+                    with LAST_KNOWN_PRESSURE_LOCK:
+                        for k, v in data.items():
+                            if isinstance(v, dict) and "p" in v and "ts" in v:
+                                if now - v["ts"] <= PRESSURE_HOLD_MAX_AGE_SEC:
+                                    LAST_KNOWN_PRESSURE[k] = v
+        except Exception as e:
+            log.warning("Could not load pressure cache: %s", e)
+
+
+def save_pressure_cache():
+    try:
+        tmp = PRESSURE_CACHE_FILE + ".tmp"
+        with LAST_KNOWN_PRESSURE_LOCK:
+            data = dict(LAST_KNOWN_PRESSURE)
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp, PRESSURE_CACHE_FILE)
+    except Exception as e:
+        log.warning("Could not save pressure cache: %s", e)
+
+
+def parse_lat_lon_from_key(key):
+    if not key:
+        return None, None
+    try:
+        parts = key.split(":")
+        return float(parts[0]), float(parts[1])
+    except (ValueError, IndexError):
+        return None, None
+
+
+def record_known_pressure(lat, lon, pressure_mm, src=None, ts=None):
+    if pressure_mm is None or lat is None or lon is None:
+        return
+    try:
+        p = int(round(float(pressure_mm)))
+    except (ValueError, TypeError):
+        return
+    if not (600 <= p <= 850):
+        return
+    try:
+        k = loc_key(lat, lon)
+    except (ValueError, TypeError):
+        return
+    base_k = k.split(":")[0] + ":" + k.split(":")[1] if ":" in k else k
+    entry = {
+        "p": p,
+        "ts": ts if ts is not None else time.time(),
+        "src": src or "unknown"
+    }
+    with LAST_KNOWN_PRESSURE_LOCK:
+        LAST_KNOWN_PRESSURE[base_k] = entry
+    save_pressure_cache()
+
+
+def get_held_pressure(lat, lon):
+    """Возвращает последнее измеренное фактическое давление, если оно не старше 6 часов, иначе None."""
+    if lat is None or lon is None:
+        return None
+    try:
+        k = loc_key(lat, lon)
+    except (ValueError, TypeError):
+        return None
+    base_k = k.split(":")[0] + ":" + k.split(":")[1] if ":" in k else k
+    now = time.time()
+    with LAST_KNOWN_PRESSURE_LOCK:
+        entry = LAST_KNOWN_PRESSURE.get(base_k)
+        if entry:
+            age = now - entry.get("ts", 0)
+            if 0 <= age <= PRESSURE_HOLD_MAX_AGE_SEC:
+                return entry.get("p")
+    return None
+
+
+def fetch_fallback_pressure(lat, lon):
+    """Резервное получение фактического атмосферного давления из Open-Meteo при отсутствии замера станции > 6 часов"""
+    if lat is None or lon is None:
+        return None
+    cfg = load_config()
+    proxy = cfg.get("om_proxy", "") or None
+    try:
+        url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=surface_pressure"
+        text = fetch_url_via(url, proxy, 10)
+        data = json.loads(text)
+        sp = data.get("current", {}).get("surface_pressure")
+        if sp is not None:
+            p_mm = int(round(float(sp) * 0.750062))
+            if 600 <= p_mm <= 850:
+                log.info("Fetched fallback surface pressure from Open-Meteo for (%s, %s): %s mmHg (%.1f hPa)",
+                         lat, lon, p_mm, sp)
+                return p_mm
+    except Exception as e:
+        log.warning("fetch_fallback_pressure failed: %s", sanitize_secrets(e))
+    return None
+
+
+def normalize_weather_data(data, lat=None, lon=None):
     if not isinstance(data, dict):
         return data
     fact = data.get("fact")
     info = data.get("info", {})
     if isinstance(fact, dict):
-        if "pressure_mm" not in fact:
-            if "def_pressure_mm" in info:
-                fact["pressure_mm"] = info["def_pressure_mm"]
-            elif "def_pressure_pa" in info:
-                fact["pressure_mm"] = round(info["def_pressure_pa"] * 0.750062)
-            elif "pressure_pa" in fact:
-                fact["pressure_mm"] = round(fact["pressure_pa"] * 0.750062)
+        p = fact.get("pressure_mm")
+        if p is None and "pressure_pa" in fact and fact["pressure_pa"] is not None:
+            try:
+                p = int(round(float(fact["pressure_pa"]) * 0.750062))
+                fact["pressure_mm"] = p
+            except (ValueError, TypeError):
+                pass
+
+        if lat is None or lon is None:
+            lat = info.get("lat")
+            lon = info.get("lon")
+
+        if p is not None:
+            if lat is not None and lon is not None:
+                record_known_pressure(lat, lon, p, src=data.get("src"))
+        else:
+            # Замера давления в текущем ответе нет (синоптическая пауза между 3ч-сроками SYNOP)
+            held = get_held_pressure(lat, lon) if (lat is not None and lon is not None) else None
+            if held is not None:
+                fact["pressure_mm"] = held
             else:
-                fact["pressure_mm"] = None
+                # Если замера станции нет > 6 часов (или холодный старт) — резерв из Open-Meteo
+                fallback_p = fetch_fallback_pressure(lat, lon) if (lat is not None and lon is not None) else None
+                if fallback_p is not None:
+                    fact["pressure_mm"] = fallback_p
+                    record_known_pressure(lat, lon, fallback_p, src="Open-Meteo")
+                else:
+                    fact["pressure_mm"] = None
     return data
 
 
 def load_disk_cache():
     global cached_data, last_fetch_time
+    load_pressure_cache()
     if os.path.isfile(CACHE_FILE):
         try:
             with open(CACHE_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if isinstance(data, dict) and "fact" in data:
-                    cached_data = normalize_weather_data(data)
-                    last_fetch_time = os.path.getmtime(CACHE_FILE)
                     cfg0 = load_config()
-                    dk = loc_key(cfg0.get("lat", 56.317722), cfg0.get("lon", 43.999303))
+                    lat0 = cfg0.get("lat", 56.317722)
+                    lon0 = cfg0.get("lon", 43.999303)
+                    cached_data = normalize_weather_data(data, lat=lat0, lon=lon0)
+                    last_fetch_time = os.path.getmtime(CACHE_FILE)
+                    dk = loc_key(lat0, lon0)
                     is_fallback = cached_data.get("src") != "Yandex"
                     disk_ttl = (cfg0.get("fallback_interval_minutes", 15) * 60) if is_fallback else (cfg0.get("cache_interval_minutes", 60) * 60)
                     with LOCATION_CACHE_LOCK:
@@ -1029,21 +1176,6 @@ def fetch_from_openmeteo(lat, lon, proxy=None):
     }
 
 
-def fetch_url_via(url, proxy, timeout, headers=None):
-    """GET с опциональным HTTP-прокси, возвращает decoded text"""
-    hdrs = {"User-Agent": "WeatherInformerLocal/1.0"}
-    if headers:
-        hdrs.update(headers)
-    req = urllib.request.Request(url, headers=hdrs)
-    if proxy:
-        opener = urllib.request.build_opener(
-            urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
-    else:
-        opener = urllib.request.build_opener()
-    with opener.open(req, timeout=timeout) as resp:
-        return resp.read().decode("utf-8")
-
-
 def _icon_with_suffix(base, is_day):
     """skc/bkn получают суффикс _d/_n; конечные классы (ovc_ra и пр.) — как есть"""
     if base in ("skc", "bkn"):
@@ -1319,6 +1451,10 @@ def _store_location_result(key, data, note=None, ttl=None):
     base_key = key.split(":")[0] + ":" + key.split(":")[1] if ":" in key else key
     should_save_disk = False
 
+    if data and isinstance(data, dict) and "fact" in data:
+        k_lat, k_lon = parse_lat_lon_from_key(key)
+        data = normalize_weather_data(data, lat=k_lat, lon=k_lon)
+
     if data and isinstance(data, dict) and "city_name" not in data:
         cfg_cn = cfg.get("city_name")
         if cfg_cn:
@@ -1423,7 +1559,7 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
             with urllib.request.urlopen(req, timeout=20) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 if isinstance(data, dict) and "fact" in data and "forecasts" in data:
-                    data = normalize_weather_data(data)
+                    data = normalize_weather_data(data, lat=lat, lon=lon)
                     data["src"] = "Yandex"
                     geo_obj = data.get("geo_object") or {}
                     locality = (geo_obj.get("locality") or {}).get("name") or (geo_obj.get("province") or {}).get("name")
