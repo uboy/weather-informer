@@ -176,6 +176,25 @@ if (trendMatch) {
     ]);
     const tr4 = fnTrend(764);
     check('pressure_trend: одиночный артефакт 741 при факте 764 возвращает null (нет ложного +23)', tr4 === null, JSON.stringify(tr4));
+
+    // 3.1d4 Глубокий штормовой циклон (-16 мм за 12ч): реальный шторм НЕ должен скрываться
+    mockStore['weather_pressure_history'] = JSON.stringify([
+        { t: now - 12 * 3600 * 1000, p: 764 },
+        { t: now, p: 748 }
+    ]);
+    const tr5 = fnTrend(748);
+    check('pressure_trend: реальный штормовой циклон 764 → 748 (-16 за 12ч) отображается', tr5 && tr5.delta === -16 && tr5.hours === 12, JSON.stringify(tr5));
+
+    // 3.1d5 Суточный перепад антициклона (+16 мм за 24ч, как 18-19.10.2026): точки не удаляются из истории
+    mockStore['weather_pressure_history'] = JSON.stringify([
+        { t: now - 24 * 3600 * 1000, p: 751 },
+        { t: now - 12 * 3600 * 1000, p: 759 },
+        { t: now, p: 767 }
+    ]);
+    const tr6 = fnTrend(767);
+    check('pressure_trend: суточный размах 16 мм сохраняется (тренд за 12ч = +8)', tr6 && tr6.delta === 8 && tr6.hours === 12, JSON.stringify(tr6));
+    const keptStore = JSON.parse(mockStore['weather_pressure_history']);
+    check('pressure_trend: суточные точки 751 мм НЕ удалены из истории', keptStore.length === 3 && keptStore[0].p === 751);
 }
 
 // 3.1e record_pressure_sample: проверка накопления сэмплов каждые 15 минут

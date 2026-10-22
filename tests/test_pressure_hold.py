@@ -172,6 +172,23 @@ class TestPressureHoldAndAntiFake(unittest.TestCase):
                 # 1018 hPa * 0.750062 = 763.56 -> 764 mmHg
                 self.assertEqual(p, 764)
 
+    def test_owm_fallback_reduces_mslp_by_station_altitude(self):
+        """Если у OWM есть только sea-level pressure, он редуцируется к station_altitude."""
+        owm_resp = json.dumps({"main": {"pressure": 1038}})  # MSLP 1038 hPa
+        cfg = {
+            "enable_openmeteo_fallback": False,
+            "enable_openweathermap_fallback": True,
+            "openweathermap_api_key": "test",
+            "station_altitude": 140.0
+        }
+        with patch("caching_server.load_config", return_value=cfg):
+            with patch("caching_server.fetch_url_via", return_value=owm_resp):
+                p = caching_server.fetch_fallback_pressure(56.32, 44.0)
+                # 1038 * (1 - 140/44330)^5.2559 = ~1021.2 hPa -> ~766 mmHg
+                self.assertIsNotNone(p)
+                self.assertLess(p, 775)
+                self.assertGreater(p, 760)
+
 
 if __name__ == "__main__":
     unittest.main()

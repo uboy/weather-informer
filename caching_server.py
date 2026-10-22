@@ -493,7 +493,8 @@ def fetch_fallback_pressure(lat, lon):
                 mslp = main_w.get("pressure")
                 if mslp is not None:
                     try:
-                        press = float(mslp) * ((1.0 - 160.0 / 44330.0) ** 5.2559)
+                        elev = float(cfg.get("station_altitude", 140.0))
+                        press = float(mslp) * ((1.0 - elev / 44330.0) ** 5.2559)
                     except Exception:
                         press = mslp
             if press is not None:

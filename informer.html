@@ -559,7 +559,7 @@ function record_pressure_sample(p_val) {
 		return;
 	}
 	var num = Number(p_val);
-	if (num < 600 || num > 850) return;
+	if (num < 650 || num > 820) return;
 
 	var nowMs = Date.now();
 	var history = [];
@@ -571,22 +571,32 @@ function record_pressure_sample(p_val) {
 		history = [];
 	}
 
-	// 1. Валидация структуры существующих точек
+	// 1. Валидация структуры существующих точек и очистка legacy-артефактов нормы (741-743)
 	var valid = [];
 	for (var h = 0; h < history.length; h++) {
 		var item = history[h];
 		if (!item || typeof item !== 'object') continue;
 		var itT = Number(item.t);
 		var itP = Number(item.p);
-		if (isNaN(itT) || isNaN(itP) || itT <= 0 || itP < 600 || itP > 850) continue;
+		if (isNaN(itT) || isNaN(itP) || itT <= 0 || itP < 650 || itP > 820) continue;
+		// Точечное удаление артефактов старого сервера: дефолтная норма 741..743 при разрыве с актуальным фактом >= 6 мм
+		if (itP >= 741 && itP <= 743 && Math.abs(num - itP) >= 6) {
+			continue;
+		}
 		valid.push({ t: itT, p: itP });
 	}
 
-	// 2. Защита от записи аномального одиночного скачка:
-	// если за последние 3 часа замер прыгает более чем на 12 мм — не пишем его
+	// 2. Защита от записи аномального одиночного скачка по скорости изменения (dP/dt):
+	// В континентальной синоптике скорость изменения не превышает 3.5 мм/ч. Базовый порог шума 2.0 мм.
 	var last = valid.length > 0 ? valid[valid.length - 1] : null;
-	if (last && (nowMs - last.t < 3 * 3600 * 1000) && Math.abs(num - last.p) > 12) {
-		return;
+	if (last) {
+		var dtHours = (nowMs - last.t) / (3600 * 1000);
+		if (dtHours > 0 && dtHours < 3.0) {
+			var maxAllowedDelta = Math.max(2.0, dtHours * 3.5);
+			if (Math.abs(num - last.p) > maxAllowedDelta) {
+				return;
+			}
+		}
 	}
 
 	// 3. Добавление или обновление точки
@@ -615,7 +625,7 @@ function calc_pressure_trend(current_p) {
 		return null;
 	}
 	var cur = Number(current_p);
-	if (cur < 600 || cur > 850) return null;
+	if (cur < 650 || cur > 820) return null;
 
 	var nowMs = Date.now();
 	var history = [];
@@ -627,7 +637,7 @@ function calc_pressure_trend(current_p) {
 		history = [];
 	}
 
-	// Фильтрация валидных точек: исключаем поврежденные сэмплы и артефакты (падение на климатическую норму 741..743 при факте 760+)
+	// Фильтрация валидных точек: точечное исключение артефактов нормы (741..743) без удаления реальных штормов
 	var valid = [];
 	var hasCorrupt = false;
 	for (var h = 0; h < history.length; h++) {
@@ -635,10 +645,10 @@ function calc_pressure_trend(current_p) {
 		if (!item || typeof item !== 'object') { hasCorrupt = true; continue; }
 		var itT = Number(item.t);
 		var itP = Number(item.p);
-		if (isNaN(itT) || isNaN(itP) || itT <= 0 || itP < 600 || itP > 850) { hasCorrupt = true; continue; }
-		var itAgeMs = nowMs - itT;
-		// Если за последние 24ч точка отличается от текущего замера более чем на 14 мм рт. ст. — это артефакт
-		if (itAgeMs <= 24 * 3600 * 1000 && Math.abs(cur - itP) > 14) {
+		if (isNaN(itT) || isNaN(itP) || itT <= 0 || itP < 650 || itP > 820) { hasCorrupt = true; continue; }
+		
+		// Legacy fake norm cleanup: отбрасываем дефолтную норму 741..743 при разрыве с фактом >= 6 мм
+		if (itP >= 741 && itP <= 743 && Math.abs(cur - itP) >= 6) {
 			hasCorrupt = true;
 			continue;
 		}
@@ -662,8 +672,8 @@ function calc_pressure_trend(current_p) {
 		if (ageMs >= 3 * 3600 * 1000 && ageMs <= 18 * 3600 * 1000) {
 			var deltaP = Math.abs(cur - valid[i].p);
 			var ageHours = ageMs / (3600 * 1000);
-			// Физический предел барометрического градиента: не более 12 мм рт. ст. и не более 2.5 мм/час
-			if (deltaP > 12.0 || (deltaP / ageHours) > 2.5) {
+			// Метеорологический лимит: 25.0 мм за 12-18ч (покрывает глубочайшие циклоны ЕТР) и не быстрее 3.5 мм/час
+			if (deltaP > 25.0 || (deltaP / ageHours) > 3.5) {
 				continue;
 			}
 			var diff = Math.abs(valid[i].t - targetMs);
@@ -678,7 +688,7 @@ function calc_pressure_trend(current_p) {
 		var oldestAgeHours = (nowMs - oldest.t) / (3600 * 1000);
 		if (oldestAgeHours >= 1.0) {
 			var oldestDelta = Math.abs(cur - oldest.p);
-			if (oldestDelta <= 12.0 && (oldestDelta / oldestAgeHours) <= 2.5) {
+			if (oldestDelta <= 25.0 && (oldestDelta / oldestAgeHours) <= 3.5) {
 				bestItem = oldest;
 			}
 		}
@@ -686,7 +696,7 @@ function calc_pressure_trend(current_p) {
 	if (!bestItem) return null;
 
 	var diff_val = Math.round((cur - bestItem.p) * 10) / 10;
-	if (Math.abs(diff_val) > 12.0) return null;
+	if (Math.abs(diff_val) > 25.0) return null;
 
 	var hours_ago = Math.max(1, Math.round((nowMs - bestItem.t) / (3600 * 1000)));
 	return {
