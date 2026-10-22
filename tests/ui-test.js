@@ -157,6 +157,25 @@ if (trendMatch) {
     ]);
     const tr2 = fnTrend(743);
     check('pressure_trend: падение 746 → 743 (-3 за 12ч)', tr2 && tr2.delta === -3 && tr2.hours === 12, JSON.stringify(tr2));
+
+    // 3.1d2 Санитизация аномалий: старый артефакт 741 при текущем факте 764 не должен давать +23
+    mockStore['weather_pressure_history'] = JSON.stringify([
+        { t: now - 12 * 3600 * 1000, p: 741 }, // артефакт падения на норму
+        { t: now - 11 * 3600 * 1000, p: 763 }, // реальный исторический замер
+        { t: now, p: 764 }
+    ]);
+    const tr3 = fnTrend(764);
+    check('pressure_trend: артефакт 741 отсекается, взят чистый 763 (+1 за 11ч)', tr3 && tr3.delta === 1 && tr3.hours === 11, JSON.stringify(tr3));
+    const cleanedStore = JSON.parse(mockStore['weather_pressure_history']);
+    check('pressure_trend: артефакт 741 вычищен из хранилища', !cleanedStore.some(it => it.p === 741));
+
+    // 3.1d3 Полная изоляция аномалии: если в истории только артефакт 741 и 764, тренд не отображается (+23 запрещено)
+    mockStore['weather_pressure_history'] = JSON.stringify([
+        { t: now - 12 * 3600 * 1000, p: 741 },
+        { t: now, p: 764 }
+    ]);
+    const tr4 = fnTrend(764);
+    check('pressure_trend: одиночный артефакт 741 при факте 764 возвращает null (нет ложного +23)', tr4 === null, JSON.stringify(tr4));
 }
 
 // 3.1e record_pressure_sample: проверка накопления сэмплов каждые 15 минут
@@ -184,6 +203,12 @@ if (recordMatch) {
     fnRecord(744);
     const h2 = JSON.parse(mockStore['weather_pressure_history'] || '[]');
     check('record_pressure_sample: на 15-й минуте добавлен 2-й сэмпл', h2.length === 2 && h2[1].p === 744, JSON.stringify(h2));
+
+    // 30-я минута: попытка записать аномальный скачок на 20 мм (744 -> 765 за 15 мин) отклоняется
+    simTime = 1000000000 + 30 * 60 * 1000;
+    fnRecord(765);
+    const h3 = JSON.parse(mockStore['weather_pressure_history'] || '[]');
+    check('record_pressure_sample: аномальный скачок > 12 мм за < 3ч отклонен', h3.length === 2 && h3[1].p === 744, JSON.stringify(h3));
 }
 
 // 3.2 astro_sun: polar guard

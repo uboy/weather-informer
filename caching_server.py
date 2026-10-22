@@ -487,7 +487,15 @@ def fetch_fallback_pressure(lat, lon):
             url = f"https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={owm_key}"
             text = fetch_url_via(url, None, 10)
             data = json.loads(text)
-            press = data.get("main", {}).get("pressure")
+            main_w = data.get("main", {})
+            press = main_w.get("grnd_level")
+            if press is None:
+                mslp = main_w.get("pressure")
+                if mslp is not None:
+                    try:
+                        press = float(mslp) * ((1.0 - 160.0 / 44330.0) ** 5.2559)
+                    except Exception:
+                        press = mslp
             if press is not None:
                 p_mm = int(round(float(press) * 0.750062))
                 if 600 <= p_mm <= 850:

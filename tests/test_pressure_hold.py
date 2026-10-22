@@ -4,6 +4,7 @@ Unit tests for 6-hour barometric pressure sample-and-hold logic and
 anti-fake norm protection in caching_server.py.
 """
 
+import json
 import os
 import sys
 import threading
@@ -161,6 +162,15 @@ class TestPressureHoldAndAntiFake(unittest.TestCase):
         # Проверяем, что файл читается корректно и содержит валидный JSON
         caching_server.load_pressure_cache()
         self.assertGreater(len(caching_server.LAST_KNOWN_PRESSURE), 0)
+
+    def test_owm_fallback_prefers_grnd_level(self):
+        """OWM фоллбэк берет grnd_level (давление станции), а не sea-level (1038 hPa)."""
+        owm_resp = json.dumps({"main": {"pressure": 1038, "grnd_level": 1018}})
+        with patch("caching_server.load_config", return_value={"enable_openmeteo_fallback": False, "enable_openweathermap_fallback": True, "openweathermap_api_key": "test"}):
+            with patch("caching_server.fetch_url_via", return_value=owm_resp):
+                p = caching_server.fetch_fallback_pressure(56.32, 44.0)
+                # 1018 hPa * 0.750062 = 763.56 -> 764 mmHg
+                self.assertEqual(p, 764)
 
 
 if __name__ == "__main__":

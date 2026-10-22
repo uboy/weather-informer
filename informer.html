@@ -559,6 +559,8 @@ function record_pressure_sample(p_val) {
 		return;
 	}
 	var num = Number(p_val);
+	if (num < 600 || num > 850) return;
+
 	var nowMs = Date.now();
 	var history = [];
 	try {
@@ -569,18 +571,37 @@ function record_pressure_sample(p_val) {
 		history = [];
 	}
 
-	var last = history.length > 0 ? history[history.length - 1] : null;
+	// 1. Валидация структуры существующих точек
+	var valid = [];
+	for (var h = 0; h < history.length; h++) {
+		var item = history[h];
+		if (!item || typeof item !== 'object') continue;
+		var itT = Number(item.t);
+		var itP = Number(item.p);
+		if (isNaN(itT) || isNaN(itP) || itT <= 0 || itP < 600 || itP > 850) continue;
+		valid.push({ t: itT, p: itP });
+	}
+
+	// 2. Защита от записи аномального одиночного скачка:
+	// если за последние 3 часа замер прыгает более чем на 12 мм — не пишем его
+	var last = valid.length > 0 ? valid[valid.length - 1] : null;
+	if (last && (nowMs - last.t < 3 * 3600 * 1000) && Math.abs(num - last.p) > 12) {
+		return;
+	}
+
+	// 3. Добавление или обновление точки
 	if (!last || (nowMs - last.t >= 15 * 60 * 1000)) {
-		history.push({ t: nowMs, p: num });
+		valid.push({ t: nowMs, p: num });
 	} else {
 		last.p = num;
 	}
 
+	// 4. Очистка от устаревших точек (> 36 часов)
 	var cutoff = nowMs - (36 * 3600 * 1000);
 	var pruned = [];
-	for (var i = 0; i < history.length; i++) {
-		if (history[i].t >= cutoff) {
-			pruned.push(history[i]);
+	for (var i = 0; i < valid.length; i++) {
+		if (valid[i].t >= cutoff) {
+			pruned.push(valid[i]);
 		}
 	}
 
@@ -594,6 +615,8 @@ function calc_pressure_trend(current_p) {
 		return null;
 	}
 	var cur = Number(current_p);
+	if (cur < 600 || cur > 850) return null;
+
 	var nowMs = Date.now();
 	var history = [];
 	try {
@@ -603,31 +626,68 @@ function calc_pressure_trend(current_p) {
 	} catch(e) {
 		history = [];
 	}
-	if (history.length < 2) return null;
+
+	// Фильтрация валидных точек: исключаем поврежденные сэмплы и артефакты (падение на климатическую норму 741..743 при факте 760+)
+	var valid = [];
+	var hasCorrupt = false;
+	for (var h = 0; h < history.length; h++) {
+		var item = history[h];
+		if (!item || typeof item !== 'object') { hasCorrupt = true; continue; }
+		var itT = Number(item.t);
+		var itP = Number(item.p);
+		if (isNaN(itT) || isNaN(itP) || itT <= 0 || itP < 600 || itP > 850) { hasCorrupt = true; continue; }
+		var itAgeMs = nowMs - itT;
+		// Если за последние 24ч точка отличается от текущего замера более чем на 14 мм рт. ст. — это артефакт
+		if (itAgeMs <= 24 * 3600 * 1000 && Math.abs(cur - itP) > 14) {
+			hasCorrupt = true;
+			continue;
+		}
+		valid.push({ t: itT, p: itP });
+	}
+
+	// Если в хранилище обнаружены старые артефакты — очищаем localStorage от мусора
+	if (hasCorrupt) {
+		try {
+			localStorage.setItem('weather_pressure_history', JSON.stringify(valid));
+		} catch(e) {}
+	}
+
+	if (valid.length < 2) return null;
 
 	var targetMs = nowMs - (12 * 3600 * 1000);
 	var bestItem = null;
 	var bestDiff = Infinity;
-	for (var i = 0; i < history.length; i++) {
-		var ageMs = nowMs - history[i].t;
+	for (var i = 0; i < valid.length; i++) {
+		var ageMs = nowMs - valid[i].t;
 		if (ageMs >= 3 * 3600 * 1000 && ageMs <= 18 * 3600 * 1000) {
-			var diff = Math.abs(history[i].t - targetMs);
+			var deltaP = Math.abs(cur - valid[i].p);
+			var ageHours = ageMs / (3600 * 1000);
+			// Физический предел барометрического градиента: не более 12 мм рт. ст. и не более 2.5 мм/час
+			if (deltaP > 12.0 || (deltaP / ageHours) > 2.5) {
+				continue;
+			}
+			var diff = Math.abs(valid[i].t - targetMs);
 			if (diff < bestDiff) {
 				bestDiff = diff;
-				bestItem = history[i];
+				bestItem = valid[i];
 			}
 		}
 	}
-	if (!bestItem && history.length > 0) {
-		var oldest = history[0];
+	if (!bestItem && valid.length > 0) {
+		var oldest = valid[0];
 		var oldestAgeHours = (nowMs - oldest.t) / (3600 * 1000);
 		if (oldestAgeHours >= 1.0) {
-			bestItem = oldest;
+			var oldestDelta = Math.abs(cur - oldest.p);
+			if (oldestDelta <= 12.0 && (oldestDelta / oldestAgeHours) <= 2.5) {
+				bestItem = oldest;
+			}
 		}
 	}
 	if (!bestItem) return null;
 
 	var diff_val = Math.round((cur - bestItem.p) * 10) / 10;
+	if (Math.abs(diff_val) > 12.0) return null;
+
 	var hours_ago = Math.max(1, Math.round((nowMs - bestItem.t) / (3600 * 1000)));
 	return {
 		delta: diff_val,
