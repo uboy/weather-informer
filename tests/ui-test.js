@@ -21,7 +21,8 @@ check('все id уникальны', dupIds.length === 0, 'дубликаты: 
 for (const el of ['temperature', 'feels', 'feels_label', 'min', 'max', 'min_date', 'max_date',
     'wind', 'humidity', 'pressure', 'pressure_norm_zone', 'pressure_norm_mark', 'rise', 'set', 'duration_hour', 'duration_minute',
     'duration_left', 'status_bar', 'weather_menu', 'key_dialog', 'city_search_input',
-    'forecast_icon_0', 'forecast_icon_1', 'forecast_wind_progress_0', 'forecast_wind_progress_1', 'moon']) {
+    'forecast_icon_0', 'forecast_icon_1', 'forecast_wind_progress_0', 'forecast_wind_progress_1', 'moon',
+    'qr_modal', 'menu_qr_setup', 'qr_tablet', 'qr_server']) {
     check('элемент #' + el + ' существует', ids.includes(el));
 }
 
@@ -39,12 +40,17 @@ const zIdx = (sel) => {
     return m ? parseInt(m[1]) : null;
 };
 const zDialog = zIdx('#key_dialog');
+const zQrModal = zIdx('#qr_modal');
 const zMenu = zIdx('#weather_menu');
 const zStatus = zIdx('#status_bar');
+check('z-index: qr_modal (' + zQrModal + ') > key_dialog (' + zDialog + ')',
+    zQrModal !== null && zDialog !== null && zQrModal > zDialog);
 check('z-index: key_dialog (' + zDialog + ') > weather_menu (' + zMenu + ')',
     zDialog !== null && zMenu !== null && zDialog > zMenu);
 check('z-index: weather_menu (' + zMenu + ') > status_bar (' + zStatus + ')',
     zStatus !== null && zMenu !== null && zMenu > zStatus);
+check('скрипт qrcode.min.js подключен', html.includes('src="qrcode.min.js"'));
+check('show_qr_onboarding определена', /function show_qr_onboarding\s*\(/.test(html));
 
 // 2.3 один градус (::after) на feels, temperature, min, max — не в JS
 const feelsLines = html.split('\n').filter(l => l.includes('result.feels'));

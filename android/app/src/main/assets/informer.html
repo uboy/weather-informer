@@ -164,6 +164,100 @@ body.night-dim #status_bar { opacity: 0.5; }
 	width: 60vw;
 }
 #key_dialog.key_dialog_open { display: block; }
+#qr_modal {
+	display: none;
+	z-index: 100001;
+	position: fixed;
+	top: 50%;
+	left: 50%;
+	transform: translate(-50%, -50%);
+	background: rgba(15, 15, 18, 0.98);
+	border: 0.2vw solid rgba(255, 255, 255, 0.35);
+	border-radius: 1.2vw;
+	padding: 2vw;
+	max-width: 90vw;
+	max-height: 90vh;
+	box-sizing: border-box;
+	overflow-y: auto;
+	box-shadow: 0 0.5vw 2vw rgba(0, 0, 0, 0.8);
+	color: #ffffff;
+	text-align: center;
+}
+#qr_modal.qr_modal_open { display: block; }
+#qr_modal_title {
+	font-size: 2.2vw;
+	font-weight: bold;
+	margin-bottom: 0.6vw;
+	color: var(--tc, #ffffff);
+}
+#qr_modal_subtitle {
+	font-size: 1.4vw;
+	color: #bbbbbb;
+	margin-bottom: 1.5vw;
+}
+.qr_cards_container {
+	display: flex;
+	flex-direction: row;
+	justify-content: center;
+	align-items: stretch;
+	gap: 2vw;
+	margin-bottom: 1.5vw;
+}
+.qr_card {
+	background: rgba(255, 255, 255, 0.06);
+	border: 0.1vw solid rgba(255, 255, 255, 0.2);
+	border-radius: 0.8vw;
+	padding: 1.2vw;
+	min-width: 200px;
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+}
+.qr_card_title {
+	font-size: 1.6vw;
+	font-weight: bold;
+	color: #4FC3F7;
+	margin-bottom: 0.4vw;
+}
+.qr_card_desc {
+	font-size: 1.2vw;
+	color: #cccccc;
+	margin-bottom: 1vw;
+}
+.qr_code_wrap {
+	background: #ffffff;
+	padding: 8px;
+	border-radius: 6px;
+	display: inline-block;
+}
+.qr_code_wrap img, .qr_code_wrap canvas {
+	display: block;
+	margin: 0 auto;
+}
+.qr_url_text {
+	font-size: 1.1vw;
+	color: #888888;
+	margin-top: 0.8vw;
+	word-break: break-all;
+	font-family: monospace;
+}
+#qr_close_btn {
+	background: rgba(255, 255, 255, 0.15);
+	border: 0.1vw solid rgba(255, 255, 255, 0.3);
+	border-radius: 0.6vw;
+	color: #ffffff;
+	font-size: 1.6vw;
+	padding: 0.8vw 2vw;
+	cursor: pointer;
+	display: inline-block;
+	margin-top: 1vw;
+	-webkit-user-select: none;
+	user-select: none;
+}
+#qr_close_btn:active {
+	background: rgba(255, 255, 255, 0.3);
+}
 #key_dialog_title {
 	font-size: 2.4vw;
 	color: var(--tc, #fff);
@@ -333,6 +427,7 @@ body.night-dim #status_bar { opacity: 0.5; }
 			</div>
 		</div>
 	</div>
+<script src="qrcode.min.js"></script>
 <script src="jquery.min.js"></script>
 <script>window.jQuery || document.write(String.fromCharCode(60) + 'script src="https://code.jquery.com/jquery-3.7.1.min.js" crossorigin="anonymous"><\/script' + String.fromCharCode(62));</script>
 <script>
@@ -1117,6 +1212,107 @@ function show_key_dialog(title, lsKey, onSave, onDelete) {
 		$("#key_dialog_input").on("click", function(e) { e.stopPropagation(); });
 	}
 
+function show_qr_onboarding() {
+	var qrModal = $("#qr_modal");
+	var cardServer = $("#card_qr_server");
+	var titleTablet = $("#title_qr_tablet");
+	var descTablet = $("#desc_qr_tablet");
+	var qrTabletEl = document.getElementById("qr_tablet");
+	var qrServerEl = document.getElementById("qr_server");
+	var urlTabletEl = document.getElementById("url_qr_tablet");
+	var urlServerEl = document.getElementById("url_qr_server");
+
+	if (!qrTabletEl || !qrServerEl) return;
+
+	qrTabletEl.innerHTML = "";
+	qrServerEl.innerHTML = "";
+	if (urlTabletEl) urlTabletEl.innerText = "";
+	if (urlServerEl) urlServerEl.innerText = "";
+
+	var host = window.location.hostname || "127.0.0.1";
+	var tabletPort = window.location.port || "8080";
+	var baseServer = (typeof server_base === "function") ? server_base() : "";
+
+	function render_qr_with_info(info) {
+		var devIp = (info && info.device_ip && info.device_ip !== "127.0.0.1") ? info.device_ip : host;
+		if (devIp === "127.0.0.1" || devIp === "localhost") {
+			if (baseServer) {
+				try {
+					var m = baseServer.match(/^https?:\/\/([^/:]+)/i);
+					if (m && m[1] && m[1] !== "127.0.0.1" && m[1] !== "localhost") {
+						devIp = m[1];
+					}
+				} catch (e) {}
+			}
+		}
+
+		var tabletUrl = "http://" + devIp + ":" + (tabletPort || "8080") + "/setup";
+		var serverUrl = (info && info.server_url) ? info.server_url : baseServer;
+		if (serverUrl && !/\/setup$/.test(serverUrl)) {
+			serverUrl = serverUrl.replace(/\/$/, "") + "/setup";
+		}
+
+		var hasServer = (serverUrl && serverUrl.trim() !== "");
+
+		if (hasServer) {
+			titleTablet.text("Планшет");
+			descTablet.text("Прямая настройка этого экрана");
+		} else {
+			titleTablet.text("Планшет (автономный режим)");
+			descTablet.text("Автономная работа без домашнего сервера");
+		}
+
+		if (typeof QRCode !== "undefined") {
+			try {
+				new QRCode(qrTabletEl, {
+					text: tabletUrl,
+					width: 160,
+					height: 160,
+					colorDark: "#000000",
+					colorLight: "#ffffff",
+					correctLevel: QRCode.CorrectLevel.M
+				});
+			} catch (err) {
+				console.log("QRCode error:", err);
+			}
+		}
+		if (urlTabletEl) urlTabletEl.innerText = tabletUrl;
+
+		if (hasServer) {
+			cardServer.show();
+			if (typeof QRCode !== "undefined") {
+				try {
+					new QRCode(qrServerEl, {
+						text: serverUrl,
+						width: 160,
+						height: 160,
+						colorDark: "#000000",
+						colorLight: "#ffffff",
+						correctLevel: QRCode.CorrectLevel.M
+					});
+				} catch (err) {
+					console.log("QRCode server error:", err);
+				}
+			}
+			if (urlServerEl) urlServerEl.innerText = serverUrl;
+		} else {
+			cardServer.hide();
+		}
+
+		qrModal.addClass("qr_modal_open");
+	}
+
+	$.ajax({
+		url: "/api/info",
+		dataType: "json",
+		timeout: 1500
+	}).done(function(info) {
+		render_qr_with_info(info);
+	}).fail(function() {
+		render_qr_with_info(null);
+	});
+}
+
 function init_menu() {
 	var menu = $("#weather_menu");
 	function render_src() {
@@ -1162,6 +1358,20 @@ function init_menu() {
 			dest = base ? (base + "/upload") : "http://127.0.0.1:8080/upload";
 		}
 		window.location.href = dest;
+	});
+	$("#menu_qr_setup").on("click", function(e) {
+		e.stopPropagation();
+		menu.removeClass("menu_open");
+		show_qr_onboarding();
+	});
+	$("#qr_close_btn").on("click", function(e) {
+		e.stopPropagation();
+		$("#qr_modal").removeClass("qr_modal_open");
+	});
+	$("#qr_modal").on("click", function(e) {
+		if (e.target === this) {
+			$(this).removeClass("qr_modal_open");
+		}
 	});
 	$(".menu_src").on("click", function(e) {
 		e.stopPropagation();
@@ -4677,6 +4887,7 @@ body {
 		<div class="menu_title">Управление</div>
 		<div class="menu_item" id="menu_settings">⚙️ Настройки</div>
 		<div class="menu_item" id="menu_upload">📁 Загрузка файлов</div>
+		<div class="menu_item" id="menu_qr_setup">📱 Настроить со смартфона (QR-код)</div>
 		<div class="menu_title">Источник (по умолчанию)</div>
 		<div class="menu_item menu_src" data-src="default">По умолчанию</div>
 		<div class="menu_item menu_src" data-src="server">Локальный сервер</div>
@@ -4709,6 +4920,27 @@ body {
 		<div class="menu_item" id="key_save">Сохранить</div>
 		<div class="menu_item" id="key_delete" style="display:none">Удалить ключ</div>
 		<div class="menu_item" id="key_cancel">Отмена</div>
+	</div>
+	<div id="qr_modal">
+		<div id="qr_modal_title">📱 Настройка со смартфона</div>
+		<div id="qr_modal_subtitle">Наведите камеру смартфона на нужный QR-код для настройки локации и ключей</div>
+		<div class="qr_cards_container">
+			<div class="qr_card" id="card_qr_tablet">
+				<div class="qr_card_title" id="title_qr_tablet">Планшет</div>
+				<div class="qr_card_desc" id="desc_qr_tablet">Прямая настройка планшета (без сервера)</div>
+				<div class="qr_code_wrap" id="qr_tablet"></div>
+				<div class="qr_url_text" id="url_qr_tablet"></div>
+			</div>
+			<div class="qr_card" id="card_qr_server" style="display:none">
+				<div class="qr_card_title">Сервер сети</div>
+				<div class="qr_card_desc">Настройка домашнего сервера кэширования</div>
+				<div class="qr_code_wrap" id="qr_server"></div>
+				<div class="qr_url_text" id="url_qr_server"></div>
+			</div>
+		</div>
+		<div>
+			<div id="qr_close_btn">Закрыть</div>
+		</div>
 	</div>
 	<div id="status_bar"></div>
 </body>

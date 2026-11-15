@@ -26,6 +26,7 @@ import threading
 import tempfile
 import shutil
 import unittest
+import unittest.mock
 
 # Ensure parent directory is in sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -288,6 +289,70 @@ class TestServerEndpoints(unittest.TestCase):
         data = json.loads(body.decode("utf-8"))
         self.assertEqual(data.get("error"), "Too Many Requests")
         self.assertEqual(data.get("category"), "admin")
+
+    # 14. GET /setup
+    def test_setup_page(self):
+        status, _, body = self._get("/setup")
+        self.assertEqual(status, 200)
+        html = body.decode("utf-8")
+        self.assertIn("Настройки", html)
+
+    # 15. GET & POST /api/config
+    def test_api_config_get_and_post(self):
+        status, _, body = self._get("/api/config")
+        self.assertEqual(status, 200)
+        cfg = json.loads(body.decode("utf-8"))
+        self.assertIn("nearest_airport", cfg)
+        self.assertEqual(cfg["nearest_airport"]["icao"], "UWGG")
+        self.assertTrue(cfg.get("has_api"))
+
+        # Valid update
+        update_payload = {"city_name": "Арзамас", "station_altitude": 140.0}
+        post_st, _, post_body = self._post("/api/config", update_payload)
+        self.assertEqual(post_st, 200)
+        resp = json.loads(post_body.decode("utf-8"))
+        self.assertEqual(resp.get("status"), "saved")
+
+    # 16. POST /api/config LAN protection
+    def test_api_config_lan_protection(self):
+        ext_headers = {"X-Forwarded-For": "8.8.8.8"}
+        post_st, _, post_body = self._post("/api/config", {"city_name": "Hacked"}, headers=ext_headers)
+        self.assertEqual(post_st, 403)
+        self.assertIn(b"Forbidden: LAN access only", post_body)
+
+    # 17. GET /api/metar
+    def test_api_metar_endpoint(self):
+        # UWGG mock
+        mock_awc_json = json.dumps([
+            {
+                "icaoId": "UWGG",
+                "temp": 1.0,
+                "dewp": -3.0,
+                "altim": 1022.0,
+                "elev": 78,
+                "name": "Nizhny Novgorod",
+                "rawOb": "METAR UWGG 151800Z Q1022"
+            }
+        ]).encode("utf-8")
+        mock_resp = unittest.mock.MagicMock()
+        mock_resp.read.return_value = mock_awc_json
+        mock_resp.__enter__.return_value = mock_resp
+
+        with unittest.mock.patch("urllib.request.urlopen", return_value=mock_resp):
+            status, _, body = self._get("/api/metar?icao=UWGG")
+            self.assertEqual(status, 200)
+            data = json.loads(body.decode("utf-8"))
+            self.assertEqual(data.get("icao"), "UWGG")
+            self.assertEqual(data.get("temp"), 1.0)
+
+    # 18. GET /api/info
+    def test_api_info_endpoint(self):
+        status, _, body = self._get("/api/info")
+        self.assertEqual(status, 200)
+        data = json.loads(body.decode("utf-8"))
+        self.assertEqual(data.get("status"), "ok")
+        self.assertEqual(data.get("role"), "caching_server")
+        self.assertIn("server_url", data)
 
 
 if __name__ == "__main__":

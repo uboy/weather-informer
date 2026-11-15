@@ -20,6 +20,7 @@ import math
 import logging
 import re
 import shutil
+import socket
 import tempfile
 import ipaddress
 import html
@@ -868,6 +869,314 @@ def collect_ogimet_synop(hours_back=30):
     return n
 
 
+# ----------------------------------------------------------------------
+# ICAO Аэродромы, NOAA METAR и геолокация
+# ----------------------------------------------------------------------
+
+ICAO_AIRPORTS_FILE = os.path.join(SCRIPT_DIR, "icao_airports.json")
+_ICAO_CACHE = None
+
+
+def haversine_km(lat1, lon1, lat2, lon2):
+    """Вычисляет расстояние между двумя координатами на сфере в километрах."""
+    try:
+        r = 6371.0
+        dlat = math.radians(float(lat2) - float(lat1))
+        dlon = math.radians(float(lon2) - float(lon1))
+        a = (math.sin(dlat / 2.0) ** 2 +
+             math.cos(math.radians(float(lat1))) * math.cos(math.radians(float(lat2))) * math.sin(dlon / 2.0) ** 2)
+        c = 2.0 * math.atan2(math.sqrt(a), math.sqrt(1.0 - a))
+        return r * c
+    except (ValueError, TypeError):
+        return float("inf")
+
+
+def load_icao_airports():
+    global _ICAO_CACHE
+    if _ICAO_CACHE is not None:
+        return _ICAO_CACHE
+    if os.path.isfile(ICAO_AIRPORTS_FILE):
+        try:
+            with open(ICAO_AIRPORTS_FILE, "r", encoding="utf-8") as f:
+                _ICAO_CACHE = json.load(f)
+                return _ICAO_CACHE
+        except Exception as e:
+            log.warning("Failed to load icao_airports.json: %s", e)
+    # Минимальный встроенный список на случай отсутствия файла
+    _ICAO_CACHE = [
+        {"icao": "UWGG", "name": "Нижний Новгород (Стригино)", "lat": 56.230, "lon": 43.784, "elev": 78},
+        {"icao": "UUEE", "name": "Москва (Шереметьево)", "lat": 55.973, "lon": 37.415, "elev": 190},
+        {"icao": "UUDD", "name": "Москва (Домодедово)", "lat": 55.409, "lon": 37.906, "elev": 179},
+        {"icao": "UUWW", "name": "Москва (Внуково)", "lat": 55.592, "lon": 37.261, "elev": 209},
+        {"icao": "ULLI", "name": "Санкт-Петербург (Пулково)", "lat": 59.800, "lon": 30.262, "elev": 24},
+        {"icao": "UWKD", "name": "Казань", "lat": 55.606, "lon": 49.279, "elev": 126},
+        {"icao": "UWWW", "name": "Самара (Курумоч)", "lat": 53.505, "lon": 50.164, "elev": 145},
+        {"icao": "USSS", "name": "Екатеринбург (Кольцово)", "lat": 56.743, "lon": 60.803, "elev": 233}
+    ]
+    return _ICAO_CACHE
+
+
+def find_nearest_icao(lat, lon):
+    """Находит ближайший аэродром ICAO из базы по координатам."""
+    airports = load_icao_airports()
+    if not airports or lat is None or lon is None:
+        return None
+    try:
+        lat_f = float(lat)
+        lon_f = float(lon)
+    except (ValueError, TypeError):
+        return None
+    best = None
+    min_dist = float("inf")
+    for ap in airports:
+        d = haversine_km(lat_f, lon_f, ap.get("lat"), ap.get("lon"))
+        if d < min_dist:
+            min_dist = d
+            best = dict(ap)
+            best["distance_km"] = round(d, 1)
+    return best
+
+
+def fetch_noaa_metar(icao_code, timeout=10):
+    """Запрашивает свежий METAR аэродрома через официальный JSON API NOAA AWC."""
+    if not icao_code:
+        return None
+    icao = str(icao_code).strip().upper()
+    url = f"https://aviationweather.gov/api/data/metar?ids={icao}&format=json"
+    req = urllib.request.Request(url, headers={"User-Agent": "WeatherInformerLocal/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            if isinstance(data, list) and len(data) > 0:
+                item = data[0]
+                temp = item.get("temp")
+                dewp = item.get("dewp")
+                humidity = None
+                if temp is not None and dewp is not None:
+                    try:
+                        t = float(temp)
+                        td = float(dewp)
+                        a, b = 17.625, 243.04
+                        alpha = (a * t) / (b + t)
+                        beta = (a * td) / (b + td)
+                        humidity = max(0, min(100, int(round(100.0 * math.exp(beta - alpha)))))
+                    except Exception:
+                        pass
+                altim = item.get("altim")
+                press_hpa = None
+                if altim is not None:
+                    try:
+                        val = float(altim)
+                        if val > 800:
+                            press_hpa = val
+                        elif val > 20:  # inHg -> hPa
+                            press_hpa = val * 33.8639
+                    except Exception:
+                        pass
+                elev = item.get("elev") or 0.0
+                pressure_qfe = mslp_to_station_pressure(press_hpa, elev) if press_hpa else None
+                return {
+                    "icao": icao,
+                    "name": item.get("name") or icao,
+                    "ts": item.get("reportTime") or datetime.now(timezone.utc).isoformat(),
+                    "temp": temp,
+                    "dewp": dewp,
+                    "humidity": humidity,
+                    "pressure_msl_hpa": press_hpa,
+                    "pressure_mm": pressure_qfe,
+                    "wind_speed": item.get("wspd"),
+                    "wind_angle": item.get("wdir"),
+                    "raw": item.get("rawOb")
+                }
+    except Exception as e:
+        log.warning("Failed to fetch NOAA METAR for %s: %s", icao, sanitize_secrets(e))
+    return None
+
+
+def collect_noaa_metar():
+    """Фоновый сбор METAR ближайшего аэродрома в observations.db."""
+    cfg = load_config()
+    lat = cfg.get("lat")
+    lon = cfg.get("lon")
+    icao_override = cfg.get("metar_icao")
+    target_icao = None
+    target_name = "METAR"
+    if icao_override:
+        target_icao = str(icao_override).strip().upper()
+    elif lat is not None and lon is not None:
+        ap = find_nearest_icao(lat, lon)
+        if ap:
+            target_icao = ap["icao"]
+            target_name = ap.get("name") or target_icao
+    if not target_icao:
+        return None
+    metar = fetch_noaa_metar(target_icao)
+    if not metar:
+        return None
+    conn = _history_conn()
+    try:
+        ts_utc_iso = metar.get("ts") or ""
+        try:
+            from zoneinfo import ZoneInfo
+            dt_raw = datetime.fromisoformat(ts_utc_iso.replace("Z", "+00:00"))
+            ts_local = dt_raw.astimezone(ZoneInfo("Europe/Moscow")).replace(tzinfo=None).isoformat(timespec="seconds")
+        except Exception:
+            ts_local = datetime.now().isoformat(timespec="seconds")
+        station_title = f"{metar.get('name')} ({target_icao})"
+        conn.execute(
+            "INSERT OR REPLACE INTO observations VALUES (?,?,?,?,?,?,?,?)",
+            (ts_local, station_title, "metar-awc",
+             metar.get("temp"), metar.get("humidity"), metar.get("pressure_mm"),
+             None, target_icao)
+        )
+        conn.commit()
+        log.info("observations: NOAA METAR %s — T=%s°C, Hum=%s%%, P=%s mmHg",
+                 target_icao, metar.get("temp"), metar.get("humidity"), metar.get("pressure_mm"))
+    except Exception as e:
+        log.warning("collect_noaa_metar save error: %s", e)
+    finally:
+        conn.close()
+    return metar
+
+
+def detect_location_by_ip():
+    """Многоуровневый каскад IP-геолокации без ключей: ip-api.com -> ipwho.is -> ipinfo.io."""
+    # 1. ip-api.com
+    try:
+        url = "http://ip-api.com/json/?fields=status,country,regionName,city,lat,lon,timezone"
+        req = urllib.request.Request(url, headers={"User-Agent": "WeatherInformerLocal/1.0"})
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            if data.get("status") == "success" and data.get("lat") and data.get("lon"):
+                return {
+                    "source": "ip-api",
+                    "lat": round(float(data["lat"]), 4),
+                    "lon": round(float(data["lon"]), 4),
+                    "city": data.get("city") or data.get("regionName") or "Неизвестно",
+                    "timezone": data.get("timezone") or "Europe/Moscow"
+                }
+    except Exception as e:
+        log.warning("detect_location_by_ip (ip-api) failed: %s", sanitize_secrets(e))
+
+    # 2. ipwho.is
+    try:
+        url = "https://ipwho.is/"
+        req = urllib.request.Request(url, headers={"User-Agent": "WeatherInformerLocal/1.0"})
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            if data.get("success") and data.get("latitude") and data.get("longitude"):
+                return {
+                    "source": "ipwhois",
+                    "lat": round(float(data["latitude"]), 4),
+                    "lon": round(float(data["longitude"]), 4),
+                    "city": data.get("city") or "Неизвестно",
+                    "timezone": (data.get("timezone") or {}).get("id") or "Europe/Moscow"
+                }
+    except Exception as e:
+        log.warning("detect_location_by_ip (ipwhois) failed: %s", sanitize_secrets(e))
+
+    # 3. ipinfo.io
+    try:
+        url = "https://ipinfo.io/json"
+        req = urllib.request.Request(url, headers={"User-Agent": "WeatherInformerLocal/1.0"})
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            loc = data.get("loc")
+            if loc and "," in loc:
+                lat_str, lon_str = loc.split(",", 1)
+                return {
+                    "source": "ipinfo",
+                    "lat": round(float(lat_str), 4),
+                    "lon": round(float(lon_str), 4),
+                    "city": data.get("city") or "Неизвестно",
+                    "timezone": data.get("timezone") or "Europe/Moscow"
+                }
+    except Exception as e:
+        log.warning("detect_location_by_ip (ipinfo) failed: %s", sanitize_secrets(e))
+
+    return None
+
+
+# ----------------------------------------------------------------------
+# UDP Broadcast Discovery Responder (автообнаружение в локальной сети)
+# ----------------------------------------------------------------------
+
+_UDP_DISCOVERY_RUNNING = False
+_UDP_SOCKET = None
+
+
+def udp_discovery_responder_thread(port=8085):
+    global _UDP_DISCOVERY_RUNNING, _UDP_SOCKET
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        sock.bind(("0.0.0.0", port))
+    except Exception as e:
+        log.warning("Could not bind UDP discovery socket on port %d: %s", port, e)
+        try:
+            sock.close()
+        except Exception:
+            pass
+        return
+    _UDP_SOCKET = sock
+    _UDP_DISCOVERY_RUNNING = True
+    log.info("UDP Discovery responder listening on 0.0.0.0:%d...", port)
+    while _UDP_DISCOVERY_RUNNING:
+        try:
+            data, addr = sock.recvfrom(2048)
+            if not data:
+                continue
+            text = data.decode("utf-8", "ignore").strip()
+            is_valid_req = False
+            if "WEATHER_DISCOVERY" in text or "WEATHER_DISCOVER" in text:
+                is_valid_req = True
+            else:
+                try:
+                    j = json.loads(text)
+                    if isinstance(j, dict) and j.get("cmd") in ("discover", "find_server", "ping"):
+                        is_valid_req = True
+                except Exception:
+                    pass
+            if is_valid_req:
+                cfg = load_config()
+                with LOCATION_CACHE_LOCK:
+                    cd = cached_data
+                curr_temp = cd["fact"].get("temp") if (cd and "fact" in cd) else None
+                reply = {
+                    "status": "ok",
+                    "server": "weather-cache",
+                    "version": 1,
+                    "port": int(cfg.get("port", port)),
+                    "lat": cfg.get("lat", 56.317722),
+                    "lon": cfg.get("lon", 43.999303),
+                    "city": cfg.get("city_name", "Нижний Новгород"),
+                    "temp": curr_temp
+                }
+                sock.sendto(json.dumps(reply, ensure_ascii=False).encode("utf-8"), addr)
+        except Exception as e:
+            if not _UDP_DISCOVERY_RUNNING:
+                break
+            log.warning("UDP discovery responder error: %s", e)
+
+
+def start_udp_discovery_responder(port=8085):
+    t = threading.Thread(target=udp_discovery_responder_thread, args=(port,), daemon=True)
+    t.start()
+    return t
+
+
+def stop_udp_discovery_responder():
+    global _UDP_DISCOVERY_RUNNING, _UDP_SOCKET
+    _UDP_DISCOVERY_RUNNING = False
+    if _UDP_SOCKET:
+        try:
+            _UDP_SOCKET.close()
+        except Exception:
+            pass
+        _UDP_SOCKET = None
+
+
+
 def accuracy_query(provider, lead, days, phys="", window=1.0):
     """MAE температуры прогнозов против наблюдений (тестируемая функция /accuracy)."""
     conn = _history_conn()
@@ -965,6 +1274,10 @@ def stats_loop():
             collect_ogimet_synop(hours_back=30)
         except Exception as e:
             log.warning("observations: ogimet tick failed: %s", e)
+        try:
+            collect_noaa_metar()
+        except Exception as e:
+            log.warning("observations: metar tick failed: %s", e)
         time.sleep(interval)
 
 
@@ -2672,26 +2985,67 @@ code {{ color: #81D4FA; }}
                 pass
             return
 
-        if path == "/settings":
+        if path in ("/settings", "/setup"):
+            setup_path = os.path.join(SCRIPT_DIR, "setup.html")
+            if os.path.isfile(setup_path):
+                try:
+                    with open(setup_path, "rb") as sf:
+                        s_html = sf.read()
+                    self.send_response(200)
+                    self.send_cors_headers()
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Content-Length", str(len(s_html)))
+                    self.end_headers()
+                    self.wfile.write(s_html)
+                    return
+                except Exception as e:
+                    log.warning("Failed to serve setup.html: %s", e)
             self.serve_settings_html()
             return
 
-        if path == "/api/settings":
+        if path == "/api/info":
+            host = self.headers.get("Host", "").split(":")[0] or "127.0.0.1"
             cfg = load_config()
+            port = cfg.get("port", 8085)
+            s_url = f"http://{host}:{port}"
+            body = json.dumps({
+                "status": "ok",
+                "role": "caching_server",
+                "server_url": s_url,
+                "port": port
+            }, ensure_ascii=False).encode("utf-8")
+            try:
+                self.send_response(200)
+                self.send_cors_headers()
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return
+
+        if path in ("/api/settings", "/api/config"):
+            cfg = load_config()
+            cur_lat = cfg.get("lat", 56.317722)
+            cur_lon = cfg.get("lon", 43.999303)
             safe_cfg = {
-                "lat": cfg.get("lat"),
-                "lon": cfg.get("lon"),
+                "lat": cur_lat,
+                "lon": cur_lon,
                 "city_name": cfg.get("city_name", ""),
+                "station_altitude": cfg.get("station_altitude", 160.0),
                 "primary_source": cfg.get("primary_source", "yandex"),
                 "gismeteo_api_key": mask_key(cfg.get("gismeteo_api_key")),
                 "api": mask_key(cfg.get("api")),
+                "has_api": bool(cfg.get("api")),
                 "foreca_api_key": mask_key(cfg.get("foreca_api_key")),
                 "openweathermap_api_key": mask_key(cfg.get("openweathermap_api_key")),
                 "cache_interval_minutes": cfg.get("cache_interval_minutes", 60),
                 "fallback_interval_minutes": cfg.get("fallback_interval_minutes", 15),
                 "update_interval_sec": cfg.get("update_interval_sec", 300),
                 "direct_update_interval_sec": cfg.get("direct_update_interval_sec", 1800),
-                "port": cfg.get("port", 8085)
+                "port": cfg.get("port", 8085),
+                "nearest_airport": find_nearest_icao(cur_lat, cur_lon)
             }
             body = json.dumps(safe_cfg, ensure_ascii=False).encode("utf-8")
             try:
@@ -2703,6 +3057,56 @@ code {{ color: #81D4FA; }}
                 self.wfile.write(body)
             except (BrokenPipeError, ConnectionResetError):
                 pass
+            return
+
+        if path in ("/api/location/auto", "/api/location_auto"):
+            loc = detect_location_by_ip()
+            if loc:
+                body = json.dumps(loc, ensure_ascii=False).encode("utf-8")
+                self.send_response(200)
+                self.send_cors_headers()
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self.send_response(503)
+                self.send_cors_headers()
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(b'{"error":"Auto-location unavailable"}')
+            return
+
+        if path == "/api/metar":
+            qs = parse_qs(urlparse(self.path).query)
+            target_icao = qs.get("icao", [None])[0]
+            lat_arg = qs.get("lat", [None])[0]
+            lon_arg = qs.get("lon", [None])[0]
+            if not target_icao:
+                if lat_arg and lon_arg:
+                    ap = find_nearest_icao(lat_arg, lon_arg)
+                    if ap:
+                        target_icao = ap["icao"]
+                else:
+                    cfg = load_config()
+                    ap = find_nearest_icao(cfg.get("lat", 56.317722), cfg.get("lon", 43.999303))
+                    if ap:
+                        target_icao = ap["icao"]
+            metar = fetch_noaa_metar(target_icao) if target_icao else None
+            if metar:
+                body = json.dumps(metar, ensure_ascii=False).encode("utf-8")
+                self.send_response(200)
+                self.send_cors_headers()
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self.send_response(404)
+                self.send_cors_headers()
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": f"METAR not found for {target_icao}"}).encode("utf-8"))
             return
 
         # Погодные маршруты — только известные: остальное 404,
@@ -2808,7 +3212,16 @@ code {{ color: #81D4FA; }}
         if not self.enforce_rate_limit(cat):
             return
 
-        if path in ("/api/settings", "/settings"):
+        if path in ("/api/settings", "/settings", "/api/config"):
+            client_ip = RATE_LIMITER.get_client_ip(self)
+            if not RATE_LIMITER.is_local(client_ip):
+                self.send_response(403)
+                self.send_cors_headers()
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(b'{"error":"Forbidden: LAN access only"}')
+                return
+
             try:
                 content_len_hdr = self.headers.get("Content-Length")
                 if not content_len_hdr:
@@ -2854,7 +3267,7 @@ code {{ color: #81D4FA; }}
                     return
 
                 allowed_fields = [
-                    "lat", "lon", "city_name", "primary_source",
+                    "lat", "lon", "city_name", "primary_source", "station_altitude", "metar_icao",
                     "gismeteo_api_key", "api", "foreca_api_key", "openweathermap_api_key",
                     "server_url", "cache_interval_minutes",
                     "fallback_interval_minutes", "ntp_server",
@@ -2913,6 +3326,9 @@ def main():
     # (защита от дублей: ручные запуски поверх systemd-инстанса)
     server = BoundedThreadingHTTPServer(("0.0.0.0", port), WeatherHTTPHandler)
     log.info("WeatherInformer Caching Proxy listening on port %d...", port)
+
+    # UDP-автообнаружение в локальной сети
+    start_udp_discovery_responder(port=port)
 
     # Фоновая синхронизация времени на планшетах (каждые 6 часов)
     if cfg.get("tablets_time_sync_enabled", True):

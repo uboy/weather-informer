@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Настройка Погодного Информера</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+body {
+    background-color: #121418;
+    color: #e0e0e0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 16px;
+    line-height: 1.5;
+    padding: 16px;
+    padding-bottom: 40px;
+}
+.container { max-width: 520px; margin: 0 auto; }
+header { text-align: center; margin-bottom: 24px; padding-top: 8px; }
+h1 { font-size: 24px; font-weight: 700; color: #ffffff; margin-bottom: 6px; }
+.subtitle { font-size: 14px; color: #9e9e9e; }
+.card {
+    background: #1e222b;
+    border: 1px solid #2d3340;
+    border-radius: 14px;
+    padding: 18px;
+    margin-bottom: 18px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+}
+.card-title {
+    font-size: 17px;
+    font-weight: 600;
+    color: #90caf9;
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+}
+.card-title .icon { margin-right: 8px; font-size: 19px; }
+.form-group { margin-bottom: 14px; }
+.form-group:last-child { margin-bottom: 0; }
+label { display: block; font-size: 13px; font-weight: 500; color: #b0bec5; margin-bottom: 6px; }
+input[type="text"], input[type="number"], select {
+    width: 100%;
+    background: #14171f;
+    border: 1px solid #37474f;
+    border-radius: 8px;
+    padding: 12px 14px;
+    font-size: 15px;
+    color: #ffffff;
+    outline: none;
+    transition: border-color 0.2s;
+}
+input:focus, select:focus { border-color: #29b6f6; }
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    background: #1976d2;
+    color: #ffffff;
+    border: none;
+    border-radius: 10px;
+    padding: 13px 18px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    text-align: center;
+    transition: background-color 0.2s, transform 0.1s;
+    user-select: none;
+}
+.btn:active { transform: scale(0.98); }
+.btn-gps { background: #00897b; margin-bottom: 12px; }
+.btn-gps:hover { background: #00796b; }
+.btn-secondary { background: #37474f; margin-top: 8px; font-size: 13px; padding: 9px; }
+.btn-save { background: #2e7d32; font-size: 17px; padding: 15px; margin-top: 10px; }
+.btn-save:hover { background: #1b5e20; }
+.row-2 { display: flex; gap: 10px; }
+.row-2 .form-group { flex: 1; }
+.hint { font-size: 12px; color: #78909c; margin-top: 5px; }
+#status_msg {
+    display: none;
+    padding: 14px;
+    border-radius: 10px;
+    font-size: 14px;
+    font-weight: 500;
+    text-align: center;
+    margin-bottom: 18px;
+}
+.status-ok { background: #1b5e20; color: #e8f5e9; border: 1px solid #2e7d32; }
+.status-err { background: #b71c1c; color: #ffebee; border: 1px solid #c62828; }
+.status-info { background: #0277bd; color: #e1f5fe; border: 1px solid #0288d1; }
+.badge {
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: 12px;
+    font-weight: 600;
+    margin-left: 8px;
+}
+.badge-ok { background: #1b5e20; color: #81c784; }
+.badge-warn { background: #e65100; color: #ffb74d; }
+</style>
+</head>
+<body>
+<div class="container">
+    <header>
+        <h1>Погодный Информер</h1>
+        <div class="subtitle" id="target_label">Мобильный конфигуратор</div>
+    </header>
+
+    <div id="status_msg"></div>
+
+    <!-- КАРТОЧКА ГЕОЛОКАЦИИ -->
+    <div class="card">
+        <div class="card-title"><span class="icon">📍</span> Местоположение</div>
+        <button type="button" class="btn btn-gps" id="btn_gps">
+            🧭 Взять геопозицию со смартфона
+        </button>
+        <div class="form-group">
+            <label for="city_name">Название города / района:</label>
+            <input type="text" id="city_name" placeholder="Например: Нижний Новгород, Сормово">
+        </div>
+        <div class="row-2">
+            <div class="form-group">
+                <label for="lat">Широта (lat):</label>
+                <input type="text" id="lat" placeholder="56.3177">
+            </div>
+            <div class="form-group">
+                <label for="lon">Долгота (lon):</label>
+                <input type="text" id="lon" placeholder="43.9993">
+            </div>
+        </div>
+        <div class="form-group">
+            <label for="station_altitude">Высота над уровнем моря (м):</label>
+            <input type="number" id="station_altitude" placeholder="160">
+            <div class="hint">Нужна для точного барометрического пересчета давления (QFE/QNH).</div>
+        </div>
+        <button type="button" class="btn btn-secondary" id="btn_ip_geo">
+            🌐 Определить город по IP сети
+        </button>
+    </div>
+
+    <!-- КАРТОЧКА ИСТОЧНИКОВ И КЛЮЧЕЙ -->
+    <div class="card">
+        <div class="card-title">
+            <span class="icon">🔑</span> Источники погоды
+            <span id="api_badge" class="badge badge-warn">Без ключа</span>
+        </div>
+        <div class="form-group">
+            <label for="primary_source">Основной провайдер:</label>
+            <select id="primary_source">
+                <option value="yandex">Яндекс.Погода (рекомендуется)</option>
+                <option value="gismeteo">Gismeteo v2</option>
+                <option value="openmeteo">Open-Meteo (без API-ключа)</option>
+                <option value="foreca">Foreca</option>
+                <option value="wttr">wttr.in</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="api">API-ключ Яндекс.Погоды:</label>
+            <input type="text" id="api" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+            <div class="hint">Ключ от Яндекс.Погоды для разработчиков (30-50 бесплатных запросов/сутки).</div>
+        </div>
+        <div class="form-group">
+            <label for="gismeteo_api_key">API-ключ Gismeteo (опционально):</label>
+            <input type="text" id="gismeteo_api_key" placeholder="Опционально" autocomplete="off">
+        </div>
+    </div>
+
+    <button type="button" class="btn btn-save" id="btn_save">
+        💾 Сохранить и применить
+    </button>
+</div>
+
+<script>
+(function() {
+    var statusEl = document.getElementById("status_msg");
+    var targetLabel = document.getElementById("target_label");
+    var isStandaloneTablet = (location.port === "8080" || location.protocol === "file:");
+
+    if (isStandaloneTablet) {
+        targetLabel.innerText = "Настройка экрана планшета (автономный режим)";
+    } else {
+        targetLabel.innerText = "Настройка сервера сети (раздаёт на все планшеты)";
+    }
+
+    function showStatus(text, type, duration) {
+        statusEl.className = "status-" + (type || "ok");
+        statusEl.innerText = text;
+        statusEl.style.display = "block";
+        if (duration) {
+            setTimeout(function() { statusEl.style.display = "none"; }, duration);
+        }
+    }
+
+    // Загрузка текущих настроек
+    function loadCurrentSettings() {
+        showStatus("Загрузка настроек...", "info");
+        var cfgUrl = "/api/config";
+        fetch(cfgUrl)
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                statusEl.style.display = "none";
+                if (!data) return;
+                if (data.city_name) document.getElementById("city_name").value = data.city_name;
+                if (data.lat != null) document.getElementById("lat").value = data.lat;
+                if (data.lon != null) document.getElementById("lon").value = data.lon;
+                if (data.station_altitude != null) document.getElementById("station_altitude").value = data.station_altitude;
+                if (data.primary_source) document.getElementById("primary_source").value = data.primary_source;
+                var badge = document.getElementById("api_badge");
+                if (data.has_api || data.api) {
+                    badge.innerText = "Ключ задан";
+                    badge.className = "badge badge-ok";
+                } else {
+                    badge.innerText = "Без ключа";
+                    badge.className = "badge badge-warn";
+                }
+            })
+            .catch(function(err) {
+                showStatus("Не удалось связаться с сервером. Введите настройки вручную.", "warn", 4000);
+            });
+    }
+
+    // Кнопка GPS смартфона
+    document.getElementById("btn_gps").addEventListener("click", function() {
+        if (!navigator.geolocation) {
+            showStatus("Геолокация не поддерживается в этом браузере", "err", 4000);
+            return;
+        }
+        showStatus("Определение GPS-координат...", "info");
+        navigator.geolocation.getCurrentPosition(function(pos) {
+            var la = pos.coords.latitude.toFixed(4);
+            var lo = pos.coords.longitude.toFixed(4);
+            document.getElementById("lat").value = la;
+            document.getElementById("lon").value = lo;
+            showStatus("GPS получен: " + la + ", " + lo + ". Определяю город...", "info");
+
+            // Обратное геокодирование через Nominatim
+            var nomUrl = "https://nominatim.openstreetmap.org/reverse?lat=" + la + "&lon=" + lo + "&format=jsonv2&accept-language=ru";
+            fetch(nomUrl)
+                .then(function(r) { return r.json(); })
+                .then(function(geo) {
+                    var addr = (geo && geo.address) || {};
+                    var name = addr.city || addr.town || addr.village || addr.suburb || (geo && geo.name) || "";
+                    if (name) {
+                        document.getElementById("city_name").value = name;
+                        showStatus("Город определен: " + name, "ok", 3500);
+                    } else {
+                        showStatus("Координаты заданы, введите название города вручную", "ok", 3500);
+                    }
+                })
+                .catch(function() {
+                    showStatus("Координаты заданы. Введите название города", "ok", 3000);
+                });
+        }, function(err) {
+            showStatus("Ошибка GPS: " + (err.message || "доступ запрещен"), "err", 4000);
+        }, { enableHighAccuracy: true, timeout: 10000 });
+    });
+
+    // Определение города по IP сети
+    document.getElementById("btn_ip_geo").addEventListener("click", function() {
+        showStatus("Определение по IP сети...", "info");
+        fetch("/api/location/auto")
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data && data.lat && data.lon) {
+                    document.getElementById("lat").value = data.lat;
+                    document.getElementById("lon").value = data.lon;
+                    if (data.city) document.getElementById("city_name").value = data.city;
+                    showStatus("Город определен по IP: " + (data.city || "") + " (" + data.source + ")", "ok", 4000);
+                } else {
+                    showStatus("Не удалось определить координаты по IP", "err", 4000);
+                }
+            })
+            .catch(function() {
+                // Fallback прямо из браузера
+                fetch("https://ipwho.is/")
+                    .then(function(r) { return r.json(); })
+                    .then(function(data) {
+                        if (data && data.latitude && data.longitude) {
+                            document.getElementById("lat").value = data.latitude.toFixed(4);
+                            document.getElementById("lon").value = data.longitude.toFixed(4);
+                            if (data.city) document.getElementById("city_name").value = data.city;
+                            showStatus("Город определен по IP: " + data.city, "ok", 4000);
+                        } else {
+                            showStatus("Ошибка IP-геолокации", "err", 3000);
+                        }
+                    })
+                    .catch(function() {
+                        showStatus("Ошибка IP-геолокации", "err", 3000);
+                    });
+            });
+    });
+
+    // Сохранение
+    document.getElementById("btn_save").addEventListener("click", function() {
+        var payload = {};
+        var latVal = parseFloat(document.getElementById("lat").value);
+        var lonVal = parseFloat(document.getElementById("lon").value);
+        var cityName = document.getElementById("city_name").value.trim();
+        var apiVal = document.getElementById("api").value.trim();
+        var gismeteoKey = document.getElementById("gismeteo_api_key").value.trim();
+        var primarySrc = document.getElementById("primary_source").value;
+        var altVal = parseFloat(document.getElementById("station_altitude").value);
+
+        if (!isNaN(latVal) && !isNaN(lonVal)) {
+            payload.lat = latVal;
+            payload.lon = lonVal;
+        }
+        if (cityName) payload.city_name = cityName;
+        if (apiVal) payload.api = apiVal;
+        if (gismeteoKey) payload.gismeteo_api_key = gismeteoKey;
+        if (primarySrc) payload.primary_source = primarySrc;
+        if (!isNaN(altVal)) payload.station_altitude = altVal;
+
+        showStatus("Сохранение настроек...", "info");
+        fetch("/api/config", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(res) {
+            if (res && res.status === "saved") {
+                showStatus("✅ Настройки сохранены! Экран обновится автоматически.", "ok", 5000);
+                var badge = document.getElementById("api_badge");
+                if (payload.api) {
+                    badge.innerText = "Ключ задан";
+                    badge.className = "badge badge-ok";
+                }
+            } else {
+                showStatus("Ошибка сохранения: " + (res.error || "неизвестная ошибка"), "err", 5000);
+            }
+        })
+        .catch(function(err) {
+            showStatus("Ошибка связи с сервером при сохранении", "err", 5000);
+        });
+    });
+
+    loadCurrentSettings();
+})();
+</script>
+</body>
+</html>

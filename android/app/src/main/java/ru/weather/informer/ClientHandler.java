@@ -125,15 +125,32 @@ public class ClientHandler implements Runnable {
             return;
         }
 
-        // 2. Страница настроек /settings
+        // 2. Страница настроек /settings и мобильный конфигуратор /setup
         if (path.equals("/settings")) {
             String html = server.getSettingsHtml();
             sendResponse(out, 200, "OK", "text/html; charset=utf-8", html.getBytes(StandardCharsets.UTF_8));
             return;
         }
+        if (path.equals("/setup")) {
+            serveFile("setup.html", "text/html; charset=utf-8", out);
+            return;
+        }
 
-        // 3. API настроек /api/settings
-        if (path.equals("/api/settings")) {
+        // 2b. Статус топологии сети /api/info
+        if (path.equals("/api/info")) {
+            JSONObject info = new JSONObject();
+            String sUrl = server.getDiscoveredServerUrl();
+            info.put("status", "ok");
+            info.put("device_ip", server.getDeviceIp());
+            info.put("port", InformerServer.PORT);
+            info.put("server_url", sUrl);
+            info.put("standalone", sUrl.isEmpty());
+            sendResponse(out, 200, "OK", "application/json; charset=utf-8", info.toString().getBytes(StandardCharsets.UTF_8));
+            return;
+        }
+
+        // 3. API настроек /api/settings и /api/config
+        if (path.equals("/api/settings") || path.equals("/api/config")) {
             if (method.equals("GET")) {
                 InetAddress addr = socket.getInetAddress();
                 boolean isLocal = addr != null && (addr.isLoopbackAddress() || "127.0.0.1".equals(addr.getHostAddress()));
@@ -237,6 +254,8 @@ public class ClientHandler implements Runnable {
         byte[] cfgBytes = server.readConfigFile();
         try {
             JSONObject cfg = new JSONObject(new String(cfgBytes, StandardCharsets.UTF_8));
+            String rawApi = cfg.optString("api", "");
+            cfg.put("has_api", !rawApi.isEmpty() && !rawApi.equals("xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"));
             String[] keyFields = new String[]{"api", "gismeteo_api_key", "foreca_api_key", "openweathermap_api_key"};
             for (String kf : keyFields) {
                 if (cfg.has(kf)) {

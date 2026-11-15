@@ -377,10 +377,16 @@ async function main() {
                 evening: { temp_avg: 11, wind_speed: 12 },
                 night: { temp_avg: 7, wind_speed: 12 }
             };
-            render_weather({
-                fact: { temp: 15, wind_speed: 3, humidity: 60, pressure_mm: 745 },
-                forecasts: [{ parts: partsToday }, { parts: partsTomorrow }]
-            });
+            const origGetHours = Date.prototype.getHours;
+            Date.prototype.getHours = function() { return 14; };
+            try {
+                render_weather({
+                    fact: { temp: 15, wind_speed: 3, humidity: 60, pressure_mm: 745 },
+                    forecasts: [{ parts: partsToday }, { parts: partsTomorrow }]
+                });
+            } finally {
+                Date.prototype.getHours = origGetHours;
+            }
             await new Promise(r => setTimeout(r, 350));
             const fc0 = document.querySelector('.sector_forecast_wind_0');
             const fc1 = document.querySelector('.sector_forecast_wind_1');
@@ -516,9 +522,86 @@ async function main() {
             !mHumidity.normClass.includes('humidity_dry') && !mHumidity.normClass.includes('humidity_wet') && (mHumidity.normBarBg === 'rgb(0, 230, 118)' || mHumidity.normBarBg === '#00e676'));
 
         // ==========================================
-        // 5. Visual Screenshots
+        // 5. QR Onboarding & Dual/Single Code Mode
         // ==========================================
-        console.log('\n[5] Capturing Visual Verification Screenshots:');
+        console.log('\n[5] QR-code Onboarding & Dual/Single Code Mode:');
+        // 5a: Standalone mode (server absent)
+        const qrStandalone = await cdp.evaluate(`(async () => {
+            const origAjax = $.ajax;
+            $.ajax = function(opts) {
+                const d = $.Deferred();
+                setTimeout(() => {
+                    d.resolve({ status: "ok", device_ip: "192.168.1.50", server_url: "" });
+                }, 10);
+                return d.promise();
+            };
+            show_qr_onboarding();
+            await new Promise(r => setTimeout(r, 200));
+            $.ajax = origAjax;
+            const modal = document.getElementById('qr_modal');
+            const cardTablet = document.getElementById('card_qr_tablet');
+            const cardServer = document.getElementById('card_qr_server');
+            const titleTablet = document.getElementById('title_qr_tablet');
+            const urlTablet = document.getElementById('url_qr_tablet');
+            const qrTabletImg = cardTablet ? cardTablet.querySelector('img, canvas') : null;
+            return {
+                modalOpen: modal ? modal.classList.contains('qr_modal_open') : false,
+                tabletTitle: titleTablet ? titleTablet.innerText : '',
+                serverCardVisible: cardServer ? window.getComputedStyle(cardServer).display !== 'none' : false,
+                tabletUrl: urlTablet ? urlTablet.innerText : '',
+                hasQrImage: !!qrTabletImg
+            };
+        })()`);
+
+        check('QR standalone: модальное окно открыто', qrStandalone.modalOpen);
+        check('QR standalone: заголовок «Планшет (автономный режим)»', qrStandalone.tabletTitle.includes('автономный'));
+        check('QR standalone: карточка сервера скрыта (только 1 QR-код)', !qrStandalone.serverCardVisible);
+        check('QR standalone: URL планшета корректный', qrStandalone.tabletUrl === 'http://192.168.1.50:8080/setup');
+        check('QR standalone: сгенерирован QR-код (img или canvas)', qrStandalone.hasQrImage);
+
+        // 5b: Dual QR mode (server discovered)
+        const qrServerMode = await cdp.evaluate(`(async () => {
+            const origAjax = $.ajax;
+            $.ajax = function(opts) {
+                const d = $.Deferred();
+                setTimeout(() => {
+                    d.resolve({ status: "ok", device_ip: "192.168.1.50", server_url: "http://192.168.1.100:8085" });
+                }, 10);
+                return d.promise();
+            };
+            show_qr_onboarding();
+            await new Promise(r => setTimeout(r, 200));
+            $.ajax = origAjax;
+            const cardServer = document.getElementById('card_qr_server');
+            const titleTablet = document.getElementById('title_qr_tablet');
+            const urlServer = document.getElementById('url_qr_server');
+            const qrServerImg = cardServer ? cardServer.querySelector('img, canvas') : null;
+            return {
+                tabletTitle: titleTablet ? titleTablet.innerText : '',
+                serverCardVisible: cardServer ? window.getComputedStyle(cardServer).display !== 'none' : false,
+                serverUrl: urlServer ? urlServer.innerText : '',
+                hasServerQrImage: !!qrServerImg
+            };
+        })()`);
+
+        check('QR server mode: заголовок «Планшет»', qrServerMode.tabletTitle === 'Планшет');
+        check('QR server mode: карточка сервера отображается (2 QR-кода)', qrServerMode.serverCardVisible);
+        check('QR server mode: URL сервера корректный', qrServerMode.serverUrl === 'http://192.168.1.100:8085/setup');
+        check('QR server mode: сгенерирован QR-код сервера', qrServerMode.hasServerQrImage);
+
+        // 5c: Close QR modal
+        const qrClosed = await cdp.evaluate(`(() => {
+            const btn = document.getElementById('qr_close_btn');
+            if (btn) btn.click();
+            const modal = document.getElementById('qr_modal');
+            return modal ? !modal.classList.contains('qr_modal_open') : false;
+        })()`);
+        check('QR modal: кнопка Закрыть скрывает окно', qrClosed);
+
+        // ==========================================
+        // 6. Visual Screenshots
+        // ==========================================
+        console.log('\n[6] Capturing Visual Verification Screenshots:');
         const shot1024 = await cdp.send('Page.captureScreenshot', { format: 'png' });
         fs.writeFileSync('/tmp/informer_test_1024x600.png', Buffer.from(shot1024.result.data, 'base64'));
         console.log('  Saved /tmp/informer_test_1024x600.png');

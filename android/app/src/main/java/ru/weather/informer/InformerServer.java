@@ -2,10 +2,12 @@ package ru.weather.informer;
 
 import android.content.Context;
 import android.util.Log;
+import org.json.JSONObject;
 
 import java.io.*;
 import java.net.*;
 import java.nio.charset.StandardCharsets;
+import java.util.*;
 import java.util.concurrent.*;
 
 public class InformerServer {
@@ -21,6 +23,48 @@ public class InformerServer {
     private final long startTime = System.currentTimeMillis();
     private static InformerServer instance;
     private volatile java.lang.ref.WeakReference<MainActivity> activityRef;
+    private volatile String discoveredServerUrl = "";
+    private volatile String deviceIp = "";
+
+    public String getDiscoveredServerUrl() {
+        return discoveredServerUrl;
+    }
+
+    public void setDiscoveredServerUrl(String url) {
+        this.discoveredServerUrl = (url != null) ? url : "";
+    }
+
+    public String getDeviceIp() {
+        if (deviceIp != null && !deviceIp.isEmpty() && !"127.0.0.1".equals(deviceIp)) {
+            return deviceIp;
+        }
+        deviceIp = resolveLocalIpAddress();
+        return deviceIp;
+    }
+
+    public static String resolveLocalIpAddress() {
+        try {
+            Enumeration<NetworkInterface> en = NetworkInterface.getNetworkInterfaces();
+            while (en != null && en.hasMoreElements()) {
+                NetworkInterface intf = en.nextElement();
+                if (!intf.isUp() || intf.isLoopback()) continue;
+                Enumeration<InetAddress> enumIpAddr = intf.getInetAddresses();
+                while (enumIpAddr.hasMoreElements()) {
+                    InetAddress inetAddress = enumIpAddr.nextElement();
+                    if (!inetAddress.isLoopbackAddress() && inetAddress instanceof Inet4Address) {
+                        return inetAddress.getHostAddress();
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+        return "127.0.0.1";
+    }
+
+    public void startUdpDiscoveryAsync() {
+        Thread t = new Thread(new UdpDiscoveryWorker(this), "UdpDiscoveryThread");
+        t.setDaemon(true);
+        t.start();
+    }
 
     public InformerServer(Context context) {
         this.context = context.getApplicationContext();
@@ -69,6 +113,7 @@ public class InformerServer {
         isRunning = true;
 
         threadPool.execute(new ServerAcceptor(this, serverSocket, threadPool));
+        startUdpDiscoveryAsync();
     }
 
     public synchronized void stop() {
