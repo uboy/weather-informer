@@ -384,11 +384,17 @@ async function main() {
             await new Promise(r => setTimeout(r, 350));
             const fc0 = document.querySelector('.sector_forecast_wind_0');
             const fc1 = document.querySelector('.sector_forecast_wind_1');
+            const fc0Bar = document.getElementById('forecast_wind_progress_0');
+            const fc1Bar = document.getElementById('forecast_wind_progress_1');
             return {
                 fc0Class: fc0 ? fc0.className : '',
                 fc1Class: fc1 ? fc1.className : '',
                 fc0Color: fc0 ? window.getComputedStyle(fc0.querySelector('span')).color : '',
-                fc1Color: fc1 ? window.getComputedStyle(fc1.querySelector('span')).color : ''
+                fc1Color: fc1 ? window.getComputedStyle(fc1.querySelector('span')).color : '',
+                fc0BarWidth: fc0Bar ? fc0Bar.style.width : '',
+                fc0BarBg: fc0Bar ? fc0Bar.style.backgroundColor : '',
+                fc1BarWidth: fc1Bar ? fc1Bar.style.width : '',
+                fc1BarBg: fc1Bar ? fc1Bar.style.backgroundColor : ''
             };
         })()`);
 
@@ -396,6 +402,10 @@ async function main() {
             mForecastWind.fc0Class.includes('wind_fresh') && mForecastWind.fc0Color === 'rgb(255, 214, 0)');
         check('Mode 7b: прогноз слот 1 (12 м/с) → класс wind_strong (#ff9100)',
             mForecastWind.fc1Class.includes('wind_strong') && mForecastWind.fc1Color === 'rgb(255, 145, 0)');
+        check('Mode 7c: прогноз мини-прогресс бар слот 0 → 47%, желтый',
+            mForecastWind.fc0BarWidth === '47%' && (mForecastWind.fc0BarBg === 'rgb(255, 214, 0)' || mForecastWind.fc0BarBg === '#ffd600'));
+        check('Mode 7d: прогноз мини-прогресс бар слот 1 → 80%, оранжевый',
+            mForecastWind.fc1BarWidth === '80%' && (mForecastWind.fc1BarBg === 'rgb(255, 145, 0)' || mForecastWind.fc1BarBg === '#ff9100'));
 
         // Mode 8: Wind Progress Bar Scale & Track Markers
         const windBarMarks = await cdp.evaluate(`(() => {
@@ -434,6 +444,76 @@ async function main() {
         })()`);
         check('Progress track has no layout-shifting borders (0px)',
             trackStyle.borderTopWidth === '0px');
+
+        // Mode 9: Humidity Out-of-bounds warning (high humidity сырость and dry air)
+        const mHumidity = await cdp.evaluate(`(async () => {
+            const parts = {
+                morning: { temp_avg: 10, wind_speed: 2 },
+                day: { temp_avg: 15, wind_speed: 2 },
+                evening: { temp_avg: 12, wind_speed: 2 },
+                night: { temp_avg: 8, wind_speed: 2 }
+            };
+            // 9a: High humidity 80% (>65% сырость)
+            render_weather({
+                fact: { temp: 10, wind_speed: 2, humidity: 80, pressure_mm: 745 },
+                forecasts: [{ parts: parts }, { parts: parts }]
+            });
+            await new Promise(r => setTimeout(r, 200));
+            const secWet = document.querySelector('.sector_humidity');
+            const valWet = document.getElementById('humidity');
+            const barWet = document.getElementById('humidity_progress');
+            const resWet = {
+                wetClass: secWet ? secWet.className : '',
+                wetColor: valWet ? window.getComputedStyle(valWet).color : '',
+                wetBarBg: barWet ? barWet.style.backgroundColor : ''
+            };
+
+            // 9b: Dry humidity 25% (<35% сухость)
+            render_weather({
+                fact: { temp: 10, wind_speed: 2, humidity: 25, pressure_mm: 745 },
+                forecasts: [{ parts: parts }, { parts: parts }]
+            });
+            await new Promise(r => setTimeout(r, 200));
+            const secDry = document.querySelector('.sector_humidity');
+            const valDry = document.getElementById('humidity');
+            const barDry = document.getElementById('humidity_progress');
+            const resDry = {
+                dryClass: secDry ? secDry.className : '',
+                dryColor: valDry ? window.getComputedStyle(valDry).color : '',
+                dryBarBg: barDry ? barDry.style.backgroundColor : ''
+            };
+
+            // 9c: Normal comfort 50%
+            render_weather({
+                fact: { temp: 10, wind_speed: 2, humidity: 50, pressure_mm: 745 },
+                forecasts: [{ parts: parts }, { parts: parts }]
+            });
+            await new Promise(r => setTimeout(r, 200));
+            const secNorm = document.querySelector('.sector_humidity');
+            const barNorm = document.getElementById('humidity_progress');
+            const resNorm = {
+                normClass: secNorm ? secNorm.className : '',
+                normBarBg: barNorm ? barNorm.style.backgroundColor : ''
+            };
+
+            return {
+                wetClass: resWet.wetClass,
+                wetColor: resWet.wetColor,
+                wetBarBg: resWet.wetBarBg,
+                dryClass: resDry.dryClass,
+                dryColor: resDry.dryColor,
+                dryBarBg: resDry.dryBarBg,
+                normClass: resNorm.normClass,
+                normBarBg: resNorm.normBarBg
+            };
+        })()`);
+
+        check('Mode 9a: влажность 80% (сырость >65%) → класс humidity_wet, цвет #ab47bc',
+            mHumidity.wetClass.includes('humidity_wet') && mHumidity.wetColor === 'rgb(171, 71, 188)' && (mHumidity.wetBarBg === 'rgb(171, 71, 188)' || mHumidity.wetBarBg === '#ab47bc'));
+        check('Mode 9b: влажность 25% (сухость <35%) → класс humidity_dry, цвет #ff9100',
+            mHumidity.dryClass.includes('humidity_dry') && mHumidity.dryColor === 'rgb(255, 145, 0)' && (mHumidity.dryBarBg === 'rgb(255, 145, 0)' || mHumidity.dryBarBg === '#ff9100'));
+        check('Mode 9c: норма влажности 50% → без классов warning, полоса #00e676',
+            !mHumidity.normClass.includes('humidity_dry') && !mHumidity.normClass.includes('humidity_wet') && (mHumidity.normBarBg === 'rgb(0, 230, 118)' || mHumidity.normBarBg === '#00e676'));
 
         // ==========================================
         // 5. Visual Screenshots

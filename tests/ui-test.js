@@ -21,7 +21,7 @@ check('все id уникальны', dupIds.length === 0, 'дубликаты: 
 for (const el of ['temperature', 'feels', 'feels_label', 'min', 'max', 'min_date', 'max_date',
     'wind', 'humidity', 'pressure', 'pressure_norm_zone', 'pressure_norm_mark', 'rise', 'set', 'duration_hour', 'duration_minute',
     'duration_left', 'status_bar', 'weather_menu', 'key_dialog', 'city_search_input',
-    'forecast_icon_0', 'forecast_icon_1', 'moon']) {
+    'forecast_icon_0', 'forecast_icon_1', 'forecast_wind_progress_0', 'forecast_wind_progress_1', 'moon']) {
     check('элемент #' + el + ' существует', ids.includes(el));
 }
 
@@ -101,8 +101,12 @@ if (humMatch) {
     check('humidity_progress: null → 0%', fnH(null) === 'width: 0%;');
     check('humidity_progress: сухо 25% → оранжевый', fnH(25).includes('width: 25%') && fnH(25).includes('#ff9100'), fnH(25));
     check('humidity_progress: комфорт 50% → зеленый', fnH(50).includes('width: 50%') && fnH(50).includes('#00e676'), fnH(50));
-    check('humidity_progress: сыро 80% → синий', fnH(80).includes('width: 80%') && fnH(80).includes('#29b6f6'), fnH(80));
+    check('humidity_progress: сыро 80% → пурпурный/сырость', fnH(80).includes('width: 80%') && fnH(80).includes('#ab47bc'), fnH(80));
 }
+
+// 3.1a3 update_humidity_ui: переключение классов humidity_dry / humidity_wet
+const humUiMatch = html.match(/^function update_humidity_ui[\s\S]*?^\}/m);
+check('update_humidity_ui извлечена', !!humUiMatch);
 
 // 3.1b calc_pressure_progress: индикация давления и цвета
 const prMatch = html.match(/^function calc_pressure_progress[\s\S]*?^\}/m);
