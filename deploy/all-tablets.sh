@@ -61,7 +61,8 @@ except Exception as e:
       fi
     fi
 
-    # Перезагрузка информера на экране
+    # Перезагрузка информера на экране (пауза 1.2с для гарантированного прохождения debounce 1000ms в MainActivity)
+    sleep 1.2
     curl -s -m 3 "http://$ip:8080/api/reload" >/dev/null 2>&1 || true
 
     if [ "$upload_ok" -eq 1 ]; then

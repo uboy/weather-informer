@@ -616,7 +616,8 @@ body.night-dim #status_bar { opacity: 0.5; }
 				</div>
 			</div>
 			<div id="weather_right">
-				<div id="forecast" class="spacer">
+				<div id="forecast" class="spacer" title="Нажмите для подробного прогноза на завтра">
+					<div id="forecast_tomorrow_badge" class="forecast_tomorrow_badge">Завтра ›</div>
 					<div class="forecast_part">
 						<div id="forecast_title_0" class="value forecast_title sector_forecast_title_0"></div>
 						<div class="forecast_temperature_wind">
@@ -1870,9 +1871,42 @@ function init_menu() {
 		}
 	});
 
-	// Клик по блоку прогноза — открытие прогноза на завтра
+	// Универсальный обработчик тач-тапа с защитой от срыва скролла и 300мс задержки
+	function attach_tap_handler($selector, callback) {
+		var startX = 0, startY = 0, startTime = 0, moved = false;
+		$selector.on("touchstart", function(e) {
+			var t = e.originalEvent && e.originalEvent.touches ? e.originalEvent.touches[0] : null;
+			if (t) {
+				startX = t.pageX;
+				startY = t.pageY;
+				startTime = (new Date()).getTime();
+				moved = false;
+				$(this).addClass("touched");
+			}
+		});
+		$selector.on("touchmove", function(e) {
+			var t = e.originalEvent && e.originalEvent.touches ? e.originalEvent.touches[0] : null;
+			if (t && (Math.abs(t.pageX - startX) > 25 || Math.abs(t.pageY - startY) > 25)) {
+				moved = true;
+				$(this).removeClass("touched");
+			}
+		});
+		$selector.on("touchend", function(e) {
+			$(this).removeClass("touched");
+			if (!moved && ((new Date()).getTime() - startTime) < 800) {
+				if (e.cancelable) e.preventDefault();
+				e.stopPropagation();
+				callback();
+			}
+		});
+	}
+
+	// Клик и тап по блоку прогноза — открытие прогноза на завтра
 	$("#forecast").on("click", function(e) {
 		e.stopPropagation();
+		show_tomorrow_forecast_modal();
+	});
+	attach_tap_handler($("#forecast, .forecast_part, #forecast_tomorrow_badge"), function() {
 		show_tomorrow_forecast_modal();
 	});
 	$("#mtf_close_btn").on("click", function(e) {
@@ -4192,9 +4226,34 @@ body {
 	background-size: 6vw 6vw;
 }
 #forecast {
+	position: relative;
 	display: flex;
 	cursor: pointer;
-	-webkit-tap-highlight-color: rgba(255, 255, 255, 0.1);
+	-webkit-tap-highlight-color: rgba(255, 255, 255, 0.15);
+	touch-action: manipulation;
+}
+.forecast_tomorrow_badge {
+	position: absolute;
+	top: -0.2vh;
+	right: 0.5vw;
+	font-size: 1.1vw;
+	color: rgba(255, 255, 255, 0.75);
+	background: rgba(255, 255, 255, 0.1);
+	border: 1px solid rgba(255, 255, 255, 0.22);
+	border-radius: 0.8vw;
+	padding: 0.2vh 0.8vw;
+	letter-spacing: 0.04em;
+	pointer-events: none;
+	text-transform: uppercase;
+	font-weight: 500;
+	transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+	z-index: 2;
+}
+#forecast:active .forecast_tomorrow_badge,
+#forecast.touched .forecast_tomorrow_badge {
+	background: rgba(66, 133, 244, 0.5);
+	border-color: rgba(66, 133, 244, 0.8);
+	color: #fff;
 }
 
 #forecast .wind_icon {
