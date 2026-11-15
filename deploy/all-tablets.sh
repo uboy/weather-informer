@@ -49,6 +49,7 @@ try:
         'lat': cfg.get('lat', 56.317722),
         'lon': cfg.get('lon', 43.999303),
         'station_altitude': cfg.get('station_altitude', 160.0),
+        'duration_mode': cfg.get('duration_mode', 'daylight'),
         'primary_source': 'server'
     }
     print(json.dumps(keys))

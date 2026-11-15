@@ -276,8 +276,10 @@ if (risesetMatch) {
     const fn = eval('(function(){' +
         'var value = {}, period = {day_day: "до заката", day_night: "до рассвета"}, date, pad = function(n){return n<10?"0"+n:n;};' +
         'var lastResult = null, update = function(r){ lastResult = r; };' +
+        'var duration_mode_cfg = "dynamic";' +
         risesetMatch[0] + ';' +
-        'return function(riseStr, setStr, h, m) {' +
+        'return function(riseStr, setStr, h, m, mode) {' +
+            'duration_mode_cfg = mode || "dynamic";' +
             'date = { getHours: function() { return h; }, getMinutes: function() { return m; } };' +
             'riseset(riseStr, setStr);' +
             'return lastResult;' +
@@ -293,18 +295,22 @@ if (risesetMatch) {
     const dayAsym = fn('05:56', '17:54', 10, 0);
     check('riseset: день 10:00 -> длительность дня 11ч 58мин', dayAsym && dayAsym.duration_hour === '11' && dayAsym.duration_minute === '58', JSON.stringify(dayAsym));
 
-    // Ночь асимметричная до полуночи: 22:00, восход 05:56, закат 17:54 -> длительность ночи 12ч 02мин (24:00 - 11:58)
-    const nightEveAsym = fn('05:56', '17:54', 22, 0);
+    // Режим daylight (по умолчанию): ночью 22:00 показывает длину светового дня (11ч 58мин)
+    const nightDaylight = fn('05:56', '17:54', 22, 0, 'daylight');
+    check('riseset (daylight): ночь 22:00 -> длительность светового дня 11ч 58мин', nightDaylight && nightDaylight.duration_hour === '11' && nightDaylight.duration_minute === '58', JSON.stringify(nightDaylight));
+
+    // Ночь асимметричная до полуночи (динамический режим): 22:00, восход 05:56, закат 17:54 -> длительность ночи 12ч 02мин (24:00 - 11:58)
+    const nightEveAsym = fn('05:56', '17:54', 22, 0, 'dynamic');
     check('riseset: ночь 22:00 -> длительность ночи 12ч 02мин', nightEveAsym && nightEveAsym.duration_hour === '12' && nightEveAsym.duration_minute === '02', JSON.stringify(nightEveAsym));
     check('riseset: ночь 22:00 -> duration_time сохраняет дневную ширину (50%)', nightEveAsym && nightEveAsym.duration_time.includes('width: 50%'), JSON.stringify(nightEveAsym));
 
     // Ночь после полуночи: 00:25, восход 06:15, закат 18:20 -> осталось ночи 5ч 50м, длина ночи 11ч 55м (день 12:05)
-    const nightMornRes = fn('06:15', '18:20', 0, 25);
+    const nightMornRes = fn('06:15', '18:20', 0, 25, 'dynamic');
     check('riseset: ночь 00:25 -> до рассвета 05:50 (не 29:50)', nightMornRes && nightMornRes.duration_left === 'до рассвета 05:50', JSON.stringify(nightMornRes));
     check('riseset: ночь 00:25 -> длительность ночи 11ч 55мин', nightMornRes && nightMornRes.duration_hour === '11' && nightMornRes.duration_minute === '55', JSON.stringify(nightMornRes));
 
     // Полночь ровно: 00:00, восход 06:00, закат 18:00 -> до рассвета 06:00
-    const midnightRes = fn('06:00', '18:00', 0, 0);
+    const midnightRes = fn('06:00', '18:00', 0, 0, 'dynamic');
     check('riseset: полночь 00:00 -> до рассвета 06:00', midnightRes && midnightRes.duration_left === 'до рассвета 06:00', JSON.stringify(midnightRes));
     check('riseset: полночь 00:00 -> длительность ночи 12:00', midnightRes && midnightRes.duration_hour === '12' && midnightRes.duration_minute === '00', JSON.stringify(midnightRes));
 }
@@ -533,6 +539,12 @@ check('JS содержит функции show_tomorrow_forecast_modal и hide_t
     html.includes('function hide_tomorrow_forecast_modal'));
 check('JS содержит привязку клика #forecast к show_tomorrow_forecast_modal',
     /\$\(["']#forecast["']\)\.on\(["']click["'],\s*function/.test(html));
+check('HTML содержит табы прогноза #mtf_tab_24 и #mtf_tab_48',
+    html.includes('id="mtf_tab_24"') && html.includes('id="mtf_tab_48"'));
+check('HTML содержит #duration_icon',
+    html.includes('id="duration_icon"'));
+check('HTML содержит бейдж Детали',
+    html.includes('Детали ›'));
 
 console.log('\nИТОГ: pass=' + pass + ' fail=' + fail);
 process.exit(fail ? 1 : 0);

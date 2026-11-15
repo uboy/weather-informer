@@ -670,6 +670,16 @@ async function main() {
             const sunset = document.getElementById('mtf_sunset') ? document.getElementById('mtf_sunset').innerText : '';
             const duration = document.getElementById('mtf_day_duration') ? document.getElementById('mtf_day_duration').innerText : '';
 
+            // Тест переключения табов 24ч -> 48ч
+            const tab48 = document.getElementById('mtf_tab_48');
+            if (tab48) tab48.click();
+            const isTab48Active = tab48 ? tab48.classList.contains('active') : false;
+            const subtitle48 = document.getElementById('mtf_subtitle') ? document.getElementById('mtf_subtitle').innerText : '';
+            const tab24 = document.getElementById('mtf_tab_24');
+            if (tab24) tab24.click();
+            const isTab24Active = tab24 ? tab24.classList.contains('active') : false;
+            const durationIcon = document.getElementById('duration_icon') ? document.getElementById('duration_icon').innerText : '';
+
             // 2. Закрытие по клику на крестик
             const closeBtn = document.getElementById('mtf_close_btn');
             if (closeBtn) closeBtn.click();
@@ -693,6 +703,10 @@ async function main() {
                 sunrise,
                 sunset,
                 duration,
+                isTab48Active,
+                subtitle48,
+                isTab24Active,
+                durationIcon,
                 isClosedByBtn,
                 isReopened,
                 isClosedByEsc
@@ -708,6 +722,9 @@ async function main() {
         check('MTF: давление дня показывает падение (748 мм ↘ -2)', mtfRes.pressDay.includes('748') && mtfRes.pressDay.includes('-2'));
         check('MTF: восход и закат на завтра отображаются (07:43 / 15:53)', mtfRes.sunrise === '07:43' && mtfRes.sunset === '15:53');
         check('MTF: долгота дня рассчитана (8 ч 10 мин)', mtfRes.duration === '8 ч 10 мин');
+        check('MTF: таб 48ч активируется по клику', mtfRes.isTab48Active && mtfRes.subtitle48.includes('48ч'));
+        check('MTF: таб 24ч возвращается в активное состояние', mtfRes.isTab24Active);
+        check('UI: иконка дня duration_icon присутствует', mtfRes.durationIcon === '☀️');
         check('MTF: кнопка ✕ закрывает модальное окно', mtfRes.isClosedByBtn);
         check('MTF: клавиша Esc закрывает модальное окно', mtfRes.isReopened && mtfRes.isClosedByEsc);
 

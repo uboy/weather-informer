@@ -351,6 +351,48 @@ body.night-dim #status_bar { opacity: 0.5; }
 	color: #b0bec5;
 	margin-top: 0.2vh;
 }
+.mtf_tabs {
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	background: #141923;
+	border: 1px solid rgba(255, 255, 255, 0.16);
+	border-radius: 0.8vw;
+	padding: 0.3vh 0.4vw;
+	gap: 0.4vw;
+}
+.mtf_tab {
+	background: transparent;
+	border: none;
+	outline: none;
+	color: #90a4ae;
+	font-size: 1.1vw;
+	padding: 0.5vh 1.0vw;
+	border-radius: 0.5vw;
+	cursor: pointer;
+	font-family: inherit;
+	transition: background 0.15s ease, color 0.15s ease;
+}
+.mtf_tab:hover {
+	color: #ffffff;
+}
+.mtf_tab.active {
+	background: #1976d2;
+	color: #ffffff;
+	font-weight: 700;
+	box-shadow: 0 0.2vh 0.5vw rgba(25, 118, 210, 0.4);
+}
+.mtf_part_daytag {
+	font-size: 0.9vw;
+	color: #4fc3f7;
+	background: rgba(79, 195, 247, 0.15);
+	border: 1px solid rgba(79, 195, 247, 0.3);
+	border-radius: 0.4vw;
+	padding: 0.1vh 0.4vw;
+	margin-left: 0.4vw;
+	font-weight: normal;
+	vertical-align: middle;
+}
 .mtf_close_btn {
 	background: #232936;
 	color: #ffffff;
@@ -616,8 +658,8 @@ body.night-dim #status_bar { opacity: 0.5; }
 				</div>
 			</div>
 			<div id="weather_right">
-				<div id="forecast" class="spacer" title="Нажмите для подробного прогноза на завтра">
-					<div id="forecast_tomorrow_badge" class="forecast_tomorrow_badge">Завтра ›</div>
+				<div id="forecast" class="spacer" title="Нажмите для подробного прогноза на 24/48ч">
+					<div id="forecast_tomorrow_badge" class="forecast_tomorrow_badge">Детали ›</div>
 					<div class="forecast_part">
 						<div id="forecast_title_0" class="value forecast_title sector_forecast_title_0"></div>
 						<div class="forecast_temperature_wind">
@@ -662,7 +704,7 @@ body.night-dim #status_bar { opacity: 0.5; }
 					</div>
 					<div id="duration_block" class="sector_duration_hour">
 						<div id="duration">
-							<span id="duration_hour" class="value"></span> ч <span id="duration_minute" class="value"></span> мин
+							<span id="duration_icon">☀️</span> <span id="duration_hour" class="value"></span> ч <span id="duration_minute" class="value"></span> мин
 						</div>
 						<div id="duration_bar">
 							<div id="duration_time" class="value" data-type="style"></div>
@@ -1582,7 +1624,9 @@ function hide_tomorrow_forecast_modal() {
 	$("#modal_tomorrow_forecast").removeClass("mtf_open");
 }
 
-function show_tomorrow_forecast_modal() {
+var mtf_current_tab = 24;
+
+function render_tomorrow_forecast_modal() {
 	var modal = $("#modal_tomorrow_forecast");
 	if (!modal.length) return;
 
@@ -1593,37 +1637,92 @@ function show_tomorrow_forecast_modal() {
 			if (cachedStr) fData = JSON.parse(cachedStr);
 		} catch (e) {}
 	}
+	if (!fData || !fData.forecasts || !fData.forecasts.length) return;
 
-	var tomorrow = null;
-	if (fData && fData.forecasts && fData.forecasts.length > 0) {
-		var d = new Date();
-		var padZ = function(n) { return (n < 10 ? '0' : '') + n; };
-		var todayStr = d.getFullYear() + '-' + padZ(d.getMonth() + 1) + '-' + padZ(d.getDate());
-		var todayIdx = -1;
-		for (var fi = 0; fi < fData.forecasts.length; fi++) {
-			if (fData.forecasts[fi].date === todayStr) {
-				todayIdx = fi;
-				break;
-			}
-		}
-		if (todayIdx !== -1 && fData.forecasts[todayIdx + 1]) {
-			tomorrow = fData.forecasts[todayIdx + 1];
-		} else if (fData.forecasts.length > 1) {
-			tomorrow = fData.forecasts[1];
-		} else {
-			tomorrow = fData.forecasts[0];
+	var d = new Date();
+	var curHour = d.getHours();
+	var padZ = function(n) { return (n < 10 ? '0' : '') + n; };
+	var todayStr = d.getFullYear() + '-' + padZ(d.getMonth() + 1) + '-' + padZ(d.getDate());
+	var todayIdx = 0;
+	for (var fi = 0; fi < fData.forecasts.length; fi++) {
+		if (fData.forecasts[fi].date === todayStr) {
+			todayIdx = fi;
+			break;
 		}
 	}
 
-	// 1. Форматирование даты на завтра
-	var tDate = new Date();
-	tDate.setDate(tDate.getDate() + 1);
-	var dayNames = ["Воскресенье", "Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота"];
-	var monthNames = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"];
-	var tTitle = dayNames[tDate.getDay()] + ', ' + tDate.getDate() + ' ' + monthNames[tDate.getMonth()] + ' ' + tDate.getFullYear();
-	$("#mtf_subtitle").text(tTitle);
+	var day0 = fData.forecasts[todayIdx] || fData.forecasts[0];
+	var day1 = fData.forecasts[todayIdx + 1] || fData.forecasts[1] || day0;
 
-	// 2. Текущее фактическое давление
+	var partsOrder = ['night', 'morning', 'day', 'evening'];
+	var partsRu = { night: 'Ночь', morning: 'Утро', day: 'День', evening: 'Вечер' };
+	var partsHours = { night: '00:00 – 06:00', morning: '06:00 – 12:00', day: '12:00 – 18:00', evening: '18:00 – 24:00' };
+
+	var timeline = [];
+	for (var p0 = 0; p0 < partsOrder.length; p0++) {
+		var k0 = partsOrder[p0];
+		timeline.push({
+			dayObj: day0,
+			dayLabel: 'Сегодня',
+			dateStr: day0.date,
+			key: k0,
+			name: partsRu[k0],
+			hours: partsHours[k0]
+		});
+	}
+	for (var p1 = 0; p1 < partsOrder.length; p1++) {
+		var k1 = partsOrder[p1];
+		timeline.push({
+			dayObj: day1,
+			dayLabel: 'Завтра',
+			dateStr: day1.date,
+			key: k1,
+			name: partsRu[k1],
+			hours: partsHours[k1]
+		});
+	}
+
+	var startIdx = 0;
+	if (curHour >= 6 && curHour < 12) {
+		startIdx = 2; // День, Вечер, Ночь, Утро
+	} else if (curHour >= 12 && curHour < 18) {
+		startIdx = 3; // Вечер, Ночь, Утро, День
+	} else if (curHour >= 18 && curHour < 23) {
+		startIdx = 4; // Ночь, Утро, День, Вечер
+	} else {
+		startIdx = 0; // Ночь, Утро, День, Вечер
+	}
+
+	if (mtf_current_tab === 48) {
+		startIdx += 4;
+		if (startIdx + 4 > timeline.length) {
+			startIdx = 4;
+		}
+	}
+
+	var activeCards = [];
+	for (var ci = 0; ci < 4; ci++) {
+		var tIdx = startIdx + ci;
+		if (tIdx < timeline.length) {
+			activeCards.push(timeline[tIdx]);
+		} else {
+			activeCards.push(timeline[ci + 4] || timeline[ci]);
+		}
+	}
+
+	var firstPart = activeCards[0];
+	var lastPart = activeCards[3];
+	var subText = (mtf_current_tab === 24) ? "Ближайшие 24 часа" : "Следующие 24 часа (до 48ч)";
+	if (firstPart && lastPart && firstPart.dayLabel && lastPart.dayLabel) {
+		if (firstPart.dayLabel === lastPart.dayLabel) {
+			subText += " · " + firstPart.dayLabel + " (" + (firstPart.dateStr || "") + ")";
+		} else {
+			subText += " · " + firstPart.dayLabel + " – " + lastPart.dayLabel;
+		}
+	}
+	$("#mtf_title").text("Подробный прогноз");
+	$("#mtf_subtitle").text(subText);
+
 	var factP = (fData && fData.fact && fData.fact.pressure_mm != null) ? fData.fact.pressure_mm : null;
 
 	var COND_RU = {
@@ -1648,29 +1747,36 @@ function show_tomorrow_forecast_modal() {
 		'thunderstorm-with-hail': 'гроза с градом'
 	};
 
-	var partsMap = [
-		{ id: 'night', key: 'night' },
-		{ id: 'morning', key: 'morning' },
-		{ id: 'day', key: 'day' },
-		{ id: 'evening', key: 'evening' }
-	];
+	var cardSlotIds = ['night', 'morning', 'day', 'evening'];
 
-	for (var pi = 0; pi < partsMap.length; pi++) {
-		var pItem = partsMap[pi];
-		var part = (tomorrow && tomorrow.parts && tomorrow.parts[pItem.key]) ? tomorrow.parts[pItem.key] : null;
+	for (var i = 0; i < 4; i++) {
+		var item = activeCards[i];
+		var slotId = cardSlotIds[i];
+		var part = (item.dayObj && item.dayObj.parts && item.dayObj.parts[item.key]) ? item.dayObj.parts[item.key] : null;
 
-		var tempEl = $("#mtf_temp_" + pItem.id);
-		var feelsEl = $("#mtf_feels_" + pItem.id);
-		var iconEl = $("#mtf_icon_" + pItem.id);
-		var condEl = $("#mtf_cond_" + pItem.id);
-		var precEl = $("#mtf_prec_" + pItem.id);
-		var humEl = $("#mtf_hum_" + pItem.id);
-		var windEl = $("#mtf_wind_" + pItem.id);
-		var windArrowEl = $("#mtf_wind_arrow_" + pItem.id);
-		var pressEl = $("#mtf_press_" + pItem.id);
+		var cardEl = $("#mtf_card_" + slotId);
+		var nameEl = $("#mtf_name_" + slotId);
+		var hoursEl = $("#mtf_hours_" + slotId);
+		var tempEl = $("#mtf_temp_" + slotId);
+		var feelsEl = $("#mtf_feels_" + slotId);
+		var iconEl = $("#mtf_icon_" + slotId);
+		var condEl = $("#mtf_cond_" + slotId);
+		var precEl = $("#mtf_prec_" + slotId);
+		var humEl = $("#mtf_hum_" + slotId);
+		var windEl = $("#mtf_wind_" + slotId);
+		var windArrowEl = $("#mtf_wind_arrow_" + slotId);
+		var pressEl = $("#mtf_press_" + slotId);
+
+		cardEl.css("order", i);
+
+		if (nameEl.length) {
+			nameEl.html(item.name + ' <span class="mtf_part_daytag">' + item.dayLabel + '</span>');
+		}
+		if (hoursEl.length) {
+			hoursEl.text(item.hours);
+		}
 
 		if (part) {
-			// Температура
 			var tMin = (part.temp_min != null) ? part.temp_min : part.temp_avg;
 			var tMax = (part.temp_max != null) ? part.temp_max : part.temp_avg;
 			var tempStr = "—";
@@ -1685,7 +1791,6 @@ function show_tomorrow_forecast_modal() {
 			}
 			tempEl.text(tempStr);
 
-			// Ощущается
 			var fLike = part.feels_like;
 			if (fLike != null) {
 				feelsEl.text('ощущ. ' + (fLike > 0 ? '+' : '') + fLike + '°');
@@ -1693,7 +1798,6 @@ function show_tomorrow_forecast_modal() {
 				feelsEl.text('');
 			}
 
-			// Иконка и состояние
 			if (part.icon) {
 				var normIcon = normalize_icon(part.icon);
 				iconEl.attr("class", "mtf_part_icon " + normIcon);
@@ -1704,7 +1808,6 @@ function show_tomorrow_forecast_modal() {
 			var condText = part.condition ? (COND_RU[part.condition] || part.condition) : "—";
 			condEl.text(condText);
 
-			// Осадки
 			var precStr = "без осадков";
 			if (part.prec_mm != null && part.prec_mm > 0) {
 				precStr = part.prec_mm + " мм";
@@ -1713,10 +1816,8 @@ function show_tomorrow_forecast_modal() {
 			}
 			precEl.text(precStr);
 
-			// Влажность
 			humEl.text(part.humidity != null ? (part.humidity + "%") : "—");
 
-			// Ветер
 			var wSpeed = (part.wind_speed != null) ? part.wind_speed : "—";
 			var wStr = wSpeed + " м/с";
 			if (part.wind_gust != null && part.wind_gust > 0) {
@@ -1730,7 +1831,6 @@ function show_tomorrow_forecast_modal() {
 				windArrowEl.attr("style", "display: none;");
 			}
 
-			// Давление и динамика
 			var pVal = part.pressure_mm;
 			if (pVal == null && part.pressure_pa != null) {
 				pVal = Math.round(part.pressure_pa * 0.750062);
@@ -1738,7 +1838,6 @@ function show_tomorrow_forecast_modal() {
 			if (pVal == null && factP != null) {
 				pVal = factP;
 			}
-
 			if (pVal != null) {
 				var diffHtml = "";
 				if (factP != null) {
@@ -1768,9 +1867,9 @@ function show_tomorrow_forecast_modal() {
 		}
 	}
 
-	// 3. Астрономия
-	var sunrise = (tomorrow && tomorrow.sunrise) ? tomorrow.sunrise : "—";
-	var sunset = (tomorrow && tomorrow.sunset) ? tomorrow.sunset : "—";
+	var astroDay = (mtf_current_tab === 48) ? day1 : (activeCards[2] ? activeCards[2].dayObj : day0);
+	var sunrise = (astroDay && astroDay.sunrise) ? astroDay.sunrise : "—";
+	var sunset = (astroDay && astroDay.sunset) ? astroDay.sunset : "—";
 	$("#mtf_sunrise").text(sunrise);
 	$("#mtf_sunset").text(sunset);
 
@@ -1790,8 +1889,18 @@ function show_tomorrow_forecast_modal() {
 		}
 	}
 	$("#mtf_day_duration").text(dayDur);
+}
 
-	// 4. Таймер автозакрытия на 40 секунд
+function show_tomorrow_forecast_modal() {
+	var modal = $("#modal_tomorrow_forecast");
+	if (!modal.length) return;
+
+	mtf_current_tab = 24;
+	$("#mtf_tab_24").addClass("active");
+	$("#mtf_tab_48").removeClass("active");
+
+	render_tomorrow_forecast_modal();
+
 	reset_mtf_timer();
 	if (mtf_timer) clearInterval(mtf_timer);
 	mtf_timer = setInterval(function() {
@@ -1919,6 +2028,22 @@ function init_menu() {
 		}
 	});
 	$("#mtf_dialog").on("click", function() {
+		reset_mtf_timer();
+	});
+	$("#mtf_tab_24").on("click", function(e) {
+		e.stopPropagation();
+		mtf_current_tab = 24;
+		$("#mtf_tab_24").addClass("active");
+		$("#mtf_tab_48").removeClass("active");
+		render_tomorrow_forecast_modal();
+		reset_mtf_timer();
+	});
+	$("#mtf_tab_48").on("click", function(e) {
+		e.stopPropagation();
+		mtf_current_tab = 48;
+		$("#mtf_tab_48").addClass("active");
+		$("#mtf_tab_24").removeClass("active");
+		render_tomorrow_forecast_modal();
 		reset_mtf_timer();
 	});
 	$(document).on("keydown", function(e) {
@@ -2124,6 +2249,7 @@ var primary_source_cfg = ""; // Основной источник из config.js
 var foreca_api_key_cfg = ""; // Ключ Foreca из config.json планшета (опционально)
 var gismeteo_api_key_cfg = ""; // Ключ Gismeteo API v2 из config.json планшета
 var owm_key = ""; // Ключ OpenWeatherMap для клиентского фолбэка
+var duration_mode_cfg = "daylight"; // Режим дня: "daylight" (световой день) или "dynamic" (день/ночь)
 var force_consumed = false; // Одноразовое поглощение параметра ?force=1
 
 function apply_text_color(c) {
@@ -2278,6 +2404,7 @@ function load_config(callback) {
 		if (cfg.server_url !== undefined) server_url = cfg.server_url;
 		if (cfg.city_name !== undefined) city_name_cfg = String(cfg.city_name);
 		if (cfg.primary_source !== undefined) primary_source_cfg = String(cfg.primary_source);
+		if (cfg.duration_mode !== undefined) duration_mode_cfg = String(cfg.duration_mode);
 		if (cfg.night_dim_start_hour !== undefined) night_dim_start = parseInt(cfg.night_dim_start_hour, 10) || 23;
 		if (cfg.night_dim_end_hour !== undefined) night_dim_end = parseInt(cfg.night_dim_end_hour, 10) || 6;
 		if (cfg.foreca_api_key !== undefined && cfg.foreca_api_key.indexOf('•') === -1) foreca_api_key_cfg = String(cfg.foreca_api_key);
@@ -3998,7 +4125,16 @@ function riseset(rise, set) {
 	var dayDuration = set - rise;
 	var current = date.getHours() * 60 + date.getMinutes();
 	var isDay = (current >= rise && current < set);
-	var duration = isDay ? dayDuration : (60 * 24 - dayDuration);
+	var dMode = "daylight";
+	if (typeof safe_get_item === "function") {
+		dMode = safe_get_item("duration_mode", (window.duration_mode_cfg || "daylight"));
+	} else if (typeof window !== "undefined" && window.duration_mode_cfg) {
+		dMode = window.duration_mode_cfg;
+	} else if (typeof duration_mode_cfg !== "undefined") {
+		dMode = duration_mode_cfg;
+	}
+	var isDynamic = (dMode === "dynamic");
+	var duration = (isDynamic && !isDay) ? (60 * 24 - dayDuration) : dayDuration;
 	var hour = Math.floor(duration / 60);
 	result.duration_hour = String(pad(hour));
 	result.duration_minute = String(pad(duration - hour * 60));
@@ -4015,6 +4151,12 @@ function riseset(rise, set) {
 	var hours = Math.floor(minutes / 60);
 	result.duration_left += ' ' + String(pad(hours)) + ':' + String(pad(minutes - hours * 60));
 	update(result);
+	if (typeof document !== "undefined") {
+		var iconEl = document.getElementById("duration_icon");
+		if (iconEl) {
+			iconEl.innerText = (isDynamic && !isDay) ? "🌙" : "☀️";
+		}
+	}
 }
 
 function update(result) {
@@ -5533,16 +5675,20 @@ body {
 				<div class="mtf_header_title_wrap">
 					<span class="mtf_header_icon">📅</span>
 					<div>
-						<div class="mtf_header_title" id="mtf_title">Прогноз на завтра</div>
+						<div class="mtf_header_title" id="mtf_title">Подробный прогноз</div>
 						<div class="mtf_header_subtitle" id="mtf_subtitle">—</div>
 					</div>
+				</div>
+				<div class="mtf_tabs">
+					<button type="button" class="mtf_tab active" id="mtf_tab_24">Ближайшие 24ч</button>
+					<button type="button" class="mtf_tab" id="mtf_tab_48">Следующие 24ч (до 48ч)</button>
 				</div>
 				<div class="mtf_close_btn" id="mtf_close_btn" title="Закрыть (Esc)">✕</div>
 			</div>
 			<div class="mtf_grid" id="mtf_grid">
 				<div class="mtf_card" id="mtf_card_night">
-					<div class="mtf_part_name">Ночь</div>
-					<div class="mtf_part_hours">00:00 – 06:00</div>
+					<div class="mtf_part_name" id="mtf_name_night">Ночь</div>
+					<div class="mtf_part_hours" id="mtf_hours_night">00:00 – 06:00</div>
 					<div class="mtf_part_icon" id="mtf_icon_night"></div>
 					<div class="mtf_part_cond" id="mtf_cond_night">—</div>
 					<div class="mtf_part_temp_wrap">
@@ -5572,8 +5718,8 @@ body {
 					</div>
 				</div>
 				<div class="mtf_card" id="mtf_card_morning">
-					<div class="mtf_part_name">Утро</div>
-					<div class="mtf_part_hours">06:00 – 12:00</div>
+					<div class="mtf_part_name" id="mtf_name_morning">Утро</div>
+					<div class="mtf_part_hours" id="mtf_hours_morning">06:00 – 12:00</div>
 					<div class="mtf_part_icon" id="mtf_icon_morning"></div>
 					<div class="mtf_part_cond" id="mtf_cond_morning">—</div>
 					<div class="mtf_part_temp_wrap">
@@ -5603,8 +5749,8 @@ body {
 					</div>
 				</div>
 				<div class="mtf_card" id="mtf_card_day">
-					<div class="mtf_part_name">День</div>
-					<div class="mtf_part_hours">12:00 – 18:00</div>
+					<div class="mtf_part_name" id="mtf_name_day">День</div>
+					<div class="mtf_part_hours" id="mtf_hours_day">12:00 – 18:00</div>
 					<div class="mtf_part_icon" id="mtf_icon_day"></div>
 					<div class="mtf_part_cond" id="mtf_cond_day">—</div>
 					<div class="mtf_part_temp_wrap">
@@ -5634,8 +5780,8 @@ body {
 					</div>
 				</div>
 				<div class="mtf_card" id="mtf_card_evening">
-					<div class="mtf_part_name">Вечер</div>
-					<div class="mtf_part_hours">18:00 – 24:00</div>
+					<div class="mtf_part_name" id="mtf_name_evening">Вечер</div>
+					<div class="mtf_part_hours" id="mtf_hours_evening">18:00 – 24:00</div>
 					<div class="mtf_part_icon" id="mtf_icon_evening"></div>
 					<div class="mtf_part_cond" id="mtf_cond_evening">—</div>
 					<div class="mtf_part_temp_wrap">

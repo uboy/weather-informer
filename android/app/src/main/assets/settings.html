@@ -359,6 +359,13 @@ input:focus, select:focus {
                         <input type="number" id="direct_update_interval_sec" min="60" step="30" placeholder="1800">
                     </div>
                 </div>
+                <div class="form-group">
+                    <label for="duration_mode">Режим отображения времени суток:</label>
+                    <select id="duration_mode">
+                        <option value="daylight">Только световой день (☀️, по умолчанию)</option>
+                        <option value="dynamic">В зависимости от времени суток (☀️ день / 🌙 ночь)</option>
+                    </select>
+                </div>
             </div>
         </div>
 
@@ -548,6 +555,9 @@ function loadSettings() {
             var dirSec = c.direct_update_interval_sec || 1800;
             document.getElementById("update_interval_sec").value = updSec;
             document.getElementById("direct_update_interval_sec").value = dirSec;
+            if (document.getElementById("duration_mode")) {
+                document.getElementById("duration_mode").value = c.duration_mode || "daylight";
+            }
 
             updateKeyUI("api", c.api);
             updateKeyUI("gismeteo_api_key", c.gismeteo_api_key);
@@ -656,6 +666,7 @@ document.getElementById("btn_save").addEventListener("click", function() {
         station_altitude: parseFloat(document.getElementById("station_altitude").value) || currentCfg.station_altitude || 160.0,
         server_url: document.getElementById("server_url").value.trim(),
         primary_source: document.getElementById("primary_source").value,
+        duration_mode: document.getElementById("duration_mode") ? document.getElementById("duration_mode").value : "daylight",
         update_interval_sec: parseInt(document.getElementById("update_interval_sec").value, 10) || 300,
         direct_update_interval_sec: parseInt(document.getElementById("direct_update_interval_sec").value, 10) || 1800
     };
@@ -681,6 +692,7 @@ document.getElementById("btn_save").addEventListener("click", function() {
     .then(function(res) {
         btn.disabled = false;
         if (res.status === "saved" || res.status === "ok") {
+            try { localStorage.setItem("duration_mode", payload.duration_mode); } catch(e) {}
             setDirty(false);
             showStatus("Настройки успешно сохранены! Экран информера обновлен.", "ok", 4000);
             loadSettings();
@@ -702,7 +714,7 @@ document.getElementById("btn_reload").addEventListener("click", function() {
 });
 
 // Отслеживание изменений на форме
-["lat", "lon", "city_name", "station_altitude", "server_url", "primary_source", "update_interval_sec", "direct_update_interval_sec"].forEach(function(id) {
+["lat", "lon", "city_name", "station_altitude", "server_url", "primary_source", "duration_mode", "update_interval_sec", "direct_update_interval_sec"].forEach(function(id) {
     var el = document.getElementById(id);
     if (el) {
         el.addEventListener("input", function() { setDirty(true); });
