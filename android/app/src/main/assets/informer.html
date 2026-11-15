@@ -739,6 +739,9 @@ function update_pressure_trend_ui(p_val) {
 	var color = '#b0bec5';
 	var sign = '';
 	var delta = trend.delta;
+	if (Math.abs(delta) < 0.05) {
+		delta = 0;
+	}
 	if (delta >= 0.5) {
 		arrow = '↑';
 		color = '#81c784';

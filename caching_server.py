@@ -22,6 +22,7 @@ import re
 import shutil
 import tempfile
 import ipaddress
+import html
 from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 import urllib.request
@@ -49,12 +50,12 @@ CACHE_FILE = os.path.join(SCRIPT_DIR, "weather_cache.json")
 HPA_TO_MMHG = 0.750062
 
 
-def mslp_to_station_pressure(mslp_hpa, altitude_m=140.0):
+def mslp_to_station_pressure(mslp_hpa, altitude_m=160.0):
     """Приводит давление на уровне моря (MSLP) к приземному давлению на высоте станции (QFE)."""
     if mslp_hpa is None:
         return None
     try:
-        elev = float(altitude_m if altitude_m is not None else 140.0)
+        elev = float(altitude_m if altitude_m is not None else 160.0)
         # Международная барометрическая формула: P = P0 * (1 - h / 44330)^5.2559
         press_hpa = float(mslp_hpa) * ((1.0 - elev / 44330.0) ** 5.2559)
         return int(round(press_hpa * HPA_TO_MMHG))
@@ -513,7 +514,7 @@ def fetch_fallback_pressure(lat, lon):
                 p_mm = int(round(float(press) * HPA_TO_MMHG))
             else:
                 mslp = main_w.get("pressure")
-                elev = float(cfg.get("station_altitude", 140.0))
+                elev = float(cfg.get("station_altitude", 160.0))
                 p_mm = mslp_to_station_pressure(mslp, elev)
             if p_mm is not None and 600 <= p_mm <= 850:
                 log.info("Fetched fallback surface pressure from OWM for (%s, %s): %s mmHg", lat, lon, p_mm)
@@ -1018,7 +1019,7 @@ def fetch_from_openweathermap(lat, lon, api_key):
     wind_angle = int(wind["deg"]) if wind.get("deg") is not None else None
     humidity = int(main["humidity"]) if main.get("humidity") is not None else None
     cfg = load_config()
-    station_alt = float(cfg.get("station_altitude", 140.0))
+    station_alt = float(cfg.get("station_altitude", 160.0))
     press = main.get("grnd_level")
     if press is not None:
         pressure_mm = int(round(float(press) * HPA_TO_MMHG))
@@ -1316,7 +1317,7 @@ def fetch_from_wttr(lat, lon):
     temp = int(cc["temp_C"]) if cc.get("temp_C") is not None else None
     humidity = int(cc["humidity"]) if cc.get("humidity") is not None else None
     cfg = load_config()
-    station_alt = float(cfg.get("station_altitude", 140.0))
+    station_alt = float(cfg.get("station_altitude", 160.0))
     p_hpa = int(cc["pressure"]) if cc.get("pressure") is not None else None
     pressure_mm = mslp_to_station_pressure(p_hpa, station_alt) if p_hpa is not None else None
     wind_speed = (round(int(cc["windspeedKmph"]) / 3.6, 1)
@@ -2626,9 +2627,12 @@ doSave();
             return
 
         if path == "/install":
-            host_header = self.headers.get("Host", "192.168.1.55:8085")
+            raw_host = self.headers.get("Host", "192.168.1.55:8085")
+            if not re.match(r"^[a-zA-Z0-9.:_-]+$", raw_host):
+                raw_host = "192.168.1.55:8085"
+            host_header = html.escape(raw_host)
             apk_url = f"http://{host_header}/informer.apk"
-            html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
+            page_html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Установка Погодного Информера</title>
 <style>
@@ -2657,7 +2661,7 @@ code {{ color: #81D4FA; }}
 </div>
 </div></body></html>"""
             try:
-                data = html.encode("utf-8")
+                data = page_html.encode("utf-8")
                 self.send_response(200)
                 self.send_cors_headers()
                 self.send_header("Content-Type", "text/html; charset=utf-8")

@@ -368,5 +368,22 @@ function hoursSane(hours) {
     }
 })();
 
+// --- mslp_to_station_pressure: барометрическая редукция давления ---
+
+(function () {
+    try {
+        const hpaDef = hpaSrc ? hpaSrc[0] : 'var HPA_TO_MMHG = 0.750062;';
+        const fn = eval('(function(){' + hpaDef + ';' + srcOf('mslp_to_station_pressure') + '; return mslp_to_station_pressure;})()');
+        check('mslp_to_station_pressure: null → null', fn(null) === null);
+        check('mslp_to_station_pressure: undefined → null', fn(undefined) === null);
+        check('mslp_to_station_pressure: 1013.25 гПа на 0м → 760 мм', fn(1013.25, 0) === 760, fn(1013.25, 0));
+        check('mslp_to_station_pressure: 1013.25 гПа на 160м (НН) → 746 мм', fn(1013.25, 160) === 746, fn(1013.25, 160));
+        check('mslp_to_station_pressure: дефолт высоты 160м дает 746 мм', fn(1013.25) === 746, fn(1013.25));
+        check('mslp_to_station_pressure: штормовой циклон 980 гПа (160м) → 721 мм', fn(980, 160) === 721, fn(980, 160));
+    } catch (e) {
+        check('mslp_to_station_pressure: исключение: ' + e.message, false);
+    }
+})();
+
 console.log('\nИТОГ: pass=' + pass + ' fail=' + fail);
 process.exit(fail ? 1 : 0);
