@@ -2708,7 +2708,7 @@ doSave();
 </script></body></html>"""
 
     def serve_settings_html(self):
-        s_file = os.path.join(DIR, "settings.html")
+        s_file = os.path.join(SCRIPT_DIR, "settings.html")
         if os.path.exists(s_file):
             try:
                 with open(s_file, "rb") as f:
@@ -2994,7 +2994,11 @@ code {{ color: #81D4FA; }}
                 pass
             return
 
-        if path in ("/settings", "/setup"):
+        if path in ("/settings", "/settings.html"):
+            self.serve_settings_html()
+            return
+
+        if path in ("/setup", "/setup.html"):
             setup_path = os.path.join(SCRIPT_DIR, "setup.html")
             if os.path.isfile(setup_path):
                 try:

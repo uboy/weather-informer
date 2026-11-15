@@ -12,10 +12,51 @@ body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     font-size: 16px;
     line-height: 1.5;
-    padding: 16px;
+    padding: 0;
     padding-bottom: 40px;
 }
-.container { max-width: 520px; margin: 0 auto; }
+.top-nav {
+    background: #181b22;
+    border-bottom: 1px solid #2d3340;
+    padding: 10px 18px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    margin-bottom: 20px;
+}
+.btn-nav-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: #232936;
+    color: #4fc3f7;
+    border: 1px solid #37474f;
+    border-radius: 8px;
+    padding: 8px 14px;
+    font-size: 0.95rem;
+    font-weight: 600;
+    text-decoration: none;
+    transition: all 0.2s ease;
+    cursor: pointer;
+}
+.btn-nav-back:hover {
+    background: #2a3344;
+    color: #ffffff;
+    border-color: #0288d1;
+}
+.nav-title {
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: #ffffff;
+}
+.nav-right {
+    font-size: 0.85rem;
+    color: #90a4ae;
+}
+.container { max-width: 680px; margin: 0 auto; padding: 0 16px; }
 header { text-align: center; margin-bottom: 24px; padding-top: 8px; }
 h1 { font-size: 24px; font-weight: 700; color: #ffffff; margin-bottom: 6px; }
 .subtitle { font-size: 14px; color: #9e9e9e; }
@@ -101,6 +142,11 @@ input:focus, select:focus { border-color: #29b6f6; }
 </style>
 </head>
 <body>
+<div class="top-nav">
+    <a href="/" class="btn-nav-back" id="btn_back_informer">← Назад к информеру</a>
+    <div class="nav-title">⚙️ Настройка информера</div>
+    <div class="nav-right" id="nav_target_badge">Конфигуратор</div>
+</div>
 <div class="container">
     <header>
         <h1>Погодный Информер</h1>
@@ -179,6 +225,10 @@ input:focus, select:focus { border-color: #29b6f6; }
 
     if (isStandaloneTablet) {
         targetLabel.innerText = "Настройка экрана планшета (автономный режим)";
+        var backBtn = document.getElementById("btn_back_informer");
+        if (backBtn && location.protocol === "file:") {
+            backBtn.setAttribute("href", "informer.html");
+        }
     } else {
         targetLabel.innerText = "Настройка сервера сети (раздаёт на все планшеты)";
     }

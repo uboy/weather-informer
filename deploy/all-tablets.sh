@@ -44,12 +44,12 @@ try:
         'gismeteo_api_key': cfg.get('gismeteo_api_key', ''),
         'foreca_api_key': cfg.get('foreca_api_key', ''),
         'openweathermap_api_key': cfg.get('openweathermap_api_key', ''),
-        'server_url': cfg.get('server_url', 'http://192.168.1.55:8085/weather.json'),
+        'server_url': (cfg.get('server_url') or '').strip() or 'http://192.168.1.55:8085/weather.json',
         'city_name': cfg.get('city_name', 'Нижний Новгород'),
         'lat': cfg.get('lat', 56.317722),
         'lon': cfg.get('lon', 43.999303),
         'station_altitude': cfg.get('station_altitude', 160.0),
-        'primary_source': cfg.get('primary_source', 'server')
+        'primary_source': 'server'
     }
     print(json.dumps(keys))
 except Exception as e:

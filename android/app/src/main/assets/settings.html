@@ -715,6 +715,11 @@ wireKeyHandlers("gismeteo_api_key");
 wireKeyHandlers("foreca_api_key");
 wireKeyHandlers("openweathermap_api_key");
 
+var topBackBtn = document.getElementById("top_back_btn");
+if (topBackBtn && window.location.protocol === "file:") {
+    topBackBtn.setAttribute("href", "informer.html");
+}
+
 loadSettings();
 </script>
 </body>
