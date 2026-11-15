@@ -103,6 +103,34 @@ var pressure_max = 770; //Давление, максимум, мм рт ст
 #weather_menu.menu_open {
 	display: block;
 }
+.menu_top_bar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding-bottom: 1.0vw;
+	margin-bottom: 0.8vw;
+	border-bottom: 0.15vw solid rgba(255, 255, 255, 0.2);
+}
+.menu_back_btn {
+	background: rgba(255, 255, 255, 0.15);
+	border: 0.12vw solid rgba(255, 255, 255, 0.3);
+	border-radius: 0.6vw;
+	color: #ffffff;
+	font-size: 2.4vw;
+	font-weight: bold;
+	padding: 0.5vw 1.4vw;
+	cursor: pointer;
+	-webkit-user-select: none;
+	user-select: none;
+}
+.menu_back_btn:active {
+	background: rgba(255, 255, 255, 0.35);
+}
+.menu_top_title {
+	font-size: 2.2vw;
+	font-weight: bold;
+	color: var(--tc, #4FC3F7);
+}
 .menu_title {
 	font-size: 2.2vw;
 	color: #777777;
@@ -1343,10 +1371,10 @@ function init_menu() {
 	});
 	$("#menu_settings").on("click", function(e) {
 		e.stopPropagation();
-		var dest = "/settings";
+		var dest = "/settings.html";
 		if (window.location.protocol === "file:") {
 			var base = server_base();
-			dest = base ? (base + "/settings") : "http://127.0.0.1:8080/settings";
+			dest = base ? (base + "/settings.html") : "http://127.0.0.1:8080/settings.html";
 		}
 		window.location.href = dest;
 	});
@@ -1363,6 +1391,10 @@ function init_menu() {
 		e.stopPropagation();
 		menu.removeClass("menu_open");
 		show_qr_onboarding();
+	});
+	$("#menu_top_back").on("click", function(e) {
+		e.stopPropagation();
+		menu.removeClass("menu_open");
 	});
 	$("#qr_close_btn").on("click", function(e) {
 		e.stopPropagation();
@@ -4882,6 +4914,10 @@ body {
 </style>
 	<div id="menu_btn">&#9776;</div>
 	<div id="weather_menu">
+		<div class="menu_top_bar">
+			<div class="menu_back_btn" id="menu_top_back">← Назад</div>
+			<div class="menu_top_title">Меню</div>
+		</div>
 		<div class="menu_title">Погода</div>
 		<div class="menu_item" id="menu_refresh">Обновить сейчас</div>
 		<div class="menu_title">Управление</div>
@@ -4939,7 +4975,7 @@ body {
 			</div>
 		</div>
 		<div>
-			<div id="qr_close_btn">Закрыть</div>
+			<div id="qr_close_btn">← Назад (Закрыть)</div>
 		</div>
 	</div>
 	<div id="status_bar"></div>

@@ -2708,7 +2708,16 @@ doSave();
 </script></body></html>"""
 
     def serve_settings_html(self):
-        html = self.get_settings_html().encode("utf-8")
+        s_file = os.path.join(DIR, "settings.html")
+        if os.path.exists(s_file):
+            try:
+                with open(s_file, "rb") as f:
+                    html = f.read()
+            except Exception as e:
+                log.warning("Failed to read settings.html: %s", e)
+                html = self.get_settings_html().encode("utf-8")
+        else:
+            html = self.get_settings_html().encode("utf-8")
         try:
             self.send_response(200)
             self.send_cors_headers()

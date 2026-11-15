@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Настройки Погодного Информера</title>
+<style>
+* { box-sizing: border-box; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: #0f1115;
+    color: #e0e6ed;
+    margin: 0;
+    padding: 0;
+    line-height: 1.4;
+}
+.top-nav {
+    background: #181b22;
+    border-bottom: 1px solid #2d3340;
+    padding: 10px 18px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+}
+.btn-nav-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: #252a36;
+    border: 1px solid #3d4558;
+    color: #4FC3F7;
+    font-size: 1.05rem;
+    font-weight: bold;
+    padding: 8px 16px;
+    border-radius: 8px;
+    cursor: pointer;
+    text-decoration: none;
+    -webkit-user-select: none;
+    user-select: none;
+}
+.btn-nav-back:active, .btn-nav-back:hover {
+    background: #333a4c;
+    color: #ffffff;
+}
+.nav-title {
+    font-size: 1.25rem;
+    font-weight: bold;
+    color: #ffffff;
+}
+.nav-right {
+    font-size: 0.85rem;
+    color: #8b949e;
+}
+
+.container {
+    max-width: 1160px;
+    margin: 16px auto;
+    padding: 0 16px 40px 16px;
+}
+.grid {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+@media (min-width: 768px) {
+    .grid {
+        display: grid;
+        grid-template-columns: 1.1fr 1fr;
+        gap: 18px;
+        align-items: start;
+    }
+}
+.card {
+    background: #181b22;
+    border: 1px solid #282e3d;
+    border-radius: 12px;
+    padding: 18px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+    margin-bottom: 16px;
+}
+.card-title {
+    font-size: 1.15rem;
+    font-weight: bold;
+    color: #4FC3F7;
+    margin-top: 0;
+    margin-bottom: 14px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #282e3d;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+.form-group {
+    margin-bottom: 12px;
+}
+.form-row {
+    display: flex;
+    gap: 10px;
+}
+.form-row .form-group {
+    flex: 1;
+}
+label {
+    display: block;
+    font-size: 0.85rem;
+    color: #a0aec0;
+    margin-bottom: 4px;
+    font-weight: 500;
+}
+input[type="text"], input[type="number"], select {
+    width: 100%;
+    padding: 10px 12px;
+    background: #20242e;
+    border: 1px solid #363d4e;
+    border-radius: 8px;
+    color: #ffffff;
+    font-size: 0.95rem;
+    outline: none;
+}
+input:focus, select:focus {
+    border-color: #4FC3F7;
+}
+
+/* Key items */
+.key-block {
+    background: #1c202a;
+    border: 1px solid #2c3344;
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 12px;
+}
+.key-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+.key-title {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: #d1d5db;
+}
+.badge {
+    font-size: 0.78rem;
+    padding: 3px 8px;
+    border-radius: 12px;
+    font-weight: 600;
+}
+.badge-ok {
+    background: rgba(0, 230, 118, 0.15);
+    color: #00E676;
+    border: 1px solid rgba(0, 230, 118, 0.4);
+}
+.badge-empty {
+    background: rgba(255, 167, 38, 0.15);
+    color: #FFA726;
+    border: 1px solid rgba(255, 167, 38, 0.4);
+}
+.key-input-row {
+    display: flex;
+    gap: 8px;
+}
+.btn-delete {
+    background: rgba(244, 67, 54, 0.15);
+    border: 1px solid #d32f2f;
+    color: #f44336;
+    padding: 8px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 600;
+    white-space: nowrap;
+    -webkit-user-select: none;
+    user-select: none;
+}
+.btn-delete:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+    border-color: #555;
+    color: #888;
+}
+.btn-delete:not(:disabled):active {
+    background: #d32f2f;
+    color: #fff;
+}
+
+/* Buttons */
+.btn-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 12px 20px;
+    border-radius: 8px;
+    font-size: 1rem;
+    font-weight: bold;
+    border: none;
+    cursor: pointer;
+    transition: all 0.2s;
+    text-decoration: none;
+    -webkit-user-select: none;
+    user-select: none;
+}
+.btn-primary {
+    background: #0288D1;
+    color: #ffffff;
+    width: 100%;
+}
+.btn-primary.dirty {
+    background: #00E676;
+    color: #000000;
+    box-shadow: 0 0 12px rgba(0, 230, 118, 0.4);
+}
+.btn-secondary {
+    background: #252a36;
+    color: #e0e6ed;
+    border: 1px solid #3d4558;
+}
+.btn-secondary:active {
+    background: #333a4c;
+}
+.btn-sm {
+    padding: 8px 12px;
+    font-size: 0.85rem;
+    white-space: nowrap;
+}
+.btn-gps {
+    background: #1b5e20;
+    color: #fff;
+    border: 1px solid #2e7d32;
+    border-radius: 6px;
+    cursor: pointer;
+}
+.btn-gps:active {
+    background: #2e7d32;
+}
+
+/* QR card */
+.qr-section {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    padding: 8px;
+}
+.qr-wrap {
+    background: #ffffff;
+    padding: 10px;
+    border-radius: 8px;
+    display: inline-block;
+    margin: 10px 0;
+}
+.qr-wrap img, .qr-wrap canvas {
+    display: block;
+    margin: 0 auto;
+}
+.qr-url {
+    font-family: monospace;
+    font-size: 0.85rem;
+    color: #8b949e;
+    word-break: break-all;
+    background: #13161c;
+    padding: 8px 12px;
+    border-radius: 6px;
+    width: 100%;
+    margin-top: 6px;
+}
+
+/* Status message */
+#status_msg {
+    display: none;
+    padding: 12px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    font-weight: 500;
+    text-align: center;
+}
+.msg-ok { background: rgba(0, 230, 118, 0.15); color: #00e676; border: 1px solid #00e676; }
+.msg-err { background: rgba(244, 67, 54, 0.15); color: #f44336; border: 1px solid #f44336; }
+</style>
+</head>
+<body>
+
+<div class="top-nav">
+    <a href="/" class="btn-nav-back" id="top_back_btn">← Назад к информеру</a>
+    <div class="nav-title">⚙️ Настройки информера</div>
+    <div class="nav-right" id="device_info_label">Планшет</div>
+</div>
+
+<div class="container">
+    <div id="status_msg"></div>
+
+    <div class="grid">
+        <!-- Левая колонка: Локация и Сервер -->
+        <div>
+            <!-- Карточка: Локация -->
+            <div class="card">
+                <div class="card-title">
+                    <span>📍 Локация и город</span>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="lat">Широта (Latitude):</label>
+                        <input type="number" step="0.0001" id="lat" placeholder="56.3177">
+                    </div>
+                    <div class="form-group">
+                        <label for="lon">Долгота (Longitude):</label>
+                        <input type="number" step="0.0001" id="lon" placeholder="43.9993">
+                    </div>
+                </div>
+                <button type="button" class="btn-action btn-gps btn-sm" id="btn_gps" style="width:100%; margin-bottom:12px;">
+                    🛰️ Определить GPS со смартфона
+                </button>
+                <div class="form-group">
+                    <label for="city_name">Город для отображения:</label>
+                    <div style="display:flex; gap:6px;">
+                        <input type="text" id="city_name" placeholder="Нижний Новгород">
+                        <button type="button" class="btn-action btn-secondary btn-sm" id="btn_detect_city">Авто</button>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="station_altitude">Высота над уровнем моря (м):</label>
+                    <input type="number" step="1" id="station_altitude" placeholder="160">
+                </div>
+            </div>
+
+            <!-- Карточка: Сервер и источник -->
+            <div class="card">
+                <div class="card-title">
+                    <span>🖥️ Сервер и источник</span>
+                </div>
+                <div class="form-group">
+                    <label for="server_url">Адрес домашнего сервера (server_url):</label>
+                    <input type="text" id="server_url" placeholder="http://192.168.1.55:8085">
+                </div>
+                <div class="form-group">
+                    <label for="primary_source">Основной источник погоды:</label>
+                    <select id="primary_source">
+                        <option value="server">Локальный сервер (рекомендуется)</option>
+                        <option value="yandex">Яндекс.Погода (API-ключ)</option>
+                        <option value="gismeteo">Gismeteo v2 (API Token)</option>
+                        <option value="foreca">Foreca (API Token)</option>
+                        <option value="om">Open-Meteo (бесплатно, без ключа)</option>
+                        <option value="owm">OpenWeatherMap (API Key)</option>
+                        <option value="7timer">7timer (бесплатно, без ключа)</option>
+                        <option value="wttr">wttr.in (бесплатно, без ключа)</option>
+                    </select>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="update_interval_sec">Опрос сервера (сек):</label>
+                        <input type="number" id="update_interval_sec" min="30" step="30" placeholder="300">
+                    </div>
+                    <div class="form-group">
+                        <label for="direct_update_interval_sec">Прямой опрос API (сек):</label>
+                        <input type="number" id="direct_update_interval_sec" min="60" step="30" placeholder="1800">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Правая колонка: Ключи API и QR-код -->
+        <div>
+            <!-- Карточка: Ключи API -->
+            <div class="card">
+                <div class="card-title">
+                    <span>🔑 Ключи API провайдеров</span>
+                </div>
+
+                <!-- Яндекс.Погода -->
+                <div class="key-block">
+                    <div class="key-header">
+                        <span class="key-title">Яндекс.Погода</span>
+                        <span class="badge badge-empty" id="badge_api">○ Не настроен</span>
+                    </div>
+                    <div class="key-input-row">
+                        <input type="text" id="api" placeholder="X-Yandex-Weather-Key..." autocomplete="off">
+                        <button type="button" class="btn-delete" id="btn_del_api" disabled>Удалить</button>
+                    </div>
+                </div>
+
+                <!-- Gismeteo -->
+                <div class="key-block">
+                    <div class="key-header">
+                        <span class="key-title">Gismeteo API v2</span>
+                        <span class="badge badge-empty" id="badge_gismeteo_api_key">○ Не настроен</span>
+                    </div>
+                    <div class="key-input-row">
+                        <input type="text" id="gismeteo_api_key" placeholder="X-Gismeteo-Token..." autocomplete="off">
+                        <button type="button" class="btn-delete" id="btn_del_gismeteo_api_key" disabled>Удалить</button>
+                    </div>
+                </div>
+
+                <!-- Foreca -->
+                <div class="key-block">
+                    <div class="key-header">
+                        <span class="key-title">Foreca</span>
+                        <span class="badge badge-empty" id="badge_foreca_api_key">○ Не настроен</span>
+                    </div>
+                    <div class="key-input-row">
+                        <input type="text" id="foreca_api_key" placeholder="Bearer JWT Token..." autocomplete="off">
+                        <button type="button" class="btn-delete" id="btn_del_foreca_api_key" disabled>Удалить</button>
+                    </div>
+                </div>
+
+                <!-- OpenWeatherMap -->
+                <div class="key-block">
+                    <div class="key-header">
+                        <span class="key-title">OpenWeatherMap</span>
+                        <span class="badge badge-empty" id="badge_openweathermap_api_key">○ Не настроен</span>
+                    </div>
+                    <div class="key-input-row">
+                        <input type="text" id="openweathermap_api_key" placeholder="API Key..." autocomplete="off">
+                        <button type="button" class="btn-delete" id="btn_del_openweathermap_api_key" disabled>Удалить</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Карточка: QR-код для настройки со смартфона -->
+            <div class="card">
+                <div class="card-title">
+                    <span>📱 Настройка со смартфона (QR-код)</span>
+                </div>
+                <div class="qr-section">
+                    <div style="font-size:0.9rem; color:#bbb;">
+                        Отсканируйте камерой телефона, чтобы ввести ключи или передать GPS прямо со смартфона:
+                    </div>
+                    <div class="qr-wrap" id="settings_qr_box"></div>
+                    <div class="qr-url" id="settings_qr_url"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Нижняя панель действий -->
+    <div style="margin-top:10px;">
+        <button type="button" class="btn-action btn-primary" id="btn_save">💾 Сохранить настройки</button>
+        <div style="display:flex; gap:12px; margin-top:12px;">
+            <button type="button" class="btn-action btn-secondary" id="btn_reload" style="flex:1;">🔄 Обновить экран информера</button>
+            <a href="/" class="btn-action btn-secondary" style="flex:1; text-align:center;">← Вернуться к информеру</a>
+        </div>
+    </div>
+</div>
+
+<script src="qrcode.min.js"></script>
+<script>
+var currentCfg = {};
+var initialKeys = {};
+var isDirty = false;
+
+function showStatus(text, type, duration) {
+    var el = document.getElementById("status_msg");
+    if (!el) return;
+    el.innerText = text;
+    el.className = (type === "ok") ? "msg-ok" : "msg-err";
+    el.style.display = "block";
+    if (duration) {
+        setTimeout(function() { el.style.display = "none"; }, duration);
+    }
+}
+
+function setDirty(val) {
+    isDirty = !!val;
+    var btn = document.getElementById("btn_save");
+    if (!btn) return;
+    if (isDirty) {
+        btn.className = "btn-action btn-primary dirty";
+        btn.innerText = "💾 Сохранить изменения (есть несохранённые)";
+    } else {
+        btn.className = "btn-action btn-primary";
+        btn.innerText = "💾 Сохранить настройки";
+    }
+}
+
+function updateKeyUI(keyName, val) {
+    var input = document.getElementById(keyName);
+    var badge = document.getElementById("badge_" + keyName);
+    var btnDel = document.getElementById("btn_del_" + keyName);
+    var hasKey = (val && String(val).trim() !== "" && String(val).indexOf("xxxx") === -1);
+
+    if (badge) {
+        if (hasKey) {
+            badge.className = "badge badge-ok";
+            var s = String(val).trim();
+            badge.innerText = "● Настроен (" + s.substring(0, 4) + "••••" + s.substring(Math.max(4, s.length - 4)) + ")";
+        } else {
+            badge.className = "badge badge-empty";
+            badge.innerText = "○ Не настроен";
+        }
+    }
+    if (btnDel) {
+        btnDel.disabled = !hasKey;
+    }
+    if (input) {
+        input.value = hasKey ? val : "";
+    }
+}
+
+function wireKeyHandlers(keyName) {
+    var input = document.getElementById(keyName);
+    var btnDel = document.getElementById("btn_del_" + keyName);
+    if (input) {
+        input.addEventListener("input", function() {
+            var v = input.value.trim();
+            if (v && v.indexOf("•") === -1 && v.indexOf("*") === -1) {
+                currentCfg[keyName] = v;
+                if (btnDel) btnDel.disabled = false;
+            }
+            setDirty(true);
+        });
+    }
+    if (btnDel) {
+        btnDel.addEventListener("click", function() {
+            if (input) input.value = "";
+            currentCfg[keyName] = "";
+            updateKeyUI(keyName, "");
+            setDirty(true);
+            showStatus("Ключ " + keyName + " очищен. Нажмите «Сохранить», чтобы применить.", "ok", 3000);
+        });
+    }
+}
+
+// Загрузка настроек
+function loadSettings() {
+    var endpoint = (window.location.pathname.indexOf("api") !== -1) ? "/api/config" : "/api/settings";
+    fetch(endpoint)
+        .then(function(r) { return r.json(); })
+        .then(function(c) {
+            currentCfg = c || {};
+            initialKeys = {
+                api: c.api || "",
+                gismeteo_api_key: c.gismeteo_api_key || "",
+                foreca_api_key: c.foreca_api_key || "",
+                openweathermap_api_key: c.openweathermap_api_key || ""
+            };
+
+            if (c.lat != null) document.getElementById("lat").value = c.lat;
+            if (c.lon != null) document.getElementById("lon").value = c.lon;
+            if (c.city_name) document.getElementById("city_name").value = c.city_name;
+            if (c.station_altitude != null) document.getElementById("station_altitude").value = c.station_altitude;
+            if (c.server_url) document.getElementById("server_url").value = c.server_url;
+            if (c.primary_source) document.getElementById("primary_source").value = c.primary_source;
+
+            var updSec = c.update_interval_sec || c.timeout || 300;
+            var dirSec = c.direct_update_interval_sec || 1800;
+            document.getElementById("update_interval_sec").value = updSec;
+            document.getElementById("direct_update_interval_sec").value = dirSec;
+
+            updateKeyUI("api", c.api);
+            updateKeyUI("gismeteo_api_key", c.gismeteo_api_key);
+            updateKeyUI("foreca_api_key", c.foreca_api_key);
+            updateKeyUI("openweathermap_api_key", c.openweathermap_api_key);
+
+            setDirty(false);
+            renderSettingsQR();
+        })
+        .catch(function(err) {
+            showStatus("Ошибка загрузки настроек: " + err, "err", 4000);
+            renderSettingsQR();
+        });
+}
+
+function renderSettingsQR() {
+    var qrBox = document.getElementById("settings_qr_box");
+    var qrUrlText = document.getElementById("settings_qr_url");
+    if (!qrBox) return;
+    qrBox.innerHTML = "";
+
+    var loc = window.location;
+    var host = loc.hostname || "127.0.0.1";
+    var port = loc.port || "8080";
+    var setupUrl = "http://" + host + ":" + port + "/setup";
+    if (loc.pathname && loc.pathname.indexOf("setup") !== -1) {
+        setupUrl = loc.href;
+    }
+    if (qrUrlText) qrUrlText.innerText = setupUrl;
+
+    if (typeof QRCode !== "undefined") {
+        try {
+            new QRCode(qrBox, {
+                text: setupUrl,
+                width: 140,
+                height: 140,
+                colorDark: "#000000",
+                colorLight: "#ffffff",
+                correctLevel: QRCode.CorrectLevel.M
+            });
+        } catch (e) {
+            console.log("QRCode error:", e);
+        }
+    }
+}
+
+// GPS кнопка
+document.getElementById("btn_gps").addEventListener("click", function() {
+    if (!navigator.geolocation) {
+        showStatus("Геолокация недоступна в этом браузере", "err", 3000);
+        return;
+    }
+    showStatus("Определяю координаты по GPS...", "ok");
+    navigator.geolocation.getCurrentPosition(function(pos) {
+        var la = parseFloat(pos.coords.latitude.toFixed(4));
+        var lo = parseFloat(pos.coords.longitude.toFixed(4));
+        document.getElementById("lat").value = la;
+        document.getElementById("lon").value = lo;
+        currentCfg.lat = la;
+        currentCfg.lon = lo;
+        setDirty(true);
+        showStatus("GPS координаты получены: " + la + ", " + lo, "ok", 3000);
+    }, function(err) {
+        showStatus("Ошибка GPS: " + (err.message || err.code), "err", 4000);
+    }, { timeout: 10000 });
+});
+
+// Кнопка автоопределения города
+document.getElementById("btn_detect_city").addEventListener("click", function() {
+    var la = document.getElementById("lat").value;
+    var lo = document.getElementById("lon").value;
+    if (!la || !lo) {
+        showStatus("Сначала укажите широту и долготу", "err", 3000);
+        return;
+    }
+    showStatus("Определяю город по координатам...", "ok");
+    var url = "https://nominatim.openstreetmap.org/reverse?format=json&lat=" + la + "&lon=" + lo + "&accept-language=ru";
+    fetch(url)
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data && data.address) {
+                var city = data.address.city || data.address.town || data.address.village || data.address.state || "";
+                if (city) {
+                    document.getElementById("city_name").value = city;
+                    currentCfg.city_name = city;
+                    setDirty(true);
+                    showStatus("Город определен: " + city, "ok", 3000);
+                }
+            }
+        })
+        .catch(function(e) {
+            showStatus("Не удалось определить город онлайн", "err", 3000);
+        });
+});
+
+// Сохранение настроек
+document.getElementById("btn_save").addEventListener("click", function() {
+    var btn = this;
+    btn.disabled = true;
+    btn.innerText = "Сохранение...";
+
+    var payload = {
+        lat: parseFloat(document.getElementById("lat").value) || currentCfg.lat || 56.3177,
+        lon: parseFloat(document.getElementById("lon").value) || currentCfg.lon || 43.9993,
+        city_name: document.getElementById("city_name").value.trim() || currentCfg.city_name || "",
+        station_altitude: parseFloat(document.getElementById("station_altitude").value) || currentCfg.station_altitude || 160.0,
+        server_url: document.getElementById("server_url").value.trim(),
+        primary_source: document.getElementById("primary_source").value,
+        update_interval_sec: parseInt(document.getElementById("update_interval_sec").value, 10) || 300,
+        direct_update_interval_sec: parseInt(document.getElementById("direct_update_interval_sec").value, 10) || 1800
+    };
+
+    var keyFields = ["api", "gismeteo_api_key", "foreca_api_key", "openweathermap_api_key"];
+    for (var i = 0; i < keyFields.length; i++) {
+        var kf = keyFields[i];
+        var inpVal = document.getElementById(kf).value.trim();
+        if (inpVal.indexOf("•") !== -1 || inpVal.indexOf("*") !== -1) {
+            // Маскированное значение не трогаем — сервер сохранит исходный ключ
+        } else {
+            payload[kf] = inpVal;
+        }
+    }
+
+    var saveUrl = (window.location.pathname.indexOf("config") !== -1) ? "/api/config" : "/api/settings";
+    fetch(saveUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json; charset=utf-8" },
+        body: JSON.stringify(payload)
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(res) {
+        btn.disabled = false;
+        if (res.status === "saved" || res.status === "ok") {
+            setDirty(false);
+            showStatus("Настройки успешно сохранены! Экран информера обновлен.", "ok", 4000);
+            loadSettings();
+        } else {
+            showStatus("Ошибка: " + (res.error || "Не удалось сохранить"), "err", 4000);
+        }
+    })
+    .catch(function(e) {
+        btn.disabled = false;
+        showStatus("Ошибка сети: " + e, "err", 4000);
+    });
+});
+
+// Кнопка обновления экрана
+document.getElementById("btn_reload").addEventListener("click", function() {
+    fetch("/api/reload")
+        .then(function() { showStatus("Команда перезагрузки отправлена на экран", "ok", 2500); })
+        .catch(function(e) { showStatus("Не удалось перезагрузить экран: " + e, "err", 3000); });
+});
+
+// Отслеживание изменений на форме
+["lat", "lon", "city_name", "station_altitude", "server_url", "primary_source", "update_interval_sec", "direct_update_interval_sec"].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) {
+        el.addEventListener("input", function() { setDirty(true); });
+        el.addEventListener("change", function() { setDirty(true); });
+    }
+});
+
+wireKeyHandlers("api");
+wireKeyHandlers("gismeteo_api_key");
+wireKeyHandlers("foreca_api_key");
+wireKeyHandlers("openweathermap_api_key");
+
+loadSettings();
+</script>
+</body>
+</html>

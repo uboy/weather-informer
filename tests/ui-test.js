@@ -22,7 +22,7 @@ for (const el of ['temperature', 'feels', 'feels_label', 'min', 'max', 'min_date
     'wind', 'humidity', 'pressure', 'pressure_norm_zone', 'pressure_norm_mark', 'rise', 'set', 'duration_hour', 'duration_minute',
     'duration_left', 'status_bar', 'weather_menu', 'key_dialog', 'city_search_input',
     'forecast_icon_0', 'forecast_icon_1', 'forecast_wind_progress_0', 'forecast_wind_progress_1', 'moon',
-    'qr_modal', 'menu_qr_setup', 'qr_tablet', 'qr_server']) {
+    'qr_modal', 'menu_qr_setup', 'qr_tablet', 'qr_server', 'menu_top_back']) {
     check('элемент #' + el + ' существует', ids.includes(el));
 }
 

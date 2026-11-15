@@ -598,6 +598,19 @@ async function main() {
         })()`);
         check('QR modal: кнопка Закрыть скрывает окно', qrClosed);
 
+        // 5d: Menu top back button
+        const menuBackRes = await cdp.evaluate(`(() => {
+            const menu = document.getElementById('weather_menu');
+            const btn = document.getElementById('menu_btn');
+            if (btn) btn.click();
+            const opened = menu ? menu.classList.contains('menu_open') : false;
+            const backBtn = document.getElementById('menu_top_back');
+            if (backBtn) backBtn.click();
+            const closed = menu ? !menu.classList.contains('menu_open') : false;
+            return { opened: opened, closed: closed };
+        })()`);
+        check('Меню: кнопка ← Назад в шапке закрывает меню', menuBackRes.opened && menuBackRes.closed);
+
         // ==========================================
         // 6. Visual Screenshots
         // ==========================================

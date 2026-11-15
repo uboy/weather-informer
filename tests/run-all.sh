@@ -5,6 +5,7 @@ cd "$(dirname "$0")/.."
 echo "=== mirror sync check ==="
 cmp -s informer.html android/app/src/main/assets/informer.html || { echo "FAIL: android assets out of sync with informer.html"; exit 1; }
 cmp -s setup.html android/app/src/main/assets/setup.html || { echo "FAIL: android assets out of sync with setup.html"; exit 1; }
+cmp -s settings.html android/app/src/main/assets/settings.html || { echo "FAIL: android assets out of sync with settings.html"; exit 1; }
 cmp -s qrcode.min.js android/app/src/main/assets/qrcode.min.js || { echo "FAIL: android assets out of sync with qrcode.min.js"; exit 1; }
 echo "OK"
 echo "=== node icon-test ==="; node tests/icon-test.js | tail -1

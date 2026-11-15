@@ -127,8 +127,7 @@ public class ClientHandler implements Runnable {
 
         // 2. Страница настроек /settings и мобильный конфигуратор /setup
         if (path.equals("/settings")) {
-            String html = server.getSettingsHtml();
-            sendResponse(out, 200, "OK", "text/html; charset=utf-8", html.getBytes(StandardCharsets.UTF_8));
+            serveFile("settings.html", "text/html; charset=utf-8", out);
             return;
         }
         if (path.equals("/setup")) {
