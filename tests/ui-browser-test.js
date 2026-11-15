@@ -285,6 +285,10 @@ async function main() {
                 const pressTrend = document.getElementById('pressure_trend');
                 const pressVal = document.getElementById('pressure').innerText.trim();
                 const pressProg = document.getElementById('pressure_progress');
+                const fc0 = document.querySelector('.sector_forecast_wind_0');
+                const fc1 = document.querySelector('.sector_forecast_wind_1');
+                const now = document.getElementById('now');
+                const pt = document.getElementById('pressure_trend');
 
                 return {
                     sectorWindClass: sectorWind ? sectorWind.className : '',
@@ -295,7 +299,12 @@ async function main() {
                     pressTrendHtml: pressTrend ? pressTrend.innerHTML : '',
                     pressTrendVisible: pressTrend ? window.getComputedStyle(pressTrend).display !== 'none' : false,
                     pressVal,
-                    pressProgStyle: pressProg ? pressProg.getAttribute('style') : ''
+                    pressProgStyle: pressProg ? pressProg.getAttribute('style') : '',
+                    fc0Class: fc0 ? fc0.className : '',
+                    fc1Class: fc1 ? fc1.className : '',
+                    fc0Color: fc0 ? window.getComputedStyle(fc0.querySelector('span')).color : '',
+                    fc1Color: fc1 ? window.getComputedStyle(fc1.querySelector('span')).color : '',
+                    ptRightOverflow: (pt && now) ? Math.round(pt.getBoundingClientRect().right - now.getBoundingClientRect().right) : 0
                 };
             })()`);
         }
@@ -340,6 +349,8 @@ async function main() {
             mTrendUp.pressTrendHtml.includes('↑') && mTrendUp.pressTrendHtml.includes('+7'));
         check('Mode 6a: тренд давления рост (+7) → содержит интервал (12ч)',
             mTrendUp.pressTrendHtml.includes('(12ч)'));
+        check('Mode 6a: строка давления с интервалом (12ч) полностью внутри границ (overflow <= 0px)',
+            mTrendUp.ptRightOverflow <= 0, `overflow=${mTrendUp.ptRightOverflow}px`);
 
         const history4h = [
             { t: nowMs - 4 * 3600 * 1000, p: 748 }
@@ -349,18 +360,78 @@ async function main() {
             mTrendDown.pressTrendHtml.includes('↓') && mTrendDown.pressTrendHtml.includes('-3'));
         check('Mode 6b: тренд давления падение (-3) → содержит интервал (4ч)',
             mTrendDown.pressTrendHtml.includes('(4ч)'));
+        check('Mode 6b: строка давления с интервалом (4ч) полностью внутри границ',
+            mTrendDown.ptRightOverflow <= 0);
 
-        // Mode 7: Track styling invariant (no border, clean background)
+        // Mode 7: Forecast slots wind indication (evening & night)
+        const mForecastWind = await cdp.evaluate(`(async () => {
+            const partsToday = {
+                morning: { temp_avg: 10, wind_speed: 7 },
+                day: { temp_avg: 16, wind_speed: 7 },
+                evening: { temp_avg: 12, wind_speed: 7 },
+                night: { temp_avg: 8, wind_speed: 12 }
+            };
+            const partsTomorrow = {
+                morning: { temp_avg: 9, wind_speed: 12 },
+                day: { temp_avg: 15, wind_speed: 12 },
+                evening: { temp_avg: 11, wind_speed: 12 },
+                night: { temp_avg: 7, wind_speed: 12 }
+            };
+            render_weather({
+                fact: { temp: 15, wind_speed: 3, humidity: 60, pressure_mm: 745 },
+                forecasts: [{ parts: partsToday }, { parts: partsTomorrow }]
+            });
+            await new Promise(r => setTimeout(r, 350));
+            const fc0 = document.querySelector('.sector_forecast_wind_0');
+            const fc1 = document.querySelector('.sector_forecast_wind_1');
+            return {
+                fc0Class: fc0 ? fc0.className : '',
+                fc1Class: fc1 ? fc1.className : '',
+                fc0Color: fc0 ? window.getComputedStyle(fc0.querySelector('span')).color : '',
+                fc1Color: fc1 ? window.getComputedStyle(fc1.querySelector('span')).color : ''
+            };
+        })()`);
+
+        check('Mode 7a: прогноз слот 0 (7 м/с) → класс wind_fresh (#ffd600)',
+            mForecastWind.fc0Class.includes('wind_fresh') && mForecastWind.fc0Color === 'rgb(255, 214, 0)');
+        check('Mode 7b: прогноз слот 1 (12 м/с) → класс wind_strong (#ff9100)',
+            mForecastWind.fc1Class.includes('wind_strong') && mForecastWind.fc1Color === 'rgb(255, 145, 0)');
+
+        // Mode 8: Wind Progress Bar Scale & Track Markers
+        const windBarMarks = await cdp.evaluate(`(() => {
+            const bar = document.querySelector('.wind_pressure_bar');
+            const mark5 = bar ? bar.querySelector('.wind_mark_5') : null;
+            const mark10 = bar ? bar.querySelector('.wind_mark_10') : null;
+            const comp = bar ? window.getComputedStyle(bar) : null;
+            const bRect = bar ? bar.getBoundingClientRect() : null;
+            const m5Rect = mark5 ? mark5.getBoundingClientRect() : null;
+            const m10Rect = mark10 ? mark10.getBoundingClientRect() : null;
+            return {
+                hasMark5: !!mark5,
+                hasMark10: !!mark10,
+                mark5Pct: (bRect && m5Rect) ? Math.round((m5Rect.left - bRect.left) / bRect.width * 100) : 0,
+                mark10Pct: (bRect && m10Rect) ? Math.round((m10Rect.left - bRect.left) / bRect.width * 100) : 0,
+                hasTrackShadow: comp ? comp.boxShadow.includes('rgba') : false,
+                bg: comp ? comp.backgroundColor : ''
+            };
+        })()`);
+        check('Mode 8a: шкала ветра имеет засечку свежего ветра 5 м/с (~33%)',
+            windBarMarks.hasMark5 && Math.abs(windBarMarks.mark5Pct - 33) <= 2);
+        check('Mode 8b: шкала ветра имеет засечку сильного ветра 10 м/с (~67%)',
+            windBarMarks.hasMark10 && Math.abs(windBarMarks.mark10Pct - 67) <= 2);
+        check('Mode 8c: трек шкалы имеет четкий контур box-shadow для контраста на TN экранах',
+            windBarMarks.hasTrackShadow);
+        check('Mode 8d: контрастный фон трека #3e424c (rgb(62, 66, 76))',
+            windBarMarks.bg === 'rgb(62, 66, 76)');
+
+        // Track styling invariant: no border, clean background
         const trackStyle = await cdp.evaluate(`(() => {
             const bar = document.querySelector('.wind_humidity_pressure_bar');
             const comp = window.getComputedStyle(bar);
             return {
-                bg: comp.backgroundColor,
                 borderTopWidth: comp.borderTopWidth
             };
         })()`);
-        check('Progress track background is #363942 (rgb(54, 57, 66))',
-            trackStyle.bg === 'rgb(54, 57, 66)');
         check('Progress track has no layout-shifting borders (0px)',
             trackStyle.borderTopWidth === '0px');
 

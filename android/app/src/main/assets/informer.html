@@ -245,6 +245,8 @@ body.night-dim #status_bar { opacity: 0.5; }
 						<span><span id="wind" class="value"></span> м/с</span>
 					</div>
 					<div class="wind_humidity_pressure_bar wind_pressure_bar sector_wind_progress">
+						<div class="wind_zone_mark wind_mark_5" title="Свежий ветер: от 5 м/с"></div>
+						<div class="wind_zone_mark wind_mark_10" title="Сильный ветер: от 10 м/с"></div>
 						<div id="wind_progress" class="value wind_humidity_progress" data-type="style"></div>
 					</div>
 					<div class="sector_humidity">
@@ -257,7 +259,7 @@ body.night-dim #status_bar { opacity: 0.5; }
 					</div>
 					<div class="sector_pressure">
 						<span id="presure_icon" class="presure_icon"></span>
-						<span><span id="pressure" class="value"></span> мм рт. ст. <span id="pressure_trend" class="pressure_trend"></span></span>
+						<span><span id="pressure" class="value"></span><span class="pressure_unit"> мм рт. ст.</span> <span id="pressure_trend" class="pressure_trend"></span></span>
 					</div>
 					<div class="wind_humidity_pressure_bar pressure_bar sector_pressure_progress">
 						<div class="pressure_deep_low_zone" title="Штормовой циклон (&lt;725 мм)"></div>
@@ -763,6 +765,22 @@ function update_wind_ui(w_val) {
 		$('.sector_wind').addClass('wind_strong');
 	} else if (num >= 5) {
 		$('.sector_wind').addClass('wind_fresh');
+	}
+}
+
+function update_forecast_wind_ui(slotIdx, w_val) {
+	var $el = $('.sector_forecast_wind_' + slotIdx);
+	$el.removeClass('wind_fresh wind_strong wind_storm');
+	if (w_val === undefined || w_val === null || w_val === '' || w_val === '—' || isNaN(w_val)) {
+		return;
+	}
+	var num = Number(w_val);
+	if (num >= 15) {
+		$el.addClass('wind_storm');
+	} else if (num >= 10) {
+		$el.addClass('wind_strong');
+	} else if (num >= 5) {
+		$el.addClass('wind_fresh');
 	}
 }
 
@@ -3175,6 +3193,8 @@ function render_weather(data) {
 	update_pressure_trend_ui(result.pressure);
 	update(result);
 	update_wind_ui(result.wind);
+	update_forecast_wind_ui(0, result.forecast_wind_0);
+	update_forecast_wind_ui(1, result.forecast_wind_1);
 	update_status_bar();
 }
 
@@ -3427,24 +3447,44 @@ body {
 .wind_humidity_pressure_bar {
 	position: relative;
 	height: 1.0vw;
-	background: #363942;
+	background: #3e424c;
+	box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
 	border-radius: 0.5vw;
 	margin: 1vw 0 3vw;
 	width: 100%;
 	overflow: visible;
 }
 .wind_bar, .wind_pressure_bar {
-	background: #363942;
+	background: #3e424c;
+	box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
 	position: relative;
 }
 .humidity_bar {
-	background: #363942;
+	background: #3e424c;
+	box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
 	position: relative;
 }
 .pressure_bar {
-	background: #363942;
+	background: #3e424c;
+	box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
 	position: relative;
 	overflow: visible;
+}
+.wind_zone_mark {
+	position: absolute;
+	top: -1px;
+	bottom: -1px;
+	width: 2px;
+	background: rgba(255, 255, 255, 0.45);
+	z-index: 2;
+	pointer-events: none;
+	border-radius: 1px;
+}
+.wind_mark_5 {
+	left: 33.3%;
+}
+.wind_mark_10 {
+	left: 66.7%;
 }
 .humidity_norm_zone {
 	position: absolute;
@@ -3523,16 +3563,22 @@ body {
 	border-right: 4px solid transparent;
 	border-top: 5px solid #ffffff;
 }
+.pressure_unit {
+	font-size: 0.52em;
+	opacity: 0.85;
+	margin-left: 0.25vw;
+}
 .pressure_trend {
-	font-size: 0.65em;
+	font-size: 0.52em;
 	vertical-align: baseline;
-	margin-left: 0.5vw;
+	margin-left: 0.4vw;
 	font-weight: 600;
 	display: inline-block;
+	white-space: nowrap;
 }
 .pressure_trend .trend_arrow {
 	font-size: 1.15em;
-	margin-right: 0.15em;
+	margin-right: 0.1em;
 	font-weight: bold;
 }
 .pressure_trend .trend_time {
@@ -3648,16 +3694,22 @@ body {
 	transition: transform 1s ease-in-out;
 	background-image: url("data:image/svg+xml,%3Csvg enable-background='new 0 0 11 11' preserveAspectRatio='xMinYMid' viewBox='0 0 11 11' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M5.5 1L9 10 5.5 7.796 2 10z' fill='%23fff'%3E%3C/path%3E%3C/svg%3E");
 }
-.sector_wind.wind_fresh span { color: #ffd600 !important; }
-.sector_wind.wind_fresh .wind_icon {
+.sector_wind.wind_fresh span,
+.forecast_wind_block.wind_fresh span { color: #ffd600 !important; }
+.sector_wind.wind_fresh .wind_icon,
+.forecast_wind_block.wind_fresh .wind_icon {
 	background-image: url("data:image/svg+xml,%3Csvg enable-background='new 0 0 11 11' preserveAspectRatio='xMinYMid' viewBox='0 0 11 11' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M5.5 1L9 10 5.5 7.796 2 10z' fill='%23ffd600'%3E%3C/path%3E%3C/svg%3E") !important;
 }
-.sector_wind.wind_strong span { color: #ff9100 !important; }
-.sector_wind.wind_strong .wind_icon {
+.sector_wind.wind_strong span,
+.forecast_wind_block.wind_strong span { color: #ff9100 !important; }
+.sector_wind.wind_strong .wind_icon,
+.forecast_wind_block.wind_strong .wind_icon {
 	background-image: url("data:image/svg+xml,%3Csvg enable-background='new 0 0 11 11' preserveAspectRatio='xMinYMid' viewBox='0 0 11 11' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M5.5 1L9 10 5.5 7.796 2 10z' fill='%23ff9100'%3E%3C/path%3E%3C/svg%3E") !important;
 }
-.sector_wind.wind_storm span { color: #ff1744 !important; }
-.sector_wind.wind_storm .wind_icon {
+.sector_wind.wind_storm span,
+.forecast_wind_block.wind_storm span { color: #ff1744 !important; }
+.sector_wind.wind_storm .wind_icon,
+.forecast_wind_block.wind_storm .wind_icon {
 	background-image: url("data:image/svg+xml,%3Csvg enable-background='new 0 0 11 11' preserveAspectRatio='xMinYMid' viewBox='0 0 11 11' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M5.5 1L9 10 5.5 7.796 2 10z' fill='%23ff1744'%3E%3C/path%3E%3C/svg%3E") !important;
 }
 .humidity_icon {
@@ -3976,7 +4028,7 @@ body {
 		position: static !important;
 		top: auto !important;
 		right: auto !important;
-		width: 38vw !important;
+		width: 44vw !important;
 		display: flex !important;
 		flex-direction: column !important;
 		justify-content: center !important;
@@ -3985,6 +4037,9 @@ body {
 		display: flex !important;
 		align-items: center !important;
 		white-space: nowrap !important;
+	}
+	#wind_humidity_pressure .sector_pressure {
+		overflow: visible !important;
 	}
 	#wind, #humidity, #pressure {
 		font-size: 3.4vw !important;
@@ -4259,7 +4314,10 @@ body {
 			height: 2.1vh !important;
 		}
 		#wind_humidity_pressure {
-			width: 34vw !important;
+			width: 40vw !important;
+		}
+		#wind_humidity_pressure .sector_pressure {
+			overflow: visible !important;
 		}
 		#wind, #humidity, #pressure {
 			font-size: 4.3vh !important;
