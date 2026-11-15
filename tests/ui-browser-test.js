@@ -109,9 +109,16 @@ async function main() {
     let cdp = null;
 
     try {
-        await delay(1200);
+        let versionRes = null;
+        for (let i = 0; i < 25; i++) {
+            await delay(200);
+            try {
+                const res = await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`);
+                if (res.ok) { versionRes = res; break; }
+            } catch (e) {}
+        }
+        if (!versionRes) throw new Error("Could not connect to Chromium on port " + CDP_PORT);
 
-        const versionRes = await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`);
         const version = await versionRes.json();
         console.log('Browser:', version.Browser);
 
@@ -610,6 +617,99 @@ async function main() {
             return { opened: opened, closed: closed };
         })()`);
         check('Меню: кнопка ← Назад в шапке закрывает меню', menuBackRes.opened && menuBackRes.closed);
+
+        // ==========================================
+        // 5e. Tomorrow Forecast Modal (#modal_tomorrow_forecast)
+        // ==========================================
+        console.log('\n[5e] Tomorrow Forecast Modal:');
+        const mtfRes = await cdp.evaluate(`(() => {
+            const mockData = {
+                src: "Yandex",
+                now: 1794770000,
+                fact: {
+                    temp: 2,
+                    feels_like: -1,
+                    condition: "cloudy",
+                    icon: "bkn_d",
+                    wind_speed: 3.5,
+                    wind_angle: 220,
+                    humidity: 78,
+                    pressure_mm: 750
+                },
+                forecasts: [
+                    { date: "2026-11-15", sunrise: "07:41", sunset: "15:55", parts: {} },
+                    {
+                        date: "2026-11-16",
+                        sunrise: "07:43",
+                        sunset: "15:53",
+                        parts: {
+                            night: { temp_min: 0, temp_max: 1, temp_avg: 0, feels_like: -4, icon: "bkn_n", condition: "cloudy", humidity: 82, wind_speed: 3.2, wind_angle: 230, pressure_mm: 751 },
+                            morning: { temp_min: 0, temp_max: 2, temp_avg: 1, feels_like: -3, icon: "ovc", condition: "overcast", humidity: 80, wind_speed: 3.8, wind_angle: 220, pressure_mm: 753 },
+                            day: { temp_min: 2, temp_max: 4, temp_avg: 3, feels_like: 0, icon: "ovc_ra", condition: "rain", humidity: 85, wind_speed: 4.5, wind_gust: 7.2, wind_angle: 210, prec_mm: 1.2, pressure_mm: 748 },
+                            evening: { temp_min: 1, temp_max: 2, temp_avg: 1, feels_like: -2, icon: "ovc", condition: "overcast", humidity: 83, wind_speed: 3.0, wind_angle: 200, pressure_mm: 749 }
+                        }
+                    }
+                ]
+            };
+            window.current_weather_data = mockData;
+
+            // 1. Клик по блоку прогноза
+            const forecastBlock = document.getElementById('forecast');
+            if (forecastBlock) forecastBlock.click();
+
+            const modal = document.getElementById('modal_tomorrow_forecast');
+            const isOpen = modal ? modal.classList.contains('mtf_open') : false;
+
+            const tNight = document.getElementById('mtf_temp_night') ? document.getElementById('mtf_temp_night').innerText : '';
+            const tDay = document.getElementById('mtf_temp_day') ? document.getElementById('mtf_temp_day').innerText : '';
+            const precDay = document.getElementById('mtf_prec_day') ? document.getElementById('mtf_prec_day').innerText : '';
+            const windDay = document.getElementById('mtf_wind_day') ? document.getElementById('mtf_wind_day').innerText : '';
+            const pressDay = document.getElementById('mtf_press_day') ? document.getElementById('mtf_press_day').innerText : '';
+            const pressNight = document.getElementById('mtf_press_night') ? document.getElementById('mtf_press_night').innerText : '';
+            const sunrise = document.getElementById('mtf_sunrise') ? document.getElementById('mtf_sunrise').innerText : '';
+            const sunset = document.getElementById('mtf_sunset') ? document.getElementById('mtf_sunset').innerText : '';
+            const duration = document.getElementById('mtf_day_duration') ? document.getElementById('mtf_day_duration').innerText : '';
+
+            // 2. Закрытие по клику на крестик
+            const closeBtn = document.getElementById('mtf_close_btn');
+            if (closeBtn) closeBtn.click();
+            const isClosedByBtn = modal ? !modal.classList.contains('mtf_open') : false;
+
+            // 3. Повторное открытие и закрытие по Escape
+            if (forecastBlock) forecastBlock.click();
+            const isReopened = modal ? modal.classList.contains('mtf_open') : false;
+            const escEvent = new KeyboardEvent('keydown', { keyCode: 27 });
+            document.dispatchEvent(escEvent);
+            const isClosedByEsc = modal ? !modal.classList.contains('mtf_open') : false;
+
+            return {
+                isOpen,
+                tNight,
+                tDay,
+                precDay,
+                windDay,
+                pressDay,
+                pressNight,
+                sunrise,
+                sunset,
+                duration,
+                isClosedByBtn,
+                isReopened,
+                isClosedByEsc
+            };
+        })()`);
+
+        check('MTF: клик по #forecast открывает модальное окно', mtfRes.isOpen);
+        check('MTF: температура ночи корректна (0°..+1°)', mtfRes.tNight === '0°..+1°');
+        check('MTF: температура дня корректна (+2°..+4°)', mtfRes.tDay === '+2°..+4°');
+        check('MTF: осадки дня отображаются (1.2 мм)', mtfRes.precDay === '1.2 мм');
+        check('MTF: ветер дня отображается с порывами (4.5 м/с (до 7.2))', mtfRes.windDay.includes('4.5 м/с') && mtfRes.windDay.includes('7.2'));
+        check('MTF: давление ночи показывает рост (751 мм ↗ +1)', mtfRes.pressNight.includes('751') && mtfRes.pressNight.includes('+1'));
+        check('MTF: давление дня показывает падение (748 мм ↘ -2)', mtfRes.pressDay.includes('748') && mtfRes.pressDay.includes('-2'));
+        check('MTF: восход и закат на завтра отображаются (07:43 / 15:53)', mtfRes.sunrise === '07:43' && mtfRes.sunset === '15:53');
+        check('MTF: долгота дня рассчитана (8 ч 10 мин)', mtfRes.duration === '8 ч 10 мин');
+        check('MTF: кнопка ✕ закрывает модальное окно', mtfRes.isClosedByBtn);
+        check('MTF: клавиша Esc закрывает модальное окно', mtfRes.isReopened && mtfRes.isClosedByEsc);
 
         // ==========================================
         // 6. Visual Screenshots

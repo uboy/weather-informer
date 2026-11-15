@@ -286,6 +286,229 @@ body.night-dim #status_bar { opacity: 0.5; }
 #qr_close_btn:active {
 	background: rgba(255, 255, 255, 0.3);
 }
+
+/* Модальное окно прогноза на завтра */
+#modal_tomorrow_forecast {
+	display: none;
+	z-index: 100000;
+	position: fixed;
+	top: 0;
+	left: 0;
+	width: 100vw;
+	height: 100vh;
+	background: rgba(0, 0, 0, 0.78);
+	box-sizing: border-box;
+	padding: 2vh 2vw;
+	opacity: 0;
+	transition: opacity 0.2s ease;
+	-webkit-user-select: none;
+	user-select: none;
+}
+#modal_tomorrow_forecast.mtf_open {
+	display: flex !important;
+	justify-content: center;
+	align-items: center;
+	opacity: 1;
+}
+.mtf_dialog {
+	background: #141720;
+	border: 0.15vw solid rgba(255, 255, 255, 0.22);
+	border-radius: 1.2vw;
+	width: 94vw;
+	max-width: 1120px;
+	max-height: 94vh;
+	box-sizing: border-box;
+	padding: 2vh 2vw;
+	color: #ffffff;
+	box-shadow: 0 1vw 3vw rgba(0, 0, 0, 0.95);
+	display: flex;
+	flex-direction: column;
+	position: relative;
+}
+.mtf_header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+	padding-bottom: 1.2vh;
+	margin-bottom: 1.4vh;
+}
+.mtf_header_title_wrap {
+	display: flex;
+	align-items: center;
+	gap: 1vw;
+}
+.mtf_header_icon {
+	font-size: 2.2vw;
+}
+.mtf_header_title {
+	font-size: 1.9vw;
+	font-weight: 700;
+	color: #4fc3f7;
+}
+.mtf_header_subtitle {
+	font-size: 1.15vw;
+	color: #b0bec5;
+	margin-top: 0.2vh;
+}
+.mtf_close_btn {
+	background: #232936;
+	color: #ffffff;
+	border: 1px solid rgba(255, 255, 255, 0.2);
+	border-radius: 0.6vw;
+	width: 2.8vw;
+	height: 2.8vw;
+	min-width: 36px;
+	min-height: 36px;
+	font-size: 1.5vw;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	cursor: pointer;
+	transition: all 0.15s;
+}
+.mtf_close_btn:hover, .mtf_close_btn:active {
+	background: #c62828;
+	border-color: #ef5350;
+}
+.mtf_grid {
+	display: flex;
+	flex-direction: row;
+	justify-content: space-between;
+	gap: 1vw;
+	margin-bottom: 1.4vh;
+}
+.mtf_card {
+	flex: 1;
+	background: #1c212c;
+	border: 1px solid rgba(255, 255, 255, 0.08);
+	border-radius: 0.8vw;
+	padding: 1.4vh 1vw;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	text-align: center;
+	box-sizing: border-box;
+}
+.mtf_part_name {
+	font-size: 1.35vw;
+	font-weight: 700;
+	color: #e0e0e0;
+	text-transform: capitalize;
+	margin-bottom: 0.2vh;
+}
+.mtf_part_hours {
+	font-size: 0.85vw;
+	color: #78909c;
+	margin-bottom: 0.8vh;
+}
+.mtf_part_icon {
+	width: 4.8vw;
+	height: 4.8vw;
+	min-width: 42px;
+	min-height: 42px;
+	background-size: contain;
+	background-repeat: no-repeat;
+	background-position: center;
+	margin-bottom: 0.4vh;
+}
+.mtf_part_cond {
+	font-size: 0.95vw;
+	color: #cfd8dc;
+	margin-bottom: 0.8vh;
+	min-height: 2.2em;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	line-height: 1.2;
+}
+.mtf_part_temp_wrap {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	margin-bottom: 1vh;
+	border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+	padding-bottom: 0.8vh;
+	width: 100%;
+}
+.mtf_part_temp {
+	font-size: 2.2vw;
+	font-weight: 700;
+	color: #ffffff;
+	line-height: 1.1;
+}
+.mtf_part_feels {
+	font-size: 0.9vw;
+	color: #90a4ae;
+	margin-top: 0.3vh;
+}
+.mtf_metrics_list {
+	width: 100%;
+	display: flex;
+	flex-direction: column;
+	gap: 0.6vh;
+	font-size: 0.9vw;
+	color: #b0bec5;
+	text-align: left;
+}
+.mtf_metric_row {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+}
+.mtf_metric_label {
+	color: #78909c;
+}
+.mtf_metric_val {
+	font-weight: 600;
+	color: #ffffff;
+}
+.mtf_wind_val {
+	display: flex;
+	align-items: center;
+	gap: 0.3vw;
+}
+.mtf_wind_arrow {
+	display: inline-block;
+	width: 1.1vw;
+	height: 1.1vw;
+	min-width: 12px;
+	min-height: 12px;
+	background-size: contain;
+	background-repeat: no-repeat;
+	background-position: center;
+}
+.mtf_pressure_badge {
+	font-size: 0.8vw;
+	padding: 0.1vh 0.4vw;
+	border-radius: 0.3vw;
+	margin-left: 0.2vw;
+	font-weight: bold;
+}
+.mtf_p_up { background: rgba(76, 175, 80, 0.25); color: #81c784; }
+.mtf_p_down { background: rgba(244, 67, 54, 0.25); color: #e57373; }
+.mtf_p_same { background: rgba(144, 164, 174, 0.18); color: #b0bec5; }
+
+.mtf_footer {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	border-top: 1px solid rgba(255, 255, 255, 0.12);
+	padding-top: 1vh;
+	font-size: 1.05vw;
+	color: #90a4ae;
+}
+.mtf_astro_group {
+	display: flex;
+	gap: 1.8vw;
+}
+.mtf_astro_group strong {
+	color: #ffffff;
+}
+.mtf_timer_hint {
+	font-size: 0.9vw;
+	color: #607d8b;
+}
 #key_dialog_title {
 	font-size: 2.4vw;
 	color: var(--tc, #fff);
@@ -1341,6 +1564,247 @@ function show_qr_onboarding() {
 	});
 }
 
+var mtf_timer = null;
+var mtf_seconds_left = 40;
+
+function reset_mtf_timer() {
+	mtf_seconds_left = 40;
+	var cdEl = document.getElementById("mtf_countdown");
+	if (cdEl) cdEl.innerText = String(mtf_seconds_left);
+}
+
+function hide_tomorrow_forecast_modal() {
+	if (mtf_timer) {
+		clearInterval(mtf_timer);
+		mtf_timer = null;
+	}
+	$("#modal_tomorrow_forecast").removeClass("mtf_open");
+}
+
+function show_tomorrow_forecast_modal() {
+	var modal = $("#modal_tomorrow_forecast");
+	if (!modal.length) return;
+
+	var fData = current_weather_data;
+	if (!fData) {
+		try {
+			var cachedStr = localStorage.getItem("weather_cache_data");
+			if (cachedStr) fData = JSON.parse(cachedStr);
+		} catch (e) {}
+	}
+
+	var tomorrow = null;
+	if (fData && fData.forecasts && fData.forecasts.length > 0) {
+		var d = new Date();
+		var padZ = function(n) { return (n < 10 ? '0' : '') + n; };
+		var todayStr = d.getFullYear() + '-' + padZ(d.getMonth() + 1) + '-' + padZ(d.getDate());
+		var todayIdx = -1;
+		for (var fi = 0; fi < fData.forecasts.length; fi++) {
+			if (fData.forecasts[fi].date === todayStr) {
+				todayIdx = fi;
+				break;
+			}
+		}
+		if (todayIdx !== -1 && fData.forecasts[todayIdx + 1]) {
+			tomorrow = fData.forecasts[todayIdx + 1];
+		} else if (fData.forecasts.length > 1) {
+			tomorrow = fData.forecasts[1];
+		} else {
+			tomorrow = fData.forecasts[0];
+		}
+	}
+
+	// 1. Форматирование даты на завтра
+	var tDate = new Date();
+	tDate.setDate(tDate.getDate() + 1);
+	var dayNames = ["Воскресенье", "Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота"];
+	var monthNames = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"];
+	var tTitle = dayNames[tDate.getDay()] + ', ' + tDate.getDate() + ' ' + monthNames[tDate.getMonth()] + ' ' + tDate.getFullYear();
+	$("#mtf_subtitle").text(tTitle);
+
+	// 2. Текущее фактическое давление
+	var factP = (fData && fData.fact && fData.fact.pressure_mm != null) ? fData.fact.pressure_mm : null;
+
+	var COND_RU = {
+		'clear': 'ясно',
+		'partly-cloudy': 'малооблачно',
+		'cloudy': 'облачно с проясн.',
+		'overcast': 'пасмурно',
+		'drizzle': 'морось',
+		'light-rain': 'небольшой дождь',
+		'rain': 'дождь',
+		'moderate-rain': 'умеренный дождь',
+		'heavy-rain': 'сильный дождь',
+		'continuous-heavy-rain': 'сильный дождь',
+		'showers': 'ливень',
+		'wet-snow': 'мокрый снег',
+		'light-snow': 'небольшой снег',
+		'snow': 'снег',
+		'snow-showers': 'снегопад',
+		'hail': 'град',
+		'thunderstorm': 'гроза',
+		'thunderstorm-with-rain': 'дождь с грозой',
+		'thunderstorm-with-hail': 'гроза с градом'
+	};
+
+	var partsMap = [
+		{ id: 'night', key: 'night' },
+		{ id: 'morning', key: 'morning' },
+		{ id: 'day', key: 'day' },
+		{ id: 'evening', key: 'evening' }
+	];
+
+	for (var pi = 0; pi < partsMap.length; pi++) {
+		var pItem = partsMap[pi];
+		var part = (tomorrow && tomorrow.parts && tomorrow.parts[pItem.key]) ? tomorrow.parts[pItem.key] : null;
+
+		var tempEl = $("#mtf_temp_" + pItem.id);
+		var feelsEl = $("#mtf_feels_" + pItem.id);
+		var iconEl = $("#mtf_icon_" + pItem.id);
+		var condEl = $("#mtf_cond_" + pItem.id);
+		var precEl = $("#mtf_prec_" + pItem.id);
+		var humEl = $("#mtf_hum_" + pItem.id);
+		var windEl = $("#mtf_wind_" + pItem.id);
+		var windArrowEl = $("#mtf_wind_arrow_" + pItem.id);
+		var pressEl = $("#mtf_press_" + pItem.id);
+
+		if (part) {
+			// Температура
+			var tMin = (part.temp_min != null) ? part.temp_min : part.temp_avg;
+			var tMax = (part.temp_max != null) ? part.temp_max : part.temp_avg;
+			var tempStr = "—";
+			if (tMin != null && tMax != null) {
+				if (tMin === tMax) {
+					tempStr = (tMin > 0 ? '+' : '') + tMin + '°';
+				} else {
+					tempStr = (tMin > 0 ? '+' : '') + tMin + '°..' + (tMax > 0 ? '+' : '') + tMax + '°';
+				}
+			} else if (part.temp_avg != null) {
+				tempStr = (part.temp_avg > 0 ? '+' : '') + part.temp_avg + '°';
+			}
+			tempEl.text(tempStr);
+
+			// Ощущается
+			var fLike = part.feels_like;
+			if (fLike != null) {
+				feelsEl.text('ощущ. ' + (fLike > 0 ? '+' : '') + fLike + '°');
+			} else {
+				feelsEl.text('');
+			}
+
+			// Иконка и состояние
+			if (part.icon) {
+				var normIcon = normalize_icon(part.icon);
+				iconEl.attr("class", "mtf_part_icon " + normIcon);
+			} else {
+				iconEl.attr("class", "mtf_part_icon");
+			}
+
+			var condText = part.condition ? (COND_RU[part.condition] || part.condition) : "—";
+			condEl.text(condText);
+
+			// Осадки
+			var precStr = "без осадков";
+			if (part.prec_mm != null && part.prec_mm > 0) {
+				precStr = part.prec_mm + " мм";
+			} else if (part.prec_prob != null && part.prec_prob > 0) {
+				precStr = part.prec_prob + "% вер.";
+			}
+			precEl.text(precStr);
+
+			// Влажность
+			humEl.text(part.humidity != null ? (part.humidity + "%") : "—");
+
+			// Ветер
+			var wSpeed = (part.wind_speed != null) ? part.wind_speed : "—";
+			var wStr = wSpeed + " м/с";
+			if (part.wind_gust != null && part.wind_gust > 0) {
+				wStr += " (до " + part.wind_gust + ")";
+			}
+			windEl.text(wStr);
+
+			if (part.wind_angle != null) {
+				windArrowEl.attr("style", "transform: rotate(" + (part.wind_angle - 180) + "deg); display: inline-block;");
+			} else {
+				windArrowEl.attr("style", "display: none;");
+			}
+
+			// Давление и динамика
+			var pVal = part.pressure_mm;
+			if (pVal == null && part.pressure_pa != null) {
+				pVal = Math.round(part.pressure_pa * 0.750062);
+			}
+			if (pVal == null && factP != null) {
+				pVal = factP;
+			}
+
+			if (pVal != null) {
+				var diffHtml = "";
+				if (factP != null) {
+					var diff = pVal - factP;
+					if (diff >= 1) {
+						diffHtml = ' <span class="mtf_pressure_badge mtf_p_up">↗ +' + diff + '</span>';
+					} else if (diff <= -1) {
+						diffHtml = ' <span class="mtf_pressure_badge mtf_p_down">↘ ' + diff + '</span>';
+					} else {
+						diffHtml = ' <span class="mtf_pressure_badge mtf_p_same">→ 0</span>';
+					}
+				}
+				pressEl.html(pVal + ' мм' + diffHtml);
+			} else {
+				pressEl.text("—");
+			}
+		} else {
+			tempEl.text("—");
+			feelsEl.text("");
+			iconEl.attr("class", "mtf_part_icon");
+			condEl.text("нет данных");
+			precEl.text("—");
+			humEl.text("—");
+			windEl.text("—");
+			windArrowEl.attr("style", "display: none;");
+			pressEl.text("—");
+		}
+	}
+
+	// 3. Астрономия
+	var sunrise = (tomorrow && tomorrow.sunrise) ? tomorrow.sunrise : "—";
+	var sunset = (tomorrow && tomorrow.sunset) ? tomorrow.sunset : "—";
+	$("#mtf_sunrise").text(sunrise);
+	$("#mtf_sunset").text(sunset);
+
+	var dayDur = "—";
+	if (sunrise !== "—" && sunset !== "—") {
+		var sParts = sunrise.split(":");
+		var eParts = sunset.split(":");
+		if (sParts.length === 2 && eParts.length === 2) {
+			var sMin = parseInt(sParts[0], 10) * 60 + parseInt(sParts[1], 10);
+			var eMin = parseInt(eParts[0], 10) * 60 + parseInt(eParts[1], 10);
+			var diffMin = eMin - sMin;
+			if (diffMin > 0) {
+				var dh = Math.floor(diffMin / 60);
+				var dm = diffMin % 60;
+				dayDur = dh + " ч " + dm + " мин";
+			}
+		}
+	}
+	$("#mtf_day_duration").text(dayDur);
+
+	// 4. Таймер автозакрытия на 40 секунд
+	reset_mtf_timer();
+	if (mtf_timer) clearInterval(mtf_timer);
+	mtf_timer = setInterval(function() {
+		mtf_seconds_left--;
+		var cd = document.getElementById("mtf_countdown");
+		if (cd) cd.innerText = String(mtf_seconds_left);
+		if (mtf_seconds_left <= 0) {
+			hide_tomorrow_forecast_modal();
+		}
+	}, 1000);
+
+	modal.addClass("mtf_open");
+}
+
 function init_menu() {
 	var menu = $("#weather_menu");
 	function render_src() {
@@ -1403,6 +1867,30 @@ function init_menu() {
 	$("#qr_modal").on("click", function(e) {
 		if (e.target === this) {
 			$(this).removeClass("qr_modal_open");
+		}
+	});
+
+	// Клик по блоку прогноза — открытие прогноза на завтра
+	$("#forecast").on("click", function(e) {
+		e.stopPropagation();
+		show_tomorrow_forecast_modal();
+	});
+	$("#mtf_close_btn").on("click", function(e) {
+		e.stopPropagation();
+		hide_tomorrow_forecast_modal();
+	});
+	$("#modal_tomorrow_forecast").on("click", function(e) {
+		if (e.target === this) {
+			hide_tomorrow_forecast_modal();
+		}
+	});
+	$("#mtf_dialog").on("click", function() {
+		reset_mtf_timer();
+	});
+	$(document).on("keydown", function(e) {
+		if (e.keyCode === 27) { // Escape
+			hide_tomorrow_forecast_modal();
+			$("#qr_modal").removeClass("qr_modal_open");
 		}
 	});
 	$(".menu_src").on("click", function(e) {
@@ -3705,6 +4193,8 @@ body {
 }
 #forecast {
 	display: flex;
+	cursor: pointer;
+	-webkit-tap-highlight-color: rgba(255, 255, 255, 0.1);
 }
 
 #forecast .wind_icon {
@@ -4976,6 +5466,154 @@ body {
 		</div>
 		<div>
 			<div id="qr_close_btn">← Назад (Закрыть)</div>
+		</div>
+	</div>
+	<div id="modal_tomorrow_forecast">
+		<div class="mtf_dialog" id="mtf_dialog">
+			<div class="mtf_header">
+				<div class="mtf_header_title_wrap">
+					<span class="mtf_header_icon">📅</span>
+					<div>
+						<div class="mtf_header_title" id="mtf_title">Прогноз на завтра</div>
+						<div class="mtf_header_subtitle" id="mtf_subtitle">—</div>
+					</div>
+				</div>
+				<div class="mtf_close_btn" id="mtf_close_btn" title="Закрыть (Esc)">✕</div>
+			</div>
+			<div class="mtf_grid" id="mtf_grid">
+				<div class="mtf_card" id="mtf_card_night">
+					<div class="mtf_part_name">Ночь</div>
+					<div class="mtf_part_hours">00:00 – 06:00</div>
+					<div class="mtf_part_icon" id="mtf_icon_night"></div>
+					<div class="mtf_part_cond" id="mtf_cond_night">—</div>
+					<div class="mtf_part_temp_wrap">
+						<div class="mtf_part_temp" id="mtf_temp_night">—</div>
+						<div class="mtf_part_feels" id="mtf_feels_night"></div>
+					</div>
+					<div class="mtf_metrics_list">
+						<div class="mtf_metric_row">
+							<span class="mtf_metric_label">Осадки:</span>
+							<span class="mtf_metric_val" id="mtf_prec_night">—</span>
+						</div>
+						<div class="mtf_metric_row">
+							<span class="mtf_metric_label">Влажность:</span>
+							<span class="mtf_metric_val" id="mtf_hum_night">—</span>
+						</div>
+						<div class="mtf_metric_row">
+							<span class="mtf_metric_label">Ветер:</span>
+							<span class="mtf_metric_val mtf_wind_val">
+								<span class="mtf_wind_arrow wind_icon" id="mtf_wind_arrow_night"></span>
+								<span id="mtf_wind_night">—</span>
+							</span>
+						</div>
+						<div class="mtf_metric_row">
+							<span class="mtf_metric_label">Давление:</span>
+							<span class="mtf_metric_val" id="mtf_press_night">—</span>
+						</div>
+					</div>
+				</div>
+				<div class="mtf_card" id="mtf_card_morning">
+					<div class="mtf_part_name">Утро</div>
+					<div class="mtf_part_hours">06:00 – 12:00</div>
+					<div class="mtf_part_icon" id="mtf_icon_morning"></div>
+					<div class="mtf_part_cond" id="mtf_cond_morning">—</div>
+					<div class="mtf_part_temp_wrap">
+						<div class="mtf_part_temp" id="mtf_temp_morning">—</div>
+						<div class="mtf_part_feels" id="mtf_feels_morning"></div>
+					</div>
+					<div class="mtf_metrics_list">
+						<div class="mtf_metric_row">
+							<span class="mtf_metric_label">Осадки:</span>
+							<span class="mtf_metric_val" id="mtf_prec_morning">—</span>
+						</div>
+						<div class="mtf_metric_row">
+							<span class="mtf_metric_label">Влажность:</span>
+							<span class="mtf_metric_val" id="mtf_hum_morning">—</span>
+						</div>
+						<div class="mtf_metric_row">
+							<span class="mtf_metric_label">Ветер:</span>
+							<span class="mtf_metric_val mtf_wind_val">
+								<span class="mtf_wind_arrow wind_icon" id="mtf_wind_arrow_morning"></span>
+								<span id="mtf_wind_morning">—</span>
+							</span>
+						</div>
+						<div class="mtf_metric_row">
+							<span class="mtf_metric_label">Давление:</span>
+							<span class="mtf_metric_val" id="mtf_press_morning">—</span>
+						</div>
+					</div>
+				</div>
+				<div class="mtf_card" id="mtf_card_day">
+					<div class="mtf_part_name">День</div>
+					<div class="mtf_part_hours">12:00 – 18:00</div>
+					<div class="mtf_part_icon" id="mtf_icon_day"></div>
+					<div class="mtf_part_cond" id="mtf_cond_day">—</div>
+					<div class="mtf_part_temp_wrap">
+						<div class="mtf_part_temp" id="mtf_temp_day">—</div>
+						<div class="mtf_part_feels" id="mtf_feels_day"></div>
+					</div>
+					<div class="mtf_metrics_list">
+						<div class="mtf_metric_row">
+							<span class="mtf_metric_label">Осадки:</span>
+							<span class="mtf_metric_val" id="mtf_prec_day">—</span>
+						</div>
+						<div class="mtf_metric_row">
+							<span class="mtf_metric_label">Влажность:</span>
+							<span class="mtf_metric_val" id="mtf_hum_day">—</span>
+						</div>
+						<div class="mtf_metric_row">
+							<span class="mtf_metric_label">Ветер:</span>
+							<span class="mtf_metric_val mtf_wind_val">
+								<span class="mtf_wind_arrow wind_icon" id="mtf_wind_arrow_day"></span>
+								<span id="mtf_wind_day">—</span>
+							</span>
+						</div>
+						<div class="mtf_metric_row">
+							<span class="mtf_metric_label">Давление:</span>
+							<span class="mtf_metric_val" id="mtf_press_day">—</span>
+						</div>
+					</div>
+				</div>
+				<div class="mtf_card" id="mtf_card_evening">
+					<div class="mtf_part_name">Вечер</div>
+					<div class="mtf_part_hours">18:00 – 24:00</div>
+					<div class="mtf_part_icon" id="mtf_icon_evening"></div>
+					<div class="mtf_part_cond" id="mtf_cond_evening">—</div>
+					<div class="mtf_part_temp_wrap">
+						<div class="mtf_part_temp" id="mtf_temp_evening">—</div>
+						<div class="mtf_part_feels" id="mtf_feels_evening"></div>
+					</div>
+					<div class="mtf_metrics_list">
+						<div class="mtf_metric_row">
+							<span class="mtf_metric_label">Осадки:</span>
+							<span class="mtf_metric_val" id="mtf_prec_evening">—</span>
+						</div>
+						<div class="mtf_metric_row">
+							<span class="mtf_metric_label">Влажность:</span>
+							<span class="mtf_metric_val" id="mtf_hum_evening">—</span>
+						</div>
+						<div class="mtf_metric_row">
+							<span class="mtf_metric_label">Ветер:</span>
+							<span class="mtf_metric_val mtf_wind_val">
+								<span class="mtf_wind_arrow wind_icon" id="mtf_wind_arrow_evening"></span>
+								<span id="mtf_wind_evening">—</span>
+							</span>
+						</div>
+						<div class="mtf_metric_row">
+							<span class="mtf_metric_label">Давление:</span>
+							<span class="mtf_metric_val" id="mtf_press_evening">—</span>
+						</div>
+					</div>
+				</div>
+			</div>
+			<div class="mtf_footer">
+				<div class="mtf_astro_group">
+					<span>🌅 Восход: <strong id="mtf_sunrise">—</strong></span>
+					<span>🌇 Закат: <strong id="mtf_sunset">—</strong></span>
+					<span>⏱️ Долгота дня: <strong id="mtf_day_duration">—</strong></span>
+				</div>
+				<div class="mtf_timer_hint">Автозакрытие через <span id="mtf_countdown">40</span>с</div>
+			</div>
 		</div>
 	</div>
 	<div id="status_bar"></div>

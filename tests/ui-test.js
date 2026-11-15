@@ -502,5 +502,37 @@ check('fallback: metered_chain защищен is_direct_allowed_for(cand.id)',
 check('informer.html не содержит фоллбэка на info.def_pressure_mm в result.pressure',
     !html.includes("result.pressure = data.info.def_pressure_mm"));
 
+// ==========================================
+// 9. Модальное окно детального прогноза на завтра (#modal_tomorrow_forecast)
+// ==========================================
+check('HTML содержит #modal_tomorrow_forecast', html.includes('id="modal_tomorrow_forecast"'));
+check('HTML содержит #mtf_close_btn', html.includes('id="mtf_close_btn"'));
+check('HTML содержит #mtf_grid', html.includes('id="mtf_grid"'));
+check('HTML содержит 4 карточки: ночь, утро, день, вечер',
+    html.includes('id="mtf_card_night"') &&
+    html.includes('id="mtf_card_morning"') &&
+    html.includes('id="mtf_card_day"') &&
+    html.includes('id="mtf_card_evening"'));
+check('Карточки содержат блоки давления: mtf_press_*',
+    html.includes('id="mtf_press_night"') &&
+    html.includes('id="mtf_press_morning"') &&
+    html.includes('id="mtf_press_day"') &&
+    html.includes('id="mtf_press_evening"'));
+check('Карточки содержат блоки ветра со стрелкой: mtf_wind_arrow_*',
+    html.includes('id="mtf_wind_arrow_night"') &&
+    html.includes('id="mtf_wind_arrow_day"'));
+check('Подвал содержит восход, закат, долготу дня и обратный отсчет таймера',
+    html.includes('id="mtf_sunrise"') &&
+    html.includes('id="mtf_sunset"') &&
+    html.includes('id="mtf_day_duration"') &&
+    html.includes('id="mtf_countdown"'));
+check('CSS: #forecast имеет cursor: pointer',
+    /#forecast\s*\{[^}]*cursor:\s*pointer/i.test(html));
+check('JS содержит функции show_tomorrow_forecast_modal и hide_tomorrow_forecast_modal',
+    html.includes('function show_tomorrow_forecast_modal') &&
+    html.includes('function hide_tomorrow_forecast_modal'));
+check('JS содержит привязку клика #forecast к show_tomorrow_forecast_modal',
+    /\$\(["']#forecast["']\)\.on\(["']click["'],\s*function/.test(html));
+
 console.log('\nИТОГ: pass=' + pass + ' fail=' + fail);
 process.exit(fail ? 1 : 0);
