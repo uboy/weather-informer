@@ -189,6 +189,23 @@ class TestPressureHoldAndAntiFake(unittest.TestCase):
                 self.assertLess(p, 775)
                 self.assertGreater(p, 760)
 
+    def test_wttr_reduces_mslp_by_station_altitude(self):
+        """wttr.in MSLP pressure редуцируется к высоте станции (не выдает сырые 763 при факте 746)."""
+        wttr_resp = json.dumps({
+            "current_condition": [{"temp_C": "3", "humidity": "80", "pressure": "1017", "windspeedKmph": "10", "winddirDegree": "180", "weatherCode": "116"}],
+            "weather": []
+        })
+        cfg = {"station_altitude": 160.0}
+        with patch("caching_server.load_config", return_value=cfg):
+            with patch("caching_server.fetch_url_via", return_value=wttr_resp):
+                data = caching_server.fetch_from_wttr(56.32, 44.0)
+                p = data["fact"]["pressure_mm"]
+                # Без редукции 1017 * 0.750062 = 763 mmHg.
+                # С редукцией на 160м: 1017 * (1 - 160/44330)^5.2559 = 997.9 hPa -> 748 mmHg
+                self.assertIsNotNone(p)
+                self.assertEqual(p, 748)
+                self.assertNotEqual(p, 763)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -9,6 +9,7 @@ var lon = 43.999303; //Долгота
 var base_lat = lat; // Координаты из конфига (город из меню накладывается поверх)
 var base_lon = lon;
 
+var HPA_TO_MMHG = 0.750062; // Коэффициент перевода гПа в мм рт. ст.
 var wind_max = 15; //Скорость ветра, максимум, м/с
 var pressure_min = 710; //Давление, минимум, мм рт ст
 var pressure_max = 770; //Давление, максимум, мм рт ст
@@ -452,6 +453,15 @@ function calc_barometric_norm(elev_m) {
 	return Math.round(760 * Math.pow(1 - (Number(elev_m) / 44330), 5.25588));
 }
 
+function mslp_to_station_pressure(mslp_hpa, elev_m) {
+	if (mslp_hpa === undefined || mslp_hpa === null || mslp_hpa === '' || isNaN(mslp_hpa)) {
+		return null;
+	}
+	var elev = (elev_m !== undefined && elev_m !== null && !isNaN(elev_m)) ? Number(elev_m) : 160;
+	var press_hpa = Number(mslp_hpa) * Math.pow(1 - (elev / 44330), 5.25588);
+	return Math.round(press_hpa * HPA_TO_MMHG);
+}
+
 function fetch_elevation_async(cur_lat, cur_lon) {
 	if (!cur_lat || !cur_lon) return;
 	var key = 'loc_elev_' + Math.round(Number(cur_lat) * 1000) + '_' + Math.round(Number(cur_lon) * 1000);
@@ -735,9 +745,25 @@ function update_pressure_trend_ui(p_val) {
 		sign = '';
 	}
 	var numStr = (Math.abs(delta) % 1 === 0) ? delta.toFixed(0) : delta.toFixed(1);
-	var text = '<span class="trend_arrow">' + arrow + '</span>' + sign + numStr;
+	var hoursStr = trend.hours ? ' (' + trend.hours + 'ч)' : '';
+	var text = '<span class="trend_arrow">' + arrow + '</span>' + sign + numStr + '<span class="trend_time">' + hoursStr + '</span>';
 	var tip = 'Динамика за ~' + trend.hours + ' ч: ' + (delta >= 0 ? '+' : '') + delta + ' мм рт. ст. (было ' + trend.past_p + ')';
 	$('#pressure_trend').html(text).css('color', color).attr('title', tip).show();
+}
+
+function update_wind_ui(w_val) {
+	$('.sector_wind').removeClass('wind_fresh wind_strong wind_storm');
+	if (w_val === undefined || w_val === null || w_val === '' || w_val === '—' || isNaN(w_val)) {
+		return;
+	}
+	var num = Number(w_val);
+	if (num >= 15) {
+		$('.sector_wind').addClass('wind_storm');
+	} else if (num >= 10) {
+		$('.sector_wind').addClass('wind_strong');
+	} else if (num >= 5) {
+		$('.sector_wind').addClass('wind_fresh');
+	}
 }
 
 function calc_wind_progress(w_val) {
@@ -755,7 +781,8 @@ function calc_wind_progress(w_val) {
 	} else if (num >= 5) {
 		color = '#ffd600';
 	}
-	return 'width: ' + pct + '%; background-color: ' + color + ';';
+	var displayPct = (num > 0 && pct < 5) ? 5 : pct;
+	return 'width: ' + displayPct + '%; background-color: ' + color + ';';
 }
 
 function calc_humidity_progress(h_val) {
@@ -826,7 +853,8 @@ function astro_sun(lat, lon, dateObj) {
 	var Pl = rad * 102.9372;
 	var L = M + C + Pl + Math.PI;
 	var Jtransit = Jstar + 0.0053 * Math.sin(M) - 0.0069 * Math.sin(2 * L);
-	var decl = Math.asin(Math.sin(Pl) * Math.sin(L));
+	var obliq = rad * 23.44; // наклон эклиптики Земли (~23.44°)
+	var decl = Math.asin(Math.sin(obliq) * Math.sin(L));
 	var cosw = (Math.sin(-0.833 * rad) - Math.sin(lat * rad) * Math.sin(decl)) / (Math.cos(lat * rad) * Math.cos(decl));
 	if (cosw > 1 || cosw < -1) return { sunrise: null, sunset: null }; // полярный день/ночь
 	var w = Math.acos(cosw) / rad;
@@ -1528,7 +1556,12 @@ var fetch_from_owm = function(on_success, on_error) {
 						wind_speed: (((it.wind || {}).speed != null) ? Math.round(it.wind.speed * 10) / 10 : null),
 						wind_angle: (((it.wind || {}).deg != null) ? Math.round(it.wind.deg) : null),
 						humidity: ((it.main || {}).humidity != null ? it.main.humidity : null),
-						pressure_mm: (((it.main || {}).pressure != null) ? Math.round(it.main.pressure * 0.750062) : null)
+						pressure_mm: (function(m) {
+							if (!m) return null;
+							if (m.grnd_level != null) return Math.round(m.grnd_level * HPA_TO_MMHG);
+							if (m.pressure != null) return mslp_to_station_pressure(m.pressure, 160);
+							return null;
+						})(it.main)
 					};
 				});
 				var byName = { morning: [], day: [], evening: [], night: [] };
@@ -1736,7 +1769,7 @@ var fetch_from_om_client = function(on_success, on_error) {
 						wind_speed: (cw.windspeed != null ? Math.round(cw.windspeed / 3.6 * 10) / 10 : null),
 						wind_angle: (cw.winddirection != null ? Math.round(cw.winddirection) : null),
 						humidity: (rh[hIdx] != null ? Math.round(rh[hIdx]) : null),
-						pressure_mm: (pr[hIdx] != null ? Math.round(pr[hIdx] * 0.750062) : null)
+						pressure_mm: (pr[hIdx] != null ? Math.round(pr[hIdx] * HPA_TO_MMHG) : null)
 					},
 					forecasts: [{ sunrise: sr, sunset: ss, moon_code: moonPhaseCode(), hours: hours_list, parts: parts }, { parts: parts2 }]
 				};
@@ -2175,7 +2208,7 @@ function fetch_from_wttr(on_success, on_error) {
 				var wind_angle = iv(cc.winddirDegree);
 				var humidity = iv(cc.humidity);
 				var p_hpa = iv(cc.pressure);
-				var pressure_mm = (p_hpa == null ? null : Math.round(p_hpa * 0.750062));
+				var pressure_mm = (p_hpa == null ? null : mslp_to_station_pressure(p_hpa, 160));
 
 				var hourNow = new Date().getHours();
 				var icon = get_wttr_icon(cc.weatherCode, (hourNow >= 8 && hourNow < 20));
@@ -2203,7 +2236,7 @@ function fetch_from_wttr(on_success, on_error) {
 							wind_speed: (function(w) { return w == null ? null : Math.round(w / 3.6 * 10) / 10; })(iv(b.windspeedKmph)),
 							wind_angle: iv(b.winddirDegree),
 							humidity: iv(b.humidity),
-							pressure_mm: (function(hp) { return hp == null ? null : Math.round(hp * 0.750062); })(iv(b.pressure))
+							pressure_mm: (function(hp) { return hp == null ? null : mslp_to_station_pressure(hp, 160); })(iv(b.pressure))
 						});
 					}
 
@@ -3142,6 +3175,7 @@ function render_weather(data) {
 	last_rendered_pressure = result.pressure;
 	update_pressure_trend_ui(result.pressure);
 	update(result);
+	update_wind_ui(result.wind);
 	update_status_bar();
 }
 
@@ -3394,22 +3428,21 @@ body {
 .wind_humidity_pressure_bar {
 	position: relative;
 	height: 1.0vw;
-	background: #2a2c33;
+	background: rgba(255, 255, 255, 0.12);
+	border: 1px solid rgba(255, 255, 255, 0.18);
+	box-sizing: border-box;
 	border-radius: 0.5vw;
 	margin: 1vw 0 3vw;
 	width: 100%;
 	overflow: visible;
 }
 .wind_bar {
-	background: #2a2c33;
 	position: relative;
 }
 .humidity_bar {
-	background: #2a2c33;
 	position: relative;
 }
 .pressure_bar {
-	background: #2a2c33;
 	position: relative;
 	overflow: visible;
 }
@@ -3501,6 +3534,12 @@ body {
 	font-size: 1.15em;
 	margin-right: 0.15em;
 	font-weight: bold;
+}
+.pressure_trend .trend_time {
+	font-size: 0.85em;
+	margin-left: 0.2em;
+	opacity: 0.85;
+	font-weight: 500;
 }
 .wind_humidity_progress, #wind_progress, #humidity_progress, #pressure_progress {
 	position: absolute;
@@ -3608,6 +3647,18 @@ body {
 .wind_icon {
 	transition: transform 1s ease-in-out;
 	background-image: url("data:image/svg+xml,%3Csvg enable-background='new 0 0 11 11' preserveAspectRatio='xMinYMid' viewBox='0 0 11 11' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M5.5 1L9 10 5.5 7.796 2 10z' fill='%23fff'%3E%3C/path%3E%3C/svg%3E");
+}
+.sector_wind.wind_fresh span { color: #ffd600 !important; }
+.sector_wind.wind_fresh .wind_icon {
+	background-image: url("data:image/svg+xml,%3Csvg enable-background='new 0 0 11 11' preserveAspectRatio='xMinYMid' viewBox='0 0 11 11' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M5.5 1L9 10 5.5 7.796 2 10z' fill='%23ffd600'%3E%3C/path%3E%3C/svg%3E') !important;
+}
+.sector_wind.wind_strong span { color: #ff9100 !important; }
+.sector_wind.wind_strong .wind_icon {
+	background-image: url("data:image/svg+xml,%3Csvg enable-background='new 0 0 11 11' preserveAspectRatio='xMinYMid' viewBox='0 0 11 11' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M5.5 1L9 10 5.5 7.796 2 10z' fill='%23ff9100'%3E%3C/path%3E%3C/svg%3E') !important;
+}
+.sector_wind.wind_storm span { color: #ff1744 !important; }
+.sector_wind.wind_storm .wind_icon {
+	background-image: url("data:image/svg+xml,%3Csvg enable-background='new 0 0 11 11' preserveAspectRatio='xMinYMid' viewBox='0 0 11 11' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M5.5 1L9 10 5.5 7.796 2 10z' fill='%23ff1744'%3E%3C/path%3E%3C/svg%3E') !important;
 }
 .humidity_icon {
 	background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg viewBox=%220 0 24 24%22 fill=%22none%22 xmlns=%22http://www.w3.org/2000/svg%22%3E %3Cg%3E %3Cpath fill-rule=%22evenodd%22 clip-rule=%22evenodd%22 d=%22M17.5487 8.0001C16.7829 6.74175 15.1271 4.67011 12.5637 1.75476C12.2645 1.41448 11.7342 1.41518 11.4359 1.75625C8.88065 4.67783 7.22597 6.74805 6.45489 7.99571C3.91532 12.1049 3.72409 15.9389 6.56528 18.751C9.63862 21.793 14.3621 21.792 17.4355 18.7512C20.2743 15.9425 20.0858 12.169 17.5487 8.0001ZM7.73087 8.78429C8.39019 7.71747 9.8183 5.91206 12.0019 3.39071C14.1889 5.90415 15.6153 7.70851 16.2673 8.77991C18.4829 12.4205 18.6344 15.4548 16.3805 17.6849C13.8915 20.1475 10.1092 20.1483 7.62047 17.685C5.36463 15.4522 5.51867 12.3638 7.73087 8.78429Z%22 fill=%22white%22/%3E %3Cpath d=%22M12.7366 17.2967C14.3588 16.7579 15.4749 15.2362 15.4749 13.5C15.4749 13.0858 15.1391 12.75 14.7249 12.75C14.3107 12.75 13.9749 13.0858 13.9749 13.5C13.9749 14.5852 13.277 15.5366 12.2638 15.8732C11.8707 16.0038 11.6579 16.4283 11.7884 16.8214C11.919 17.2145 12.3436 17.4273 12.7366 17.2967Z%22 fill=%22white%22/%3E %3C/g%3E %3C/svg%3E");
@@ -3950,11 +4001,15 @@ body {
 		height: 1.0vw !important;
 		border-radius: 0.5vw !important;
 		margin: 0.3vh 0 0.6vh !important;
+		border: 1px solid rgba(255, 255, 255, 0.18) !important;
+		box-sizing: border-box !important;
 	}
 	.wind_humidity_pressure_bar.pressure_bar {
 		height: 1.0vw !important;
 		border-radius: 0.5vw !important;
 		margin: 0.3vh 0 0.6vh !important;
+		border: 1px solid rgba(255, 255, 255, 0.18) !important;
+		box-sizing: border-box !important;
 	}
 	.wind_humidity_progress, #wind_progress, #humidity_progress, #pressure_progress {
 		height: 100% !important;
@@ -4224,11 +4279,15 @@ body {
 			height: 1.4vh !important;
 			border-radius: 0.7vh !important;
 			margin: 0.4vh 0 0.8vh !important;
+			border: 1px solid rgba(255, 255, 255, 0.18) !important;
+			box-sizing: border-box !important;
 		}
 		.wind_humidity_pressure_bar.pressure_bar {
 			height: 1.4vh !important;
 			border-radius: 0.7vh !important;
 			margin: 0.4vh 0 0.8vh !important;
+			border: 1px solid rgba(255, 255, 255, 0.18) !important;
+			box-sizing: border-box !important;
 		}
 		.wind_humidity_progress, #wind_progress, #humidity_progress, #pressure_progress {
 			height: 100% !important;
@@ -4405,10 +4464,14 @@ body {
 		height: 2.0vw !important;
 		border-radius: 1vw !important;
 		margin: 0.5vh 0 1vh !important;
+		border: 1px solid rgba(255, 255, 255, 0.18) !important;
+		box-sizing: border-box !important;
 	}
 	.wind_humidity_pressure_bar.pressure_bar {
 		height: 2.0vw !important;
 		border-radius: 1vw !important;
+		border: 1px solid rgba(255, 255, 255, 0.18) !important;
+		box-sizing: border-box !important;
 	}
 	.wind_humidity_progress, #wind_progress, #humidity_progress, #pressure_progress {
 		height: 100% !important;

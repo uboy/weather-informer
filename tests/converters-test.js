@@ -48,11 +48,14 @@ function srcOf(name) {
     return html.slice(start, j + 1);
 }
 const fnNames = ['safe_get_item', 'safe_set_item', 'moonPhaseCode', 'normalize_icon', 'calc_feels_like',
+    'mslp_to_station_pressure',
     'fetch_from_owm', 'fetch_from_om_client', 'fetch_from_7timer_client',
     'fetch_from_wttr', 'fetch_from_foreca_client', 'convert_foreca',
     'convert_gismeteo_v2', 'gismeteo_v2_icon',
     'points_push', 'points_filter', 'points_each', 'points_each_day', 'foreca_icon'];
 let code = '';
+const hpaSrc = html.match(/^var HPA_TO_MMHG = [^;]+;/m);
+if (hpaSrc) code += hpaSrc[0] + '\n';
 const aliasSrc = html.match(/^var ICON_ALIAS = \{[\s\S]*?^\};/m);
 if (aliasSrc) code += aliasSrc[0] + '\n';
 for (const n of fnNames) {

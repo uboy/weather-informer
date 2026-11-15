@@ -44,6 +44,26 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(SCRIPT_DIR, "config.json")
 CACHE_FILE = os.path.join(SCRIPT_DIR, "weather_cache.json")
 
+# Коэффициент перевода гектопаскалей (hPa) / сотен паскаль в мм рт. ст.
+# 1 гПа = 100 Па = 100 / 133.322387415 мм рт. ст. ≈ 0.750061683
+HPA_TO_MMHG = 0.750062
+
+
+def mslp_to_station_pressure(mslp_hpa, altitude_m=140.0):
+    """Приводит давление на уровне моря (MSLP) к приземному давлению на высоте станции (QFE)."""
+    if mslp_hpa is None:
+        return None
+    try:
+        elev = float(altitude_m if altitude_m is not None else 140.0)
+        # Международная барометрическая формула: P = P0 * (1 - h / 44330)^5.2559
+        press_hpa = float(mslp_hpa) * ((1.0 - elev / 44330.0) ** 5.2559)
+        return int(round(press_hpa * HPA_TO_MMHG))
+    except Exception:
+        try:
+            return int(round(float(mslp_hpa) * HPA_TO_MMHG))
+        except Exception:
+            return None
+
 # Защита от исчерпания потоков хоста (не более 32 одновременных клиентов)
 MAX_CONCURRENT_CLIENTS = 32
 CLIENT_SEMAPHORE = threading.BoundedSemaphore(MAX_CONCURRENT_CLIENTS)
@@ -472,7 +492,7 @@ def fetch_fallback_pressure(lat, lon):
             data = json.loads(text)
             sp = data.get("current", {}).get("surface_pressure")
             if sp is not None:
-                p_mm = int(round(float(sp) * 0.750062))
+                p_mm = int(round(float(sp) * HPA_TO_MMHG))
                 if 600 <= p_mm <= 850:
                     log.info("Fetched fallback surface pressure from Open-Meteo for (%s, %s): %s mmHg (%.1f hPa)",
                              lat, lon, p_mm, sp)
@@ -489,19 +509,15 @@ def fetch_fallback_pressure(lat, lon):
             data = json.loads(text)
             main_w = data.get("main", {})
             press = main_w.get("grnd_level")
-            if press is None:
-                mslp = main_w.get("pressure")
-                if mslp is not None:
-                    try:
-                        elev = float(cfg.get("station_altitude", 140.0))
-                        press = float(mslp) * ((1.0 - elev / 44330.0) ** 5.2559)
-                    except Exception:
-                        press = mslp
             if press is not None:
-                p_mm = int(round(float(press) * 0.750062))
-                if 600 <= p_mm <= 850:
-                    log.info("Fetched fallback surface pressure from OWM for (%s, %s): %s mmHg", lat, lon, p_mm)
-                    return p_mm
+                p_mm = int(round(float(press) * HPA_TO_MMHG))
+            else:
+                mslp = main_w.get("pressure")
+                elev = float(cfg.get("station_altitude", 140.0))
+                p_mm = mslp_to_station_pressure(mslp, elev)
+            if p_mm is not None and 600 <= p_mm <= 850:
+                log.info("Fetched fallback surface pressure from OWM for (%s, %s): %s mmHg", lat, lon, p_mm)
+                return p_mm
         except Exception as e:
             log.warning("fetch_fallback_pressure (OWM) failed: %s", sanitize_secrets(e))
 
@@ -531,7 +547,7 @@ def normalize_weather_data(data, lat=None, lon=None, allow_network=True):
 
         if p is None and "pressure_pa" in fact and fact["pressure_pa"] is not None:
             try:
-                p_pa = int(round(float(fact["pressure_pa"]) * 0.750062))
+                p_pa = int(round(float(fact["pressure_pa"]) * HPA_TO_MMHG))
                 if 600 <= p_pa <= 850:
                     p = p_pa
                     fact["pressure_mm"] = p_pa
@@ -1001,8 +1017,15 @@ def fetch_from_openweathermap(lat, lon, api_key):
     wind_speed = (round(wind["speed"], 1) if wind.get("speed") is not None else None)
     wind_angle = int(wind["deg"]) if wind.get("deg") is not None else None
     humidity = int(main["humidity"]) if main.get("humidity") is not None else None
-    pressure_mm = (round(int(main["pressure"]) * 0.750062)
-                   if main.get("pressure") is not None else None)
+    cfg = load_config()
+    station_alt = float(cfg.get("station_altitude", 140.0))
+    press = main.get("grnd_level")
+    if press is not None:
+        pressure_mm = int(round(float(press) * HPA_TO_MMHG))
+    elif main.get("pressure") is not None:
+        pressure_mm = mslp_to_station_pressure(main["pressure"], station_alt)
+    else:
+        pressure_mm = None
     fact_icon = _owm_icon(w0)
     sunrise_dt = datetime.fromtimestamp(sys.get("sunrise", 0))
     sunset_dt = datetime.fromtimestamp(sys.get("sunset", 0))
@@ -1111,7 +1134,7 @@ def fetch_from_openmeteo(lat, lon, proxy=None):
     rh_list = hourly.get("relativehumidity_2m") or []
     sp_list = hourly.get("surface_pressure") or []
     humidity = (rh_list[h_idx] if h_idx is not None and h_idx < len(rh_list) and rh_list[h_idx] is not None else None)
-    pressure_mm = (round(sp_list[h_idx] * 0.750062)
+    pressure_mm = (round(sp_list[h_idx] * HPA_TO_MMHG)
                    if h_idx is not None and h_idx < len(sp_list) and sp_list[h_idx] is not None else None)
 
     def _om_icon(wcode, is_day):
@@ -1292,8 +1315,10 @@ def fetch_from_wttr(lat, lon):
 
     temp = int(cc["temp_C"]) if cc.get("temp_C") is not None else None
     humidity = int(cc["humidity"]) if cc.get("humidity") is not None else None
-    pressure_mm = (round(int(cc["pressure"]) * 0.750062)
-                   if cc.get("pressure") is not None else None)
+    cfg = load_config()
+    station_alt = float(cfg.get("station_altitude", 140.0))
+    p_hpa = int(cc["pressure"]) if cc.get("pressure") is not None else None
+    pressure_mm = mslp_to_station_pressure(p_hpa, station_alt) if p_hpa is not None else None
     wind_speed = (round(int(cc["windspeedKmph"]) / 3.6, 1)
                   if cc.get("windspeedKmph") is not None else None)
     wind_angle = int(cc["winddirDegree"]) if cc.get("winddirDegree") is not None else None

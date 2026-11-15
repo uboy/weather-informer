@@ -39,6 +39,10 @@ def _moon_code(dt=None):
     return int(round(frac * 8)) % 8
 
 
+# Коэффициент перевода гектопаскалей (hPa) в мм рт. ст.
+HPA_TO_MMHG = 0.750062
+
+
 class GismeteoV2Provider:
     BASE_URL = "https://api.gismeteo.net/v2"
     USER_AGENT = "WeatherInformerLocal/2.0 (lan weather kiosk; gismeteo official v2)"
@@ -233,7 +237,7 @@ class GismeteoV2Provider:
         # Давление
         pressure_val = cur.get("pressure", {}).get("mm_hg_atm")
         if pressure_val is None:
-            pressure_val = cur.get("pressure", {}).get("h_pa", 1013) * 0.750062
+            pressure_val = cur.get("pressure", {}).get("h_pa", 1013) * HPA_TO_MMHG
         pressure_int = int(round(float(pressure_val)))
 
         # Ветер
