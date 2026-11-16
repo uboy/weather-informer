@@ -24,6 +24,7 @@ const path = require('path');
 const CHROMIUM_BIN = '/snap/bin/chromium';
 const HTML_PATH = path.resolve(__dirname, '../informer.html');
 const SETTINGS_PATH = path.resolve(__dirname, '../settings.html');
+const SETUP_PATH = path.resolve(__dirname, '../setup.html');
 const CDP_PORT = 9240;
 
 let pass = 0, fail = 0;
@@ -564,7 +565,7 @@ async function main() {
         check('QR standalone: модальное окно открыто', qrStandalone.modalOpen);
         check('QR standalone: заголовок «Планшет (автономный режим)»', qrStandalone.tabletTitle.includes('автономный'));
         check('QR standalone: карточка сервера скрыта (только 1 QR-код)', !qrStandalone.serverCardVisible);
-        check('QR standalone: URL планшета корректный', qrStandalone.tabletUrl === 'http://192.168.1.50:8080/setup.html' || qrStandalone.tabletUrl === 'http://192.168.1.50:8080/setup');
+        check('QR standalone: URL планшета корректный', qrStandalone.tabletUrl === 'http://192.168.1.50:8080/setup.html');
         check('QR standalone: сгенерирован QR-код (img или canvas)', qrStandalone.hasQrImage);
 
         // 5b: Dual QR mode (server discovered)
@@ -594,7 +595,7 @@ async function main() {
 
         check('QR server mode: заголовок «Планшет»', qrServerMode.tabletTitle === 'Планшет');
         check('QR server mode: карточка сервера отображается (2 QR-кода)', qrServerMode.serverCardVisible);
-        check('QR server mode: URL сервера корректный', qrServerMode.serverUrl === 'http://192.168.1.100:8085/setup.html' || qrServerMode.serverUrl === 'http://192.168.1.100:8085/setup');
+        check('QR server mode: URL сервера корректный', qrServerMode.serverUrl === 'http://192.168.1.100:8085/setup.html');
         check('QR server mode: сгенерирован QR-код сервера', qrServerMode.hasServerQrImage);
 
         // 5c: Close QR modal
@@ -785,10 +786,56 @@ async function main() {
         check('Settings: кнопка возврата в подвале присутствует', settingsRes.hasBottomBack);
         check('Settings: URL планшета использует реальный IP (не 127.0.0.1)', settingsRes.tabletUrl.includes('192.168.4.5'));
         check('Settings: QR-код сервера отображается при настроенном server_url', settingsRes.serverColVisible);
-        check('Settings: URL сервера корректный (/setup.html)', settingsRes.serverUrl === 'http://192.168.1.55:8085/setup.html' || settingsRes.serverUrl === 'http://192.168.1.55:8085/setup');
+        check('Settings: URL сервера корректный (/setup.html)', settingsRes.serverUrl === 'http://192.168.1.55:8085/setup.html');
         check('Settings: сгенерирован QR-код планшета', settingsRes.hasQrTabletImage);
         check('Settings: сгенерирован QR-код сервера', settingsRes.hasQrServerImage);
         check('Settings: активность пользователя сбрасывает таймер на 60с', settingsRes.timerResetOnActivity);
+
+        // ==========================================
+        // 5g. Setup Page UI, Form Inputs & Contract
+        // ==========================================
+        console.log('\n[5g] Mobile Setup Page UI & Key Contract:');
+        await cdp.send('Page.navigate', { url: `file://${SETUP_PATH}` });
+        await delay(500);
+
+        const setupRes = await cdp.evaluate(`(() => {
+            const idleCd = document.getElementById('idle_countdown');
+            const navTitle = document.getElementById('setup_nav_title');
+            const targetBadge = document.getElementById('nav_target_badge');
+            const backBtn = document.getElementById('btn_back_informer');
+            const srcSel = document.getElementById('primary_source');
+            const optOm = srcSel ? srcSel.querySelector('option[value="om"]') : null;
+            const optOpenMeteo = srcSel ? srcSel.querySelector('option[value="openmeteo"]') : null;
+
+            const apiInp = document.getElementById('api');
+            const gisInp = document.getElementById('gismeteo_api_key');
+            const forInp = document.getElementById('foreca_api_key');
+            const owmInp = document.getElementById('openweathermap_api_key');
+
+            const hasAllKeyInputs = !!(apiInp && gisInp && forInp && owmInp);
+            const allDisableAutoCorrect = [apiInp, gisInp, forInp, owmInp].every(el =>
+                el && el.getAttribute('autocorrect') === 'off' && el.getAttribute('autocapitalize') === 'off'
+            );
+
+            return {
+                hasIdleCountdown: !!idleCd && idleCd.innerText === '60',
+                hasNavTitle: !!navTitle && navTitle.innerText.length > 0,
+                hasTargetBadge: !!targetBadge,
+                hasBackBtn: !!backBtn,
+                hasOptOm: !!optOm,
+                noLegacyOptOpenMeteo: !optOpenMeteo,
+                hasAllKeyInputs,
+                allDisableAutoCorrect
+            };
+        })()`);
+
+        check('Setup: таймер обратного отсчета (60с) присутствует', setupRes.hasIdleCountdown);
+        check('Setup: заголовок навигации присутствует', setupRes.hasNavTitle);
+        check('Setup: бейдж роли присутствует', setupRes.hasTargetBadge);
+        check('Setup: кнопка возврата присутствует', setupRes.hasBackBtn);
+        check('Setup: провайдер Open-Meteo использует стандартный код "om"', setupRes.hasOptOm && setupRes.noLegacyOptOpenMeteo);
+        check('Setup: присутствуют поля всех 4 API-ключей провайдеров', setupRes.hasAllKeyInputs);
+        check('Setup: все поля ключей отключают автокоррекцию/автокапитализацию', setupRes.allDisableAutoCorrect);
 
         // Возврат на informer.html перед скриншотами
         await cdp.send('Page.navigate', { url: `file://${HTML_PATH}` });

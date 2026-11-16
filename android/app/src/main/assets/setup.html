@@ -27,6 +27,13 @@ body {
     z-index: 100;
     margin-bottom: 20px;
 }
+@media (max-width: 520px) {
+    .top-nav {
+        flex-wrap: wrap;
+        gap: 8px;
+        padding: 8px 12px;
+    }
+}
 .btn-nav-back {
     display: inline-flex;
     align-items: center;
@@ -257,7 +264,7 @@ select {
             <select id="primary_source">
                 <option value="yandex">Яндекс.Погода (рекомендуется)</option>
                 <option value="gismeteo">Gismeteo v2</option>
-                <option value="openmeteo">Open-Meteo (без API-ключа)</option>
+                <option value="om">Open-Meteo (бесплатно, без ключа)</option>
                 <option value="foreca">Foreca</option>
                 <option value="wttr">wttr.in</option>
             </select>
@@ -275,21 +282,21 @@ select {
                 <label for="gismeteo_api_key" style="margin-bottom:0;">API-ключ Gismeteo:</label>
                 <span id="gismeteo_badge" class="badge badge-warn">○ Без ключа</span>
             </div>
-            <input type="text" id="gismeteo_api_key" placeholder="X-Gismeteo-Token..." autocomplete="off">
+            <input type="text" id="gismeteo_api_key" placeholder="X-Gismeteo-Token..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
         </div>
         <div class="form-group">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
                 <label for="foreca_api_key" style="margin-bottom:0;">API-ключ Foreca:</label>
                 <span id="foreca_badge" class="badge badge-warn">○ Без ключа</span>
             </div>
-            <input type="text" id="foreca_api_key" placeholder="Bearer JWT Token..." autocomplete="off">
+            <input type="text" id="foreca_api_key" placeholder="Bearer JWT Token..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
         </div>
         <div class="form-group">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
                 <label for="openweathermap_api_key" style="margin-bottom:0;">API-ключ OpenWeatherMap:</label>
                 <span id="owm_badge" class="badge badge-warn">○ Без ключа</span>
             </div>
-            <input type="text" id="openweathermap_api_key" placeholder="API Key..." autocomplete="off">
+            <input type="text" id="openweathermap_api_key" placeholder="API Key..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
         </div>
     </div>
 
@@ -307,15 +314,16 @@ select {
     var headTitle = document.getElementById("setup_header_title");
     var backBtn = document.getElementById("btn_back_informer");
 
+    var initialKeys = {};
     var isStandaloneTablet = (location.port === "8080" || location.protocol === "file:");
     var isServer = (location.port === "8085" || !isStandaloneTablet);
 
-    if (backBtn && location.protocol === "file:") {
-        backBtn.setAttribute("href", "informer.html");
-    }
-
     if (isServer) {
         document.title = "🖥️ Сервер погоды (8085) — Конфигуратор";
+        if (backBtn) {
+            backBtn.innerText = "← К настройкам сервера";
+            backBtn.setAttribute("href", "/settings");
+        }
         if (navTitle) navTitle.innerText = "🖥️ Домашний сервер погоды";
         if (navBadge) {
             navBadge.className = "badge-role-server";
@@ -324,6 +332,9 @@ select {
         if (headTitle) headTitle.innerText = "🖥️ Домашний сервер погоды";
         if (targetLabel) targetLabel.innerHTML = "<strong>Центральный сервер сети (порт 8085)</strong> — кэширует погоду и раздаёт на все планшеты в доме";
     } else {
+        if (backBtn && location.protocol === "file:") {
+            backBtn.setAttribute("href", "informer.html");
+        }
         document.title = "📱 Планшет погоды (8080) — Конфигуратор";
         if (navTitle) navTitle.innerText = "📱 Настройка планшета";
         if (navBadge) {
@@ -389,6 +400,13 @@ select {
                 if (data.lon != null) document.getElementById("lon").value = data.lon;
                 if (data.station_altitude != null) document.getElementById("station_altitude").value = data.station_altitude;
                 if (data.primary_source) document.getElementById("primary_source").value = data.primary_source;
+
+                initialKeys = {
+                    api: data.api || "",
+                    gismeteo_api_key: data.gismeteo_api_key || "",
+                    foreca_api_key: data.foreca_api_key || "",
+                    openweathermap_api_key: data.openweathermap_api_key || ""
+                };
 
                 updateKeyBadge("api", "api_badge", data.api);
                 updateKeyBadge("gismeteo_api_key", "gismeteo_badge", data.gismeteo_api_key);
@@ -492,11 +510,18 @@ select {
         if (primarySrc) payload.primary_source = primarySrc;
         if (!isNaN(altVal)) payload.station_altitude = altVal;
 
-        // Ключи сохраняем только если введены реальные значения (не маскированные)
-        if (apiVal && apiVal.indexOf("•") === -1 && apiVal.indexOf("*") === -1) payload.api = apiVal;
-        if (gismeteoKey && gismeteoKey.indexOf("•") === -1 && gismeteoKey.indexOf("*") === -1) payload.gismeteo_api_key = gismeteoKey;
-        if (forecaKey && forecaKey.indexOf("•") === -1 && forecaKey.indexOf("*") === -1) payload.foreca_api_key = forecaKey;
-        if (owmKey && owmKey.indexOf("•") === -1 && owmKey.indexOf("*") === -1) payload.openweathermap_api_key = owmKey;
+        // Ключи: если пользователь стер ранее заданный ключ, отправляем __CLEAR__
+        function processKeyField(inpVal, origVal, fieldName) {
+            if (origVal && !inpVal) {
+                payload[fieldName] = "__CLEAR__";
+            } else if (inpVal && inpVal.indexOf("•") === -1 && inpVal.indexOf("*") === -1) {
+                payload[fieldName] = inpVal;
+            }
+        }
+        processKeyField(apiVal, initialKeys.api, "api");
+        processKeyField(gismeteoKey, initialKeys.gismeteo_api_key, "gismeteo_api_key");
+        processKeyField(forecaKey, initialKeys.foreca_api_key, "foreca_api_key");
+        processKeyField(owmKey, initialKeys.openweathermap_api_key, "openweathermap_api_key");
 
         showStatus("Сохранение настроек...", "info");
         fetch("/api/config", {

@@ -718,6 +718,11 @@ function maskKeyDisplay(val) {
     return "••••";
 }
 
+function escapeHtml(str) {
+    if (!str) return "";
+    return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
 function updateDeviceRoleUI() {
     var loc = window.location;
     var port = loc.port || "8080";
@@ -755,7 +760,7 @@ function updateDeviceRoleUI() {
             roleBanner.innerHTML = '<div class="banner-icon">📱</div>' +
                 '<div class="banner-content">' +
                 '<div class="banner-title">ЭКРАН ПЛАНШЕТА (порт 8080)</div>' +
-                '<div class="banner-subtitle">Настройки экрана планшета. Рекомендуется подключение к домашнему серверу (' + srv + ').</div>' +
+                '<div class="banner-subtitle">Настройки экрана планшета. Рекомендуется подключение к домашнему серверу (' + escapeHtml(srv) + ').</div>' +
                 '</div>';
             roleBanner.style.display = "flex";
         }
@@ -826,7 +831,7 @@ function wireKeyHandlers(keyName) {
     if (btnDel) {
         btnDel.addEventListener("click", function() {
             if (input) input.value = "";
-            currentCfg[keyName] = "__DELETE__";
+            currentCfg[keyName] = "__CLEAR__";
             updateKeyUI(keyName, "");
             setDirty(true);
             showStatus("Ключ " + keyName + " очищен. Нажмите «Сохранить», чтобы применить.", "ok", 3000);
@@ -1046,8 +1051,8 @@ document.getElementById("btn_save").addEventListener("click", function() {
     var keyFields = ["api", "gismeteo_api_key", "foreca_api_key", "openweathermap_api_key"];
     for (var i = 0; i < keyFields.length; i++) {
         var kf = keyFields[i];
-        if (currentCfg[kf] === "__DELETE__") {
-            payload[kf] = "__DELETE__";
+        if (currentCfg[kf] === "__CLEAR__" || currentCfg[kf] === "__DELETE__") {
+            payload[kf] = "__CLEAR__";
         } else {
             var inpVal = document.getElementById(kf).value.trim();
             if (inpVal.indexOf("•") !== -1 || inpVal.indexOf("*") !== -1) {

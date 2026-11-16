@@ -289,7 +289,7 @@ def save_config(new_cfg):
         for k, v in new_cfg.items():
             if k in key_fields:
                 # Явная очистка ключа пользователем
-                if v is None or v == "__CLEAR__":
+                if v is None or v in ("__CLEAR__", "__DELETE__"):
                     current[k] = ""
                     continue
                 # Защита от случайного стирания боевых ключей пустыми или маскированными значениями
@@ -3057,6 +3057,7 @@ code {{ color: #81D4FA; }}
                 "has_api": bool(cfg.get("api")),
                 "foreca_api_key": mask_key(cfg.get("foreca_api_key")),
                 "openweathermap_api_key": mask_key(cfg.get("openweathermap_api_key")),
+                "duration_mode": cfg.get("duration_mode", "daylight"),
                 "cache_interval_minutes": cfg.get("cache_interval_minutes", 60),
                 "fallback_interval_minutes": cfg.get("fallback_interval_minutes", 15),
                 "update_interval_sec": cfg.get("update_interval_sec", 300),
@@ -3286,6 +3287,7 @@ code {{ color: #81D4FA; }}
                 allowed_fields = [
                     "lat", "lon", "city_name", "primary_source", "station_altitude", "metar_icao",
                     "gismeteo_api_key", "api", "foreca_api_key", "openweathermap_api_key",
+                    "duration_mode", "update_interval_sec", "direct_update_interval_sec",
                     "server_url", "cache_interval_minutes",
                     "fallback_interval_minutes", "ntp_server",
                     "rate_limit_enabled", "rate_limit_admin_per_minute",
