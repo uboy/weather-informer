@@ -28,18 +28,23 @@ body {
 .btn-nav-back {
     display: inline-flex;
     align-items: center;
+    justify-content: center;
     gap: 8px;
     background: #252a36;
     border: 1px solid #3d4558;
     color: #4FC3F7;
-    font-size: 1.05rem;
+    font-size: 0.95rem;
     font-weight: bold;
-    padding: 8px 16px;
+    height: 38px;
+    min-height: 38px;
+    padding: 0 16px;
     border-radius: 8px;
     cursor: pointer;
     text-decoration: none;
     -webkit-user-select: none;
     user-select: none;
+    box-sizing: border-box;
+    transition: all 0.2s;
 }
 .btn-nav-back:active, .btn-nav-back:hover {
     background: #333a4c;
@@ -63,7 +68,7 @@ body {
     background: rgba(255, 255, 255, 0.08);
     border: 1px solid rgba(255, 255, 255, 0.16);
     border-radius: 12px;
-    padding: 3px 9px;
+    padding: 4px 10px;
     font-family: sans-serif;
     font-weight: 500;
     white-space: nowrap;
@@ -73,6 +78,70 @@ body {
     color: #ffd600;
     border-color: rgba(255, 214, 0, 0.5);
     background: rgba(255, 214, 0, 0.12);
+}
+
+/* Role banner */
+.role-banner {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 16px;
+    border-radius: 10px;
+    margin-bottom: 16px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+}
+.role-banner-server {
+    background: rgba(66, 133, 244, 0.12);
+    border: 1px solid rgba(66, 133, 244, 0.4);
+}
+.role-banner-tablet {
+    background: rgba(0, 230, 118, 0.08);
+    border: 1px solid rgba(0, 230, 118, 0.3);
+}
+.banner-icon {
+    font-size: 1.8rem;
+    line-height: 1;
+}
+.banner-content {
+    flex: 1;
+    min-width: 0;
+}
+.banner-title {
+    font-size: 0.95rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    margin-bottom: 2px;
+}
+.role-banner-server .banner-title {
+    color: #82b1ff;
+}
+.role-banner-tablet .banner-title {
+    color: #69f0ae;
+}
+.banner-subtitle {
+    font-size: 0.82rem;
+    color: #94a3b8;
+    line-height: 1.35;
+}
+.badge-role-server {
+    background: rgba(66, 133, 244, 0.2);
+    color: #82b1ff;
+    border: 1px solid rgba(66, 133, 244, 0.5);
+    font-weight: 700;
+    padding: 3px 9px;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    white-space: nowrap;
+}
+.badge-role-tablet {
+    background: rgba(0, 230, 118, 0.15);
+    color: #69f0ae;
+    border: 1px solid rgba(0, 230, 118, 0.4);
+    font-weight: 700;
+    padding: 3px 9px;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    white-space: nowrap;
 }
 
 .container {
@@ -114,11 +183,15 @@ body {
     justify-content: space-between;
 }
 .form-group {
-    margin-bottom: 12px;
+    margin-bottom: 14px;
+}
+.form-group:last-child {
+    margin-bottom: 0;
 }
 .form-row {
     display: flex;
     gap: 10px;
+    align-items: flex-start;
 }
 .form-row .form-group {
     flex: 1;
@@ -126,31 +199,52 @@ body {
 label {
     display: block;
     font-size: 0.85rem;
-    color: #a0aec0;
-    margin-bottom: 4px;
+    color: #94a3b8;
+    margin-bottom: 6px;
     font-weight: 500;
 }
 input[type="text"], input[type="number"], select {
     width: 100%;
-    padding: 10px 12px;
-    background: #20242e;
-    border: 1px solid #363d4e;
+    height: 42px;
+    min-height: 42px;
+    max-height: 42px;
+    padding: 0 12px;
+    background: #141720;
+    border: 1px solid #2f3647;
     border-radius: 8px;
     color: #ffffff;
     font-size: 0.95rem;
     outline: none;
+    box-sizing: border-box;
+    line-height: 40px;
+    transition: border-color 0.2s, box-shadow 0.2s;
 }
-input:focus, select:focus {
+input[type="text"]:focus, input[type="number"]:focus, select:focus {
     border-color: #4FC3F7;
+    box-shadow: 0 0 0 2px rgba(79, 195, 247, 0.2);
+}
+select {
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+    background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%2390a4ae'%3e%3cpath d='M7 10l5 5 5-5z'/%3e%3c/svg%3e");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    background-size: 18px;
+    padding-right: 36px;
+    cursor: pointer;
 }
 
 /* Key items */
 .key-block {
-    background: #1c202a;
-    border: 1px solid #2c3344;
+    background: #141720;
+    border: 1px solid #262c3a;
     border-radius: 8px;
     padding: 12px;
     margin-bottom: 12px;
+}
+.key-block:last-child {
+    margin-bottom: 0;
 }
 .key-header {
     display: flex;
@@ -161,7 +255,7 @@ input:focus, select:focus {
 .key-title {
     font-size: 0.9rem;
     font-weight: 600;
-    color: #d1d5db;
+    color: #cbd5e1;
 }
 .badge {
     font-size: 0.78rem;
@@ -182,29 +276,76 @@ input:focus, select:focus {
 .key-input-row {
     display: flex;
     gap: 8px;
+    align-items: center;
+    width: 100%;
+}
+.key-input-row input {
+    flex: 1;
+    height: 42px;
+    min-height: 42px;
+    max-height: 42px;
+    font-family: monospace, -apple-system, sans-serif;
 }
 .btn-delete {
-    background: rgba(244, 67, 54, 0.15);
-    border: 1px solid #d32f2f;
-    color: #f44336;
-    padding: 8px 14px;
-    border-radius: 6px;
-    cursor: pointer;
-    font-size: 0.85rem;
+    height: 42px;
+    min-height: 42px;
+    max-height: 42px;
+    box-sizing: border-box;
+    padding: 0 16px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(244, 67, 54, 0.12);
+    border: 1px solid rgba(244, 67, 54, 0.5);
+    color: #ff5252;
+    border-radius: 8px;
+    font-size: 0.88rem;
     font-weight: 600;
+    cursor: pointer;
     white-space: nowrap;
     -webkit-user-select: none;
     user-select: none;
+    transition: all 0.2s;
 }
 .btn-delete:disabled {
     opacity: 0.35;
     cursor: not-allowed;
-    border-color: #555;
-    color: #888;
+    border-color: #3d4556;
+    color: #64748b;
+    background: rgba(255, 255, 255, 0.02);
+}
+.btn-delete:not(:disabled):hover {
+    background: rgba(244, 67, 54, 0.25);
+    border-color: #ff5252;
 }
 .btn-delete:not(:disabled):active {
     background: #d32f2f;
-    color: #fff;
+    color: #ffffff;
+}
+
+/* Inline button row (e.g. city + auto) */
+.input-inline-btn-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    width: 100%;
+}
+.input-inline-btn-row input {
+    flex: 1;
+    height: 42px;
+    min-height: 42px;
+    max-height: 42px;
+}
+#btn_detect_city {
+    height: 42px;
+    min-height: 42px;
+    max-height: 42px;
+    padding: 0 16px;
+    box-sizing: border-box;
+    white-space: nowrap;
+    border-radius: 8px;
+    font-size: 0.88rem;
+    font-weight: 600;
 }
 
 /* Buttons */
@@ -213,7 +354,10 @@ input:focus, select:focus {
     align-items: center;
     justify-content: center;
     gap: 8px;
-    padding: 12px 20px;
+    height: 48px;
+    min-height: 48px;
+    max-height: 48px;
+    padding: 0 20px;
     border-radius: 8px;
     font-size: 1rem;
     font-weight: bold;
@@ -221,6 +365,8 @@ input:focus, select:focus {
     cursor: pointer;
     transition: all 0.2s;
     text-decoration: none;
+    box-sizing: border-box;
+    line-height: normal;
     -webkit-user-select: none;
     user-select: none;
 }
@@ -229,33 +375,53 @@ input:focus, select:focus {
     color: #ffffff;
     width: 100%;
 }
+.btn-primary:hover {
+    background: #039be5;
+}
 .btn-primary.dirty {
     background: #00E676;
     color: #000000;
-    box-shadow: 0 0 12px rgba(0, 230, 118, 0.4);
+    box-shadow: 0 0 14px rgba(0, 230, 118, 0.45);
 }
 .btn-secondary {
-    background: #252a36;
-    color: #e0e6ed;
-    border: 1px solid #3d4558;
+    background: #1e2430;
+    color: #e2e8f0;
+    border: 1px solid #333d52;
+}
+.btn-secondary:hover {
+    background: #283042;
+    border-color: #4b5563;
+    color: #ffffff;
 }
 .btn-secondary:active {
-    background: #333a4c;
-}
-.btn-sm {
-    padding: 8px 12px;
-    font-size: 0.85rem;
-    white-space: nowrap;
+    background: #333d52;
 }
 .btn-gps {
     background: #1b5e20;
-    color: #fff;
+    color: #ffffff;
     border: 1px solid #2e7d32;
-    border-radius: 6px;
+    border-radius: 8px;
     cursor: pointer;
+    font-weight: 600;
+}
+.btn-gps:hover {
+    background: #237d2a;
 }
 .btn-gps:active {
     background: #2e7d32;
+}
+.bottom-btn-row {
+    display: flex;
+    gap: 12px;
+    margin-top: 12px;
+    width: 100%;
+}
+.bottom-btn-row > * {
+    flex: 1;
+    height: 48px;
+    min-height: 48px;
+    max-height: 48px;
+    box-sizing: border-box;
 }
 
 /* QR card */
@@ -351,7 +517,7 @@ input:focus, select:focus {
 
 <div class="top-nav">
     <a href="/" class="btn-nav-back" id="top_back_btn">← Назад к информеру</a>
-    <div class="nav-title">⚙️ Настройки информера</div>
+    <div class="nav-title" id="main_nav_title">⚙️ Настройки информера</div>
     <div class="nav-right">
         <span class="idle-badge" id="idle_badge" title="Возврат на главный экран при бездействии">Автовозврат: <span id="idle_countdown">60</span> с</span>
         <span id="device_info_label">Планшет</span>
@@ -359,6 +525,7 @@ input:focus, select:focus {
 </div>
 
 <div class="container">
+    <div id="role_banner"></div>
     <div id="status_msg"></div>
 
     <div class="grid">
@@ -379,14 +546,14 @@ input:focus, select:focus {
                         <input type="number" step="0.0001" id="lon" placeholder="43.9993">
                     </div>
                 </div>
-                <button type="button" class="btn-action btn-gps btn-sm" id="btn_gps" style="width:100%; margin-bottom:12px;">
+                <button type="button" class="btn-action btn-gps" id="btn_gps" style="width:100%; margin-bottom:14px;">
                     🛰️ Определить GPS со смартфона
                 </button>
                 <div class="form-group">
                     <label for="city_name">Город для отображения:</label>
-                    <div style="display:flex; gap:6px;">
+                    <div class="input-inline-btn-row">
                         <input type="text" id="city_name" placeholder="Нижний Новгород">
-                        <button type="button" class="btn-action btn-secondary btn-sm" id="btn_detect_city">Авто</button>
+                        <button type="button" class="btn-action btn-secondary" id="btn_detect_city">Авто</button>
                     </div>
                 </div>
                 <div class="form-group">
@@ -523,11 +690,11 @@ input:focus, select:focus {
     </div>
 
     <!-- Нижняя панель действий -->
-    <div style="margin-top:10px;">
+    <div style="margin-top:14px;">
         <button type="button" class="btn-action btn-primary" id="btn_save">💾 Сохранить настройки</button>
-        <div style="display:flex; gap:12px; margin-top:12px;">
-            <button type="button" class="btn-action btn-secondary" id="btn_reload" style="flex:1;">🔄 Обновить экран информера</button>
-            <a href="/" class="btn-action btn-secondary" id="bottom_back_btn" style="flex:1; text-align:center;">← Вернуться к информеру (<span id="idle_countdown_bottom">60</span>с)</a>
+        <div class="bottom-btn-row">
+            <button type="button" class="btn-action btn-secondary" id="btn_reload">🔄 Обновить экран информера</button>
+            <a href="/" class="btn-action btn-secondary" id="bottom_back_btn">← Вернуться к информеру (<span id="idle_countdown_bottom">60</span>с)</a>
         </div>
     </div>
 </div>
@@ -537,6 +704,63 @@ input:focus, select:focus {
 var currentCfg = {};
 var initialKeys = {};
 var isDirty = false;
+
+function maskKeyDisplay(val) {
+    if (!val) return "";
+    var s = String(val).trim();
+    if (!s || s.toLowerCase().indexOf("xxxx") !== -1) return "";
+    if (s.indexOf("•") !== -1 || s.indexOf("*") !== -1) return s;
+    if (s.length > 8) {
+        return s.substring(0, 4) + "••••••••" + s.substring(s.length - 4);
+    } else if (s.length > 4) {
+        return s.substring(0, 2) + "••••" + s.substring(s.length - 2);
+    }
+    return "••••";
+}
+
+function updateDeviceRoleUI() {
+    var loc = window.location;
+    var port = loc.port || "8080";
+    var isServer = (port === "8085" || (currentCfg && (currentCfg.port === 8085 || currentCfg.role === "caching_server")));
+    var devLabel = document.getElementById("device_info_label");
+    var navTitle = document.getElementById("main_nav_title");
+    var roleBanner = document.getElementById("role_banner");
+
+    if (isServer) {
+        document.title = "🖥️ Сервер погоды (8085) — Настройки";
+        if (navTitle) navTitle.innerText = "🖥️ Домашний сервер погоды";
+        if (devLabel) {
+            devLabel.className = "badge-role-server";
+            devLabel.innerText = "🖥️ СЕРВЕР СЕТИ (8085)";
+        }
+        if (roleBanner) {
+            roleBanner.className = "role-banner role-banner-server";
+            roleBanner.innerHTML = '<div class="banner-icon">🖥️</div>' +
+                '<div class="banner-content">' +
+                '<div class="banner-title">ЦЕНТРАЛЬНЫЙ СЕРВЕР ПОГОДЫ (порт 8085)</div>' +
+                '<div class="banner-subtitle">Сервер собирает данные у провайдеров погоды, кэширует ответы и раздаёт точный прогноз на все настенные экраны в доме.</div>' +
+                '</div>';
+            roleBanner.style.display = "flex";
+        }
+    } else {
+        document.title = "📱 Планшет погоды (8080) — Настройки";
+        if (navTitle) navTitle.innerText = "⚙️ Настройки информера";
+        if (devLabel) {
+            devLabel.className = "badge-role-tablet";
+            devLabel.innerText = "📱 ПЛАНШЕТ (8080)";
+        }
+        if (roleBanner) {
+            var srv = (currentCfg && currentCfg.server_url) ? currentCfg.server_url : "не указан";
+            roleBanner.className = "role-banner role-banner-tablet";
+            roleBanner.innerHTML = '<div class="banner-icon">📱</div>' +
+                '<div class="banner-content">' +
+                '<div class="banner-title">ЭКРАН ПЛАНШЕТА (порт 8080)</div>' +
+                '<div class="banner-subtitle">Настройки экрана планшета. Рекомендуется подключение к домашнему серверу (' + srv + ').</div>' +
+                '</div>';
+            roleBanner.style.display = "flex";
+        }
+    }
+}
 
 function showStatus(text, type, duration) {
     var el = document.getElementById("status_msg");
@@ -566,13 +790,13 @@ function updateKeyUI(keyName, val) {
     var input = document.getElementById(keyName);
     var badge = document.getElementById("badge_" + keyName);
     var btnDel = document.getElementById("btn_del_" + keyName);
-    var hasKey = (val && String(val).trim() !== "" && String(val).indexOf("xxxx") === -1);
+    var masked = maskKeyDisplay(val);
+    var hasKey = (masked !== "");
 
     if (badge) {
         if (hasKey) {
             badge.className = "badge badge-ok";
-            var s = String(val).trim();
-            badge.innerText = "● Настроен (" + s.substring(0, 4) + "••••" + s.substring(Math.max(4, s.length - 4)) + ")";
+            badge.innerText = "● Настроен (" + masked + ")";
         } else {
             badge.className = "badge badge-empty";
             badge.innerText = "○ Не настроен";
@@ -582,7 +806,7 @@ function updateKeyUI(keyName, val) {
         btnDel.disabled = !hasKey;
     }
     if (input) {
-        input.value = hasKey ? val : "";
+        input.value = hasKey ? masked : "";
     }
 }
 
@@ -602,7 +826,7 @@ function wireKeyHandlers(keyName) {
     if (btnDel) {
         btnDel.addEventListener("click", function() {
             if (input) input.value = "";
-            currentCfg[keyName] = "";
+            currentCfg[keyName] = "__DELETE__";
             updateKeyUI(keyName, "");
             setDirty(true);
             showStatus("Ключ " + keyName + " очищен. Нажмите «Сохранить», чтобы применить.", "ok", 3000);
@@ -612,6 +836,7 @@ function wireKeyHandlers(keyName) {
 
 // Загрузка настроек
 function loadSettings() {
+    updateDeviceRoleUI();
     var endpoint = (window.location.pathname.indexOf("api") !== -1) ? "/api/config" : "/api/settings";
     fetch(endpoint)
         .then(function(r) { return r.json(); })
@@ -645,10 +870,12 @@ function loadSettings() {
             updateKeyUI("openweathermap_api_key", c.openweathermap_api_key);
 
             setDirty(false);
+            updateDeviceRoleUI();
             renderSettingsQR();
         })
         .catch(function(err) {
             showStatus("Ошибка загрузки настроек: " + err, "err", 4000);
+            updateDeviceRoleUI();
             renderSettingsQR();
         });
 }
@@ -684,7 +911,7 @@ function renderSettingsQR() {
         try { localStorage.setItem("weather_device_ip", devIp); } catch (e) {}
     }
 
-    var tabletUrl = "http://" + devIp + ":" + port + "/setup";
+    var tabletUrl = "http://" + devIp + ":" + port + "/setup.html";
     if (loc.pathname && loc.pathname.indexOf("setup") !== -1) {
         tabletUrl = loc.href;
     }
@@ -712,7 +939,7 @@ function renderSettingsQR() {
 
     if (hasServer && qrColServer && qrBoxServer) {
         qrColServer.style.display = "flex";
-        var serverSetupUrl = serverBase + "/setup";
+        var serverSetupUrl = serverBase + "/setup.html";
         if (qrUrlServerText) qrUrlServerText.innerText = serverSetupUrl;
         if (typeof QRCode !== "undefined") {
             try {
@@ -746,6 +973,8 @@ function renderSettingsQR() {
             .catch(function() {});
     }
 }
+
+
 
 // GPS кнопка
 document.getElementById("btn_gps").addEventListener("click", function() {
@@ -817,11 +1046,15 @@ document.getElementById("btn_save").addEventListener("click", function() {
     var keyFields = ["api", "gismeteo_api_key", "foreca_api_key", "openweathermap_api_key"];
     for (var i = 0; i < keyFields.length; i++) {
         var kf = keyFields[i];
-        var inpVal = document.getElementById(kf).value.trim();
-        if (inpVal.indexOf("•") !== -1 || inpVal.indexOf("*") !== -1) {
-            // Маскированное значение не трогаем — сервер сохранит исходный ключ
+        if (currentCfg[kf] === "__DELETE__") {
+            payload[kf] = "__DELETE__";
         } else {
-            payload[kf] = inpVal;
+            var inpVal = document.getElementById(kf).value.trim();
+            if (inpVal.indexOf("•") !== -1 || inpVal.indexOf("*") !== -1) {
+                // Маскированное значение не трогаем — сервер сохранит исходный ключ
+            } else {
+                payload[kf] = inpVal;
+            }
         }
     }
 

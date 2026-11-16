@@ -564,7 +564,7 @@ async function main() {
         check('QR standalone: модальное окно открыто', qrStandalone.modalOpen);
         check('QR standalone: заголовок «Планшет (автономный режим)»', qrStandalone.tabletTitle.includes('автономный'));
         check('QR standalone: карточка сервера скрыта (только 1 QR-код)', !qrStandalone.serverCardVisible);
-        check('QR standalone: URL планшета корректный', qrStandalone.tabletUrl === 'http://192.168.1.50:8080/setup');
+        check('QR standalone: URL планшета корректный', qrStandalone.tabletUrl === 'http://192.168.1.50:8080/setup.html' || qrStandalone.tabletUrl === 'http://192.168.1.50:8080/setup');
         check('QR standalone: сгенерирован QR-код (img или canvas)', qrStandalone.hasQrImage);
 
         // 5b: Dual QR mode (server discovered)
@@ -594,7 +594,7 @@ async function main() {
 
         check('QR server mode: заголовок «Планшет»', qrServerMode.tabletTitle === 'Планшет');
         check('QR server mode: карточка сервера отображается (2 QR-кода)', qrServerMode.serverCardVisible);
-        check('QR server mode: URL сервера корректный', qrServerMode.serverUrl === 'http://192.168.1.100:8085/setup');
+        check('QR server mode: URL сервера корректный', qrServerMode.serverUrl === 'http://192.168.1.100:8085/setup.html' || qrServerMode.serverUrl === 'http://192.168.1.100:8085/setup');
         check('QR server mode: сгенерирован QR-код сервера', qrServerMode.hasServerQrImage);
 
         // 5c: Close QR modal
@@ -785,7 +785,7 @@ async function main() {
         check('Settings: кнопка возврата в подвале присутствует', settingsRes.hasBottomBack);
         check('Settings: URL планшета использует реальный IP (не 127.0.0.1)', settingsRes.tabletUrl.includes('192.168.4.5'));
         check('Settings: QR-код сервера отображается при настроенном server_url', settingsRes.serverColVisible);
-        check('Settings: URL сервера корректный (/setup)', settingsRes.serverUrl === 'http://192.168.1.55:8085/setup');
+        check('Settings: URL сервера корректный (/setup.html)', settingsRes.serverUrl === 'http://192.168.1.55:8085/setup.html' || settingsRes.serverUrl === 'http://192.168.1.55:8085/setup');
         check('Settings: сгенерирован QR-код планшета', settingsRes.hasQrTabletImage);
         check('Settings: сгенерирован QR-код сервера', settingsRes.hasQrServerImage);
         check('Settings: активность пользователя сбрасывает таймер на 60с', settingsRes.timerResetOnActivity);

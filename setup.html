@@ -30,12 +30,16 @@ body {
 .btn-nav-back {
     display: inline-flex;
     align-items: center;
+    justify-content: center;
     gap: 6px;
     background: #232936;
     color: #4fc3f7;
     border: 1px solid #37474f;
     border-radius: 8px;
-    padding: 8px 14px;
+    height: 38px;
+    min-height: 38px;
+    padding: 0 14px;
+    box-sizing: border-box;
     font-size: 0.95rem;
     font-weight: 600;
     text-decoration: none;
@@ -55,11 +59,45 @@ body {
 .nav-right {
     font-size: 0.85rem;
     color: #90a4ae;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.idle-badge {
+    font-size: 0.8rem;
+    color: #9aa0a6;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 12px;
+    padding: 4px 10px;
+    font-family: sans-serif;
+    font-weight: 500;
+    white-space: nowrap;
+}
+.badge-role-server {
+    background: rgba(66, 133, 244, 0.2);
+    color: #82b1ff;
+    border: 1px solid rgba(66, 133, 244, 0.5);
+    font-weight: 700;
+    padding: 3px 9px;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    white-space: nowrap;
+}
+.badge-role-tablet {
+    background: rgba(0, 230, 118, 0.15);
+    color: #69f0ae;
+    border: 1px solid rgba(0, 230, 118, 0.4);
+    font-weight: 700;
+    padding: 3px 9px;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    white-space: nowrap;
 }
 .container { max-width: 680px; margin: 0 auto; padding: 0 16px; }
 header { text-align: center; margin-bottom: 24px; padding-top: 8px; }
 h1 { font-size: 24px; font-weight: 700; color: #ffffff; margin-bottom: 6px; }
-.subtitle { font-size: 14px; color: #9e9e9e; }
+.subtitle { font-size: 14px; color: #9e9e9e; line-height: 1.4; }
 .card {
     background: #1e222b;
     border: 1px solid #2d3340;
@@ -82,38 +120,59 @@ h1 { font-size: 24px; font-weight: 700; color: #ffffff; margin-bottom: 6px; }
 label { display: block; font-size: 13px; font-weight: 500; color: #b0bec5; margin-bottom: 6px; }
 input[type="text"], input[type="number"], select {
     width: 100%;
+    height: 44px;
+    min-height: 44px;
+    max-height: 44px;
     background: #14171f;
     border: 1px solid #37474f;
     border-radius: 8px;
-    padding: 12px 14px;
+    padding: 0 14px;
     font-size: 15px;
     color: #ffffff;
     outline: none;
+    box-sizing: border-box;
+    line-height: 42px;
     transition: border-color 0.2s;
 }
 input:focus, select:focus { border-color: #29b6f6; }
+select {
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+    background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%2390a4ae'%3e%3cpath d='M7 10l5 5 5-5z'/%3e%3c/svg%3e");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    background-size: 18px;
+    padding-right: 36px;
+    cursor: pointer;
+}
 .btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     width: 100%;
+    height: 44px;
+    min-height: 44px;
+    max-height: 44px;
     background: #1976d2;
     color: #ffffff;
     border: none;
-    border-radius: 10px;
-    padding: 13px 18px;
+    border-radius: 8px;
+    padding: 0 18px;
     font-size: 15px;
     font-weight: 600;
     cursor: pointer;
     text-align: center;
+    box-sizing: border-box;
+    line-height: normal;
     transition: background-color 0.2s, transform 0.1s;
     user-select: none;
 }
 .btn:active { transform: scale(0.98); }
-.btn-gps { background: #00897b; margin-bottom: 12px; }
+.btn-gps { background: #00897b; margin-bottom: 14px; }
 .btn-gps:hover { background: #00796b; }
-.btn-secondary { background: #37474f; margin-top: 8px; font-size: 13px; padding: 9px; }
-.btn-save { background: #2e7d32; font-size: 17px; padding: 15px; margin-top: 10px; }
+.btn-secondary { background: #37474f; margin-top: 10px; font-size: 14px; }
+.btn-save { background: #2e7d32; font-size: 16px; height: 48px; min-height: 48px; max-height: 48px; margin-top: 14px; }
 .btn-save:hover { background: #1b5e20; }
 .row-2 { display: flex; gap: 10px; }
 .row-2 .form-group { flex: 1; }
@@ -144,12 +203,15 @@ input:focus, select:focus { border-color: #29b6f6; }
 <body>
 <div class="top-nav">
     <a href="/" class="btn-nav-back" id="btn_back_informer">← Назад к информеру</a>
-    <div class="nav-title">⚙️ Настройка информера</div>
-    <div class="nav-right" id="nav_target_badge">Конфигуратор</div>
+    <div class="nav-title" id="setup_nav_title">⚙️ Настройка информера</div>
+    <div class="nav-right">
+        <span class="idle-badge" id="idle_badge" title="Возврат на главный экран при бездействии">Автовозврат: <span id="idle_countdown">60</span> с</span>
+        <span id="nav_target_badge">Конфигуратор</span>
+    </div>
 </div>
 <div class="container">
     <header>
-        <h1>Погодный Информер</h1>
+        <h1 id="setup_header_title">Погодный Информер</h1>
         <div class="subtitle" id="target_label">Мобильный конфигуратор</div>
     </header>
 
@@ -189,7 +251,6 @@ input:focus, select:focus { border-color: #29b6f6; }
     <div class="card">
         <div class="card-title">
             <span class="icon">🔑</span> Источники погоды
-            <span id="api_badge" class="badge badge-warn">Без ключа</span>
         </div>
         <div class="form-group">
             <label for="primary_source">Основной провайдер:</label>
@@ -202,13 +263,33 @@ input:focus, select:focus { border-color: #29b6f6; }
             </select>
         </div>
         <div class="form-group">
-            <label for="api">API-ключ Яндекс.Погоды:</label>
-            <input type="text" id="api" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
-            <div class="hint">Ключ от Яндекс.Погоды для разработчиков (30-50 бесплатных запросов/сутки).</div>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                <label for="api" style="margin-bottom:0;">API-ключ Яндекс.Погоды:</label>
+                <span id="api_badge" class="badge badge-warn">○ Без ключа</span>
+            </div>
+            <input type="text" id="api" placeholder="Введите ключ Яндекс.Погоды (например: 0d7e...)" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+            <div class="hint">Ключ разработчика Яндекс.Погоды (30-50 бесплатных запросов/сутки).</div>
         </div>
         <div class="form-group">
-            <label for="gismeteo_api_key">API-ключ Gismeteo (опционально):</label>
-            <input type="text" id="gismeteo_api_key" placeholder="Опционально" autocomplete="off">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                <label for="gismeteo_api_key" style="margin-bottom:0;">API-ключ Gismeteo:</label>
+                <span id="gismeteo_badge" class="badge badge-warn">○ Без ключа</span>
+            </div>
+            <input type="text" id="gismeteo_api_key" placeholder="X-Gismeteo-Token..." autocomplete="off">
+        </div>
+        <div class="form-group">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                <label for="foreca_api_key" style="margin-bottom:0;">API-ключ Foreca:</label>
+                <span id="foreca_badge" class="badge badge-warn">○ Без ключа</span>
+            </div>
+            <input type="text" id="foreca_api_key" placeholder="Bearer JWT Token..." autocomplete="off">
+        </div>
+        <div class="form-group">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                <label for="openweathermap_api_key" style="margin-bottom:0;">API-ключ OpenWeatherMap:</label>
+                <span id="owm_badge" class="badge badge-warn">○ Без ключа</span>
+            </div>
+            <input type="text" id="openweathermap_api_key" placeholder="API Key..." autocomplete="off">
         </div>
     </div>
 
@@ -221,16 +302,36 @@ input:focus, select:focus { border-color: #29b6f6; }
 (function() {
     var statusEl = document.getElementById("status_msg");
     var targetLabel = document.getElementById("target_label");
-    var isStandaloneTablet = (location.port === "8080" || location.protocol === "file:");
+    var navTitle = document.getElementById("setup_nav_title");
+    var navBadge = document.getElementById("nav_target_badge");
+    var headTitle = document.getElementById("setup_header_title");
+    var backBtn = document.getElementById("btn_back_informer");
 
-    if (isStandaloneTablet) {
-        targetLabel.innerText = "Настройка экрана планшета (автономный режим)";
-        var backBtn = document.getElementById("btn_back_informer");
-        if (backBtn && location.protocol === "file:") {
-            backBtn.setAttribute("href", "informer.html");
+    var isStandaloneTablet = (location.port === "8080" || location.protocol === "file:");
+    var isServer = (location.port === "8085" || !isStandaloneTablet);
+
+    if (backBtn && location.protocol === "file:") {
+        backBtn.setAttribute("href", "informer.html");
+    }
+
+    if (isServer) {
+        document.title = "🖥️ Сервер погоды (8085) — Конфигуратор";
+        if (navTitle) navTitle.innerText = "🖥️ Домашний сервер погоды";
+        if (navBadge) {
+            navBadge.className = "badge-role-server";
+            navBadge.innerText = "🖥️ СЕРВЕР СЕТИ (8085)";
         }
+        if (headTitle) headTitle.innerText = "🖥️ Домашний сервер погоды";
+        if (targetLabel) targetLabel.innerHTML = "<strong>Центральный сервер сети (порт 8085)</strong> — кэширует погоду и раздаёт на все планшеты в доме";
     } else {
-        targetLabel.innerText = "Настройка сервера сети (раздаёт на все планшеты)";
+        document.title = "📱 Планшет погоды (8080) — Конфигуратор";
+        if (navTitle) navTitle.innerText = "📱 Настройка планшета";
+        if (navBadge) {
+            navBadge.className = "badge-role-tablet";
+            navBadge.innerText = "📱 ПЛАНШЕТ (8080)";
+        }
+        if (headTitle) headTitle.innerText = "📱 Погодный планшет (8080)";
+        if (targetLabel) targetLabel.innerHTML = "<strong>Локальный экран планшета (порт 8080)</strong>";
     }
 
     function showStatus(text, type, duration) {
@@ -239,6 +340,38 @@ input:focus, select:focus { border-color: #29b6f6; }
         statusEl.style.display = "block";
         if (duration) {
             setTimeout(function() { statusEl.style.display = "none"; }, duration);
+        }
+    }
+
+    function maskKeyDisplay(val) {
+        if (!val) return "";
+        var s = String(val).trim();
+        if (!s || s.toLowerCase().indexOf("xxxx") !== -1) return "";
+        if (s.indexOf("•") !== -1 || s.indexOf("*") !== -1) return s;
+        if (s.length > 8) {
+            return s.substring(0, 4) + "••••••••" + s.substring(s.length - 4);
+        } else if (s.length > 4) {
+            return s.substring(0, 2) + "••••" + s.substring(s.length - 2);
+        }
+        return "••••";
+    }
+
+    function updateKeyBadge(id, badgeId, val) {
+        var inp = document.getElementById(id);
+        var badge = document.getElementById(badgeId);
+        var masked = maskKeyDisplay(val);
+        if (masked) {
+            if (inp) inp.value = masked;
+            if (badge) {
+                badge.innerText = "● Настроен (" + masked + ")";
+                badge.className = "badge badge-ok";
+            }
+        } else {
+            if (inp) inp.value = "";
+            if (badge) {
+                badge.innerText = "○ Без ключа";
+                badge.className = "badge badge-warn";
+            }
         }
     }
 
@@ -256,14 +389,11 @@ input:focus, select:focus { border-color: #29b6f6; }
                 if (data.lon != null) document.getElementById("lon").value = data.lon;
                 if (data.station_altitude != null) document.getElementById("station_altitude").value = data.station_altitude;
                 if (data.primary_source) document.getElementById("primary_source").value = data.primary_source;
-                var badge = document.getElementById("api_badge");
-                if (data.has_api || data.api) {
-                    badge.innerText = "Ключ задан";
-                    badge.className = "badge badge-ok";
-                } else {
-                    badge.innerText = "Без ключа";
-                    badge.className = "badge badge-warn";
-                }
+
+                updateKeyBadge("api", "api_badge", data.api);
+                updateKeyBadge("gismeteo_api_key", "gismeteo_badge", data.gismeteo_api_key);
+                updateKeyBadge("foreca_api_key", "foreca_badge", data.foreca_api_key);
+                updateKeyBadge("openweathermap_api_key", "owm_badge", data.openweathermap_api_key);
             })
             .catch(function(err) {
                 showStatus("Не удалось связаться с сервером. Введите настройки вручную.", "warn", 4000);
@@ -349,6 +479,8 @@ input:focus, select:focus { border-color: #29b6f6; }
         var cityName = document.getElementById("city_name").value.trim();
         var apiVal = document.getElementById("api").value.trim();
         var gismeteoKey = document.getElementById("gismeteo_api_key").value.trim();
+        var forecaKey = document.getElementById("foreca_api_key") ? document.getElementById("foreca_api_key").value.trim() : "";
+        var owmKey = document.getElementById("openweathermap_api_key") ? document.getElementById("openweathermap_api_key").value.trim() : "";
         var primarySrc = document.getElementById("primary_source").value;
         var altVal = parseFloat(document.getElementById("station_altitude").value);
 
@@ -357,10 +489,14 @@ input:focus, select:focus { border-color: #29b6f6; }
             payload.lon = lonVal;
         }
         if (cityName) payload.city_name = cityName;
-        if (apiVal) payload.api = apiVal;
-        if (gismeteoKey) payload.gismeteo_api_key = gismeteoKey;
         if (primarySrc) payload.primary_source = primarySrc;
         if (!isNaN(altVal)) payload.station_altitude = altVal;
+
+        // Ключи сохраняем только если введены реальные значения (не маскированные)
+        if (apiVal && apiVal.indexOf("•") === -1 && apiVal.indexOf("*") === -1) payload.api = apiVal;
+        if (gismeteoKey && gismeteoKey.indexOf("•") === -1 && gismeteoKey.indexOf("*") === -1) payload.gismeteo_api_key = gismeteoKey;
+        if (forecaKey && forecaKey.indexOf("•") === -1 && forecaKey.indexOf("*") === -1) payload.foreca_api_key = forecaKey;
+        if (owmKey && owmKey.indexOf("•") === -1 && owmKey.indexOf("*") === -1) payload.openweathermap_api_key = owmKey;
 
         showStatus("Сохранение настроек...", "info");
         fetch("/api/config", {
@@ -372,11 +508,7 @@ input:focus, select:focus { border-color: #29b6f6; }
         .then(function(res) {
             if (res && res.status === "saved") {
                 showStatus("✅ Настройки сохранены! Экран обновится автоматически.", "ok", 5000);
-                var badge = document.getElementById("api_badge");
-                if (payload.api) {
-                    badge.innerText = "Ключ задан";
-                    badge.className = "badge badge-ok";
-                }
+                loadCurrentSettings();
             } else {
                 showStatus("Ошибка сохранения: " + (res.error || "неизвестная ошибка"), "err", 5000);
             }
@@ -385,6 +517,44 @@ input:focus, select:focus { border-color: #29b6f6; }
             showStatus("Ошибка связи с сервером при сохранении", "err", 5000);
         });
     });
+
+    // 60-секундный таймер бездействия с автовозвратом
+    var IDLE_TIMEOUT_SEC = 60;
+    var idleSecondsLeft = IDLE_TIMEOUT_SEC;
+    var idleTimerInterval = null;
+
+    function resetIdleTimer() {
+        idleSecondsLeft = IDLE_TIMEOUT_SEC;
+        updateIdleBadge();
+    }
+
+    function updateIdleBadge() {
+        var cd = document.getElementById("idle_countdown");
+        if (cd) cd.innerText = String(idleSecondsLeft);
+    }
+
+    function startIdleTimer() {
+        if (idleTimerInterval) clearInterval(idleTimerInterval);
+        updateIdleBadge();
+        idleTimerInterval = setInterval(function() {
+            idleSecondsLeft--;
+            updateIdleBadge();
+            if (idleSecondsLeft <= 0) {
+                clearInterval(idleTimerInterval);
+                var dest = "/";
+                if (window.location.protocol === "file:") {
+                    dest = "informer.html";
+                }
+                window.location.href = dest;
+            }
+        }, 1000);
+    }
+
+    var idleEvents = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'touchmove', 'scroll', 'input', 'change', 'click'];
+    for (var iei = 0; iei < idleEvents.length; iei++) {
+        window.addEventListener(idleEvents[iei], resetIdleTimer, true);
+    }
+    startIdleTimer();
 
     loadCurrentSettings();
 })();

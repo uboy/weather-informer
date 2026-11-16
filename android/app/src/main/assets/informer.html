@@ -1577,10 +1577,15 @@ function show_qr_onboarding() {
 			try { localStorage.setItem("weather_device_ip", devIp); } catch (e) {}
 		}
 
-		var tabletUrl = "http://" + devIp + ":" + (tabletPort || "8080") + "/setup";
+		var tabletUrl = "http://" + devIp + ":" + (tabletPort || "8080") + "/setup.html";
 		var serverUrl = (info && info.server_url) ? info.server_url : baseServer;
-		if (serverUrl && !/\/setup$/.test(serverUrl)) {
-			serverUrl = serverUrl.replace(/\/$/, "") + "/setup";
+		if (serverUrl) {
+			serverUrl = serverUrl.replace(/\/$/, "");
+			if (!/\/setup(\.html)?$/.test(serverUrl)) {
+				serverUrl += "/setup.html";
+			} else if (/\/setup$/.test(serverUrl)) {
+				serverUrl += ".html";
+			}
 		}
 
 		var hasServer = (serverUrl && serverUrl.trim() !== "");
