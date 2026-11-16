@@ -608,7 +608,8 @@ body.night-dim #status_bar { opacity: 0.5; }
 			<div id="date" class="value sector_date"></div>
 		</div>
 		<div id="weather_body">
-			<div id="now" class="spacer">
+			<div id="now" class="spacer" title="Нажмите для подробного прогноза на 24/48ч">
+				<div id="forecast_tomorrow_badge" class="forecast_tomorrow_badge">Детали ›</div>
 				<div id="now_hero">
 					<div id="icon" class="value sector_icon" data-type="class"></div>
 					<div id="temperature_block">
@@ -659,7 +660,6 @@ body.night-dim #status_bar { opacity: 0.5; }
 			</div>
 			<div id="weather_right">
 				<div id="forecast" class="spacer" title="Нажмите для подробного прогноза на 24/48ч">
-					<div id="forecast_tomorrow_badge" class="forecast_tomorrow_badge">Детали ›</div>
 					<div class="forecast_part">
 						<div id="forecast_title_0" class="value forecast_title sector_forecast_title_0"></div>
 						<div class="forecast_temperature_wind">
@@ -1747,11 +1747,9 @@ function render_tomorrow_forecast_modal() {
 		'thunderstorm-with-hail': 'гроза с градом'
 	};
 
-	var cardSlotIds = ['night', 'morning', 'day', 'evening'];
-
 	for (var i = 0; i < 4; i++) {
 		var item = activeCards[i];
-		var slotId = cardSlotIds[i];
+		var slotId = item.key;
 		var part = (item.dayObj && item.dayObj.parts && item.dayObj.parts[item.key]) ? item.dayObj.parts[item.key] : null;
 
 		var cardEl = $("#mtf_card_" + slotId);
@@ -2010,12 +2008,16 @@ function init_menu() {
 		});
 	}
 
-	// Клик и тап по блоку прогноза — открытие прогноза на завтра
+	// Клик и тап по блоку прогноза или текущей погоды — открытие деталей прогноза
 	$("#forecast").on("click", function(e) {
 		e.stopPropagation();
 		show_tomorrow_forecast_modal();
 	});
-	attach_tap_handler($("#forecast, .forecast_part, #forecast_tomorrow_badge"), function() {
+	$("#now").on("click", function(e) {
+		e.stopPropagation();
+		show_tomorrow_forecast_modal();
+	});
+	attach_tap_handler($("#forecast, #now, .forecast_part, #forecast_tomorrow_badge"), function() {
 		show_tomorrow_forecast_modal();
 	});
 	$("#mtf_close_btn").on("click", function(e) {
@@ -4264,6 +4266,9 @@ body {
 #now {
 	position: relative;
 	height: 33vw;
+	cursor: pointer;
+	-webkit-tap-highlight-color: rgba(255, 255, 255, 0.15);
+	touch-action: manipulation;
 }
 #temperature_block {
 	position: absolute;
@@ -4376,23 +4381,26 @@ body {
 }
 .forecast_tomorrow_badge {
 	position: absolute;
-	top: -0.2vh;
-	right: 0.5vw;
+	top: 0.6vh;
+	right: 1.2vw;
 	font-size: 1.1vw;
 	color: rgba(255, 255, 255, 0.75);
 	background: rgba(255, 255, 255, 0.1);
 	border: 1px solid rgba(255, 255, 255, 0.22);
 	border-radius: 0.8vw;
-	padding: 0.2vh 0.8vw;
+	padding: 0.3vh 0.9vw;
 	letter-spacing: 0.04em;
-	pointer-events: none;
+	pointer-events: auto;
+	cursor: pointer;
 	text-transform: uppercase;
 	font-weight: 500;
 	transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
-	z-index: 2;
+	z-index: 5;
 }
-#forecast:active .forecast_tomorrow_badge,
-#forecast.touched .forecast_tomorrow_badge {
+#now:active .forecast_tomorrow_badge,
+#now.touched .forecast_tomorrow_badge,
+#forecast_tomorrow_badge:active,
+#forecast_tomorrow_badge.touched {
 	background: rgba(66, 133, 244, 0.5);
 	border-color: rgba(66, 133, 244, 0.8);
 	color: #fff;
@@ -4945,7 +4953,7 @@ body {
 	#now {
 		width: 50% !important;
 		height: 100% !important;
-		position: static !important;
+		position: relative !important;
 		display: flex !important;
 		flex-direction: column !important;
 		align-items: center !important;
@@ -4953,6 +4961,7 @@ body {
 		border-right: 1px solid rgba(255, 255, 255, 0.15) !important;
 		padding: 0.6vh 2vw 1.2vh 2vw !important;
 		box-sizing: border-box !important;
+		cursor: pointer !important;
 	}
 	#now_hero {
 		display: flex !important;
@@ -5439,7 +5448,7 @@ body {
 	#now {
 		width: 100% !important;
 		height: auto !important;
-		position: static !important;
+		position: relative !important;
 		display: flex !important;
 		flex-direction: column !important;
 		align-items: center !important;
@@ -5447,6 +5456,7 @@ body {
 		border-bottom: 1px solid rgba(255, 255, 255, 0.15) !important;
 		padding: 2vh 4vw !important;
 		box-sizing: border-box !important;
+		cursor: pointer !important;
 	}
 	#now_hero {
 		display: flex !important;
