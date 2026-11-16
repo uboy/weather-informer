@@ -53,6 +53,26 @@ body {
 .nav-right {
     font-size: 0.85rem;
     color: #8b949e;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.idle-badge {
+    font-size: 0.8rem;
+    color: #9aa0a6;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 12px;
+    padding: 3px 9px;
+    font-family: sans-serif;
+    font-weight: 500;
+    white-space: nowrap;
+    transition: color 0.2s, border-color 0.2s, background 0.2s;
+}
+.idle-badge.idle-warning {
+    color: #ffd600;
+    border-color: rgba(255, 214, 0, 0.5);
+    background: rgba(255, 214, 0, 0.12);
 }
 
 .container {
@@ -246,12 +266,56 @@ input:focus, select:focus {
     text-align: center;
     padding: 8px;
 }
+.qr-grid-dual {
+    display: flex;
+    flex-direction: row;
+    gap: 12px;
+    justify-content: center;
+    width: 100%;
+}
+.qr-col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    background: #141822;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    padding: 10px 8px;
+    box-sizing: border-box;
+    min-width: 0;
+}
+.qr-col-badge {
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 2px 8px;
+    border-radius: 4px;
+    margin-bottom: 4px;
+}
+.qr-badge-tablet {
+    background: rgba(0, 230, 118, 0.15);
+    color: #00e676;
+    border: 1px solid rgba(0, 230, 118, 0.4);
+}
+.qr-badge-server {
+    background: rgba(66, 133, 244, 0.15);
+    color: #4285f4;
+    border: 1px solid rgba(66, 133, 244, 0.4);
+}
+.qr-col-label {
+    font-size: 0.8rem;
+    color: #e0e0e0;
+    font-weight: 500;
+    margin-top: 4px;
+}
 .qr-wrap {
     background: #ffffff;
-    padding: 10px;
+    padding: 8px;
     border-radius: 8px;
     display: inline-block;
-    margin: 10px 0;
+    margin: 6px 0;
 }
 .qr-wrap img, .qr-wrap canvas {
     display: block;
@@ -259,14 +323,15 @@ input:focus, select:focus {
 }
 .qr-url {
     font-family: monospace;
-    font-size: 0.85rem;
+    font-size: 0.75rem;
     color: #8b949e;
     word-break: break-all;
     background: #13161c;
-    padding: 8px 12px;
+    padding: 6px 8px;
     border-radius: 6px;
     width: 100%;
-    margin-top: 6px;
+    margin-top: 4px;
+    box-sizing: border-box;
 }
 
 /* Status message */
@@ -287,7 +352,10 @@ input:focus, select:focus {
 <div class="top-nav">
     <a href="/" class="btn-nav-back" id="top_back_btn">← Назад к информеру</a>
     <div class="nav-title">⚙️ Настройки информера</div>
-    <div class="nav-right" id="device_info_label">Планшет</div>
+    <div class="nav-right">
+        <span class="idle-badge" id="idle_badge" title="Возврат на главный экран при бездействии">Автовозврат: <span id="idle_countdown">60</span> с</span>
+        <span id="device_info_label">Планшет</span>
+    </div>
 </div>
 
 <div class="container">
@@ -427,16 +495,28 @@ input:focus, select:focus {
             </div>
 
             <!-- Карточка: QR-код для настройки со смартфона -->
-            <div class="card">
+            <div class="card" id="card_settings_qr">
                 <div class="card-title">
                     <span>📱 Настройка со смартфона (QR-код)</span>
                 </div>
                 <div class="qr-section">
-                    <div style="font-size:0.9rem; color:#bbb;">
-                        Отсканируйте камерой телефона, чтобы ввести ключи или передать GPS прямо со смартфона:
+                    <div style="font-size:0.85rem; color:#bbb; margin-bottom:8px;">
+                        Отсканируйте камерой телефона, чтобы ввести ключи или передать GPS со смартфона:
                     </div>
-                    <div class="qr-wrap" id="settings_qr_box"></div>
-                    <div class="qr-url" id="settings_qr_url"></div>
+                    <div class="qr-grid-dual" id="settings_qr_grid">
+                        <div class="qr-col" id="qr_col_tablet">
+                            <div class="qr-col-badge qr-badge-tablet">Планшет</div>
+                            <div class="qr-wrap" id="settings_qr_box"></div>
+                            <div class="qr-col-label">Этот экран</div>
+                            <div class="qr-url" id="settings_qr_url"></div>
+                        </div>
+                        <div class="qr-col" id="qr_col_server" style="display:none;">
+                            <div class="qr-col-badge qr-badge-server">Сервер сети</div>
+                            <div class="qr-wrap" id="settings_qr_box_server"></div>
+                            <div class="qr-col-label">Домашний сервер</div>
+                            <div class="qr-url" id="settings_qr_url_server"></div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -447,7 +527,7 @@ input:focus, select:focus {
         <button type="button" class="btn-action btn-primary" id="btn_save">💾 Сохранить настройки</button>
         <div style="display:flex; gap:12px; margin-top:12px;">
             <button type="button" class="btn-action btn-secondary" id="btn_reload" style="flex:1;">🔄 Обновить экран информера</button>
-            <a href="/" class="btn-action btn-secondary" style="flex:1; text-align:center;">← Вернуться к информеру</a>
+            <a href="/" class="btn-action btn-secondary" id="bottom_back_btn" style="flex:1; text-align:center;">← Вернуться к информеру (<span id="idle_countdown_bottom">60</span>с)</a>
         </div>
     </div>
 </div>
@@ -576,24 +656,46 @@ function loadSettings() {
 function renderSettingsQR() {
     var qrBox = document.getElementById("settings_qr_box");
     var qrUrlText = document.getElementById("settings_qr_url");
+    var qrBoxServer = document.getElementById("settings_qr_box_server");
+    var qrUrlServerText = document.getElementById("settings_qr_url_server");
+    var qrColServer = document.getElementById("qr_col_server");
     if (!qrBox) return;
+
     qrBox.innerHTML = "";
+    if (qrBoxServer) qrBoxServer.innerHTML = "";
 
     var loc = window.location;
-    var host = loc.hostname || "127.0.0.1";
+    var host = (loc.hostname || "").trim();
     var port = loc.port || "8080";
-    var setupUrl = "http://" + host + ":" + port + "/setup";
-    if (loc.pathname && loc.pathname.indexOf("setup") !== -1) {
-        setupUrl = loc.href;
+
+    // 1. Определение реального LAN IP планшета
+    var devIp = "127.0.0.1";
+    var cachedIp = "";
+    try { cachedIp = localStorage.getItem("weather_device_ip") || ""; } catch (e) {}
+
+    if (host && host !== "127.0.0.1" && host !== "localhost" && host !== "::1") {
+        devIp = host;
+    } else if (currentCfg && currentCfg.device_ip && currentCfg.device_ip !== "127.0.0.1" && currentCfg.device_ip !== "localhost") {
+        devIp = currentCfg.device_ip;
+    } else if (cachedIp && cachedIp !== "127.0.0.1" && cachedIp !== "localhost") {
+        devIp = cachedIp;
     }
-    if (qrUrlText) qrUrlText.innerText = setupUrl;
+    if (devIp && devIp !== "127.0.0.1" && devIp !== "localhost") {
+        try { localStorage.setItem("weather_device_ip", devIp); } catch (e) {}
+    }
+
+    var tabletUrl = "http://" + devIp + ":" + port + "/setup";
+    if (loc.pathname && loc.pathname.indexOf("setup") !== -1) {
+        tabletUrl = loc.href;
+    }
+    if (qrUrlText) qrUrlText.innerText = tabletUrl;
 
     if (typeof QRCode !== "undefined") {
         try {
             new QRCode(qrBox, {
-                text: setupUrl,
-                width: 140,
-                height: 140,
+                text: tabletUrl,
+                width: 125,
+                height: 125,
                 colorDark: "#000000",
                 colorLight: "#ffffff",
                 correctLevel: QRCode.CorrectLevel.M
@@ -601,6 +703,47 @@ function renderSettingsQR() {
         } catch (e) {
             console.log("QRCode error:", e);
         }
+    }
+
+    // 2. Серверный QR-код (если server_url настроен)
+    var rawServerUrl = (currentCfg && currentCfg.server_url) ? currentCfg.server_url : (document.getElementById("server_url") ? document.getElementById("server_url").value : "");
+    var serverBase = (rawServerUrl || "").trim().replace(/\/weather\.json.*$/, "").replace(/\/$/, "");
+    var hasServer = (serverBase && serverBase !== "");
+
+    if (hasServer && qrColServer && qrBoxServer) {
+        qrColServer.style.display = "flex";
+        var serverSetupUrl = serverBase + "/setup";
+        if (qrUrlServerText) qrUrlServerText.innerText = serverSetupUrl;
+        if (typeof QRCode !== "undefined") {
+            try {
+                new QRCode(qrBoxServer, {
+                    text: serverSetupUrl,
+                    width: 125,
+                    height: 125,
+                    colorDark: "#000000",
+                    colorLight: "#ffffff",
+                    correctLevel: QRCode.CorrectLevel.M
+                });
+            } catch (e) {
+                console.log("QRCode server error:", e);
+            }
+        }
+    } else if (qrColServer) {
+        qrColServer.style.display = "none";
+    }
+
+    // Автоопределение IP клиента через сервер /api/info
+    if (devIp === "127.0.0.1" && hasServer) {
+        fetch(serverBase + "/api/info")
+            .then(function(r) { return r.json(); })
+            .then(function(info) {
+                if (info && info.client_ip && info.client_ip !== "127.0.0.1" && info.client_ip !== "localhost") {
+                    try { localStorage.setItem("weather_device_ip", info.client_ip); } catch (e) {}
+                    if (currentCfg) currentCfg.device_ip = info.client_ip;
+                    renderSettingsQR();
+                }
+            })
+            .catch(function() {});
     }
 }
 
@@ -731,6 +874,58 @@ var topBackBtn = document.getElementById("top_back_btn");
 if (topBackBtn && window.location.protocol === "file:") {
     topBackBtn.setAttribute("href", "informer.html");
 }
+var bottomBackBtn = document.getElementById("bottom_back_btn");
+if (bottomBackBtn && window.location.protocol === "file:") {
+    bottomBackBtn.setAttribute("href", "informer.html");
+}
+
+// 60-секундный таймер бездействия с автовозвратом на главный экран информера
+var IDLE_TIMEOUT_SEC = 60;
+var idleSecondsLeft = IDLE_TIMEOUT_SEC;
+var idleTimerInterval = null;
+
+function resetIdleTimer() {
+    idleSecondsLeft = IDLE_TIMEOUT_SEC;
+    updateIdleBadge();
+}
+
+function updateIdleBadge() {
+    var cd = document.getElementById("idle_countdown");
+    if (cd) cd.innerText = String(idleSecondsLeft);
+    var cdBottom = document.getElementById("idle_countdown_bottom");
+    if (cdBottom) cdBottom.innerText = String(idleSecondsLeft);
+    var badge = document.getElementById("idle_badge");
+    if (badge) {
+        if (idleSecondsLeft <= 10) {
+            badge.classList.add("idle-warning");
+        } else {
+            badge.classList.remove("idle-warning");
+        }
+    }
+}
+
+function startIdleTimer() {
+    if (idleTimerInterval) clearInterval(idleTimerInterval);
+    updateIdleBadge();
+    idleTimerInterval = setInterval(function() {
+        idleSecondsLeft--;
+        updateIdleBadge();
+        if (idleSecondsLeft <= 0) {
+            clearInterval(idleTimerInterval);
+            var dest = "/";
+            if (window.location.protocol === "file:") {
+                dest = "informer.html";
+            }
+            window.location.href = dest;
+        }
+    }, 1000);
+}
+
+var idleEvents = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'touchmove', 'scroll', 'input', 'change', 'click'];
+for (var iei = 0; iei < idleEvents.length; iei++) {
+    window.addEventListener(idleEvents[iei], resetIdleTimer, true);
+}
+startIdleTimer();
 
 loadSettings();
 </script>

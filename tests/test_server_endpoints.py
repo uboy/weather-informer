@@ -353,6 +353,7 @@ class TestServerEndpoints(unittest.TestCase):
         self.assertEqual(data.get("status"), "ok")
         self.assertEqual(data.get("role"), "caching_server")
         self.assertIn("server_url", data)
+        self.assertIn("client_ip", data)
 
 
 if __name__ == "__main__":

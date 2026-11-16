@@ -3021,11 +3021,15 @@ code {{ color: #81D4FA; }}
             cfg = load_config()
             port = cfg.get("port", 8085)
             s_url = f"http://{host}:{port}"
+            client_ip = ""
+            if hasattr(self, "client_address") and self.client_address and len(self.client_address) > 0:
+                client_ip = str(self.client_address[0])
             body = json.dumps({
                 "status": "ok",
                 "role": "caching_server",
                 "server_url": s_url,
-                "port": port
+                "port": port,
+                "client_ip": client_ip
             }, ensure_ascii=False).encode("utf-8")
             try:
                 self.send_response(200)

@@ -1506,6 +1506,29 @@ function show_key_dialog(title, lsKey, onSave, onDelete) {
 		$("#key_dialog_input").on("click", function(e) { e.stopPropagation(); });
 	}
 
+var device_ip_cfg = "";
+try { device_ip_cfg = localStorage.getItem("weather_device_ip") || ""; } catch (e) {}
+
+function get_server_base() {
+	var s = (typeof server_url !== "undefined" && server_url) ? server_url : "";
+	return s.trim().replace(/\/weather\.json.*$/, "").replace(/\/$/, "");
+}
+
+var qr_modal_timer = null;
+var qr_modal_seconds_left = 60;
+
+function hide_qr_modal() {
+	if (qr_modal_timer) {
+		clearInterval(qr_modal_timer);
+		qr_modal_timer = null;
+	}
+	$("#qr_modal").removeClass("qr_modal_open");
+}
+
+function reset_qr_modal_timer() {
+	qr_modal_seconds_left = 60;
+}
+
 function show_qr_onboarding() {
 	var qrModal = $("#qr_modal");
 	var cardServer = $("#card_qr_server");
@@ -1525,19 +1548,33 @@ function show_qr_onboarding() {
 
 	var host = window.location.hostname || "127.0.0.1";
 	var tabletPort = window.location.port || "8080";
-	var baseServer = (typeof server_base === "function") ? server_base() : "";
+	var baseServer = get_server_base();
+	var cachedIp = "";
+	try { cachedIp = localStorage.getItem("weather_device_ip") || ""; } catch (e) {}
+
+	function resolve_device_ip(info) {
+		if (info && info.device_ip && info.device_ip !== "127.0.0.1" && info.device_ip !== "localhost") {
+			return info.device_ip;
+		}
+		if (host !== "127.0.0.1" && host !== "localhost" && host !== "") {
+			return host;
+		}
+		if (device_ip_cfg && device_ip_cfg !== "127.0.0.1" && device_ip_cfg !== "localhost") {
+			return device_ip_cfg;
+		}
+		if (cachedIp && cachedIp !== "127.0.0.1" && cachedIp !== "localhost") {
+			return cachedIp;
+		}
+		if (info && info.client_ip && info.client_ip !== "127.0.0.1" && info.client_ip !== "localhost") {
+			return info.client_ip;
+		}
+		return host;
+	}
 
 	function render_qr_with_info(info) {
-		var devIp = (info && info.device_ip && info.device_ip !== "127.0.0.1") ? info.device_ip : host;
-		if (devIp === "127.0.0.1" || devIp === "localhost") {
-			if (baseServer) {
-				try {
-					var m = baseServer.match(/^https?:\/\/([^/:]+)/i);
-					if (m && m[1] && m[1] !== "127.0.0.1" && m[1] !== "localhost") {
-						devIp = m[1];
-					}
-				} catch (e) {}
-			}
+		var devIp = resolve_device_ip(info);
+		if (devIp && devIp !== "127.0.0.1" && devIp !== "localhost") {
+			try { localStorage.setItem("weather_device_ip", devIp); } catch (e) {}
 		}
 
 		var tabletUrl = "http://" + devIp + ":" + (tabletPort || "8080") + "/setup";
@@ -1594,6 +1631,15 @@ function show_qr_onboarding() {
 		}
 
 		qrModal.addClass("qr_modal_open");
+
+		if (qr_modal_timer) clearInterval(qr_modal_timer);
+		qr_modal_seconds_left = 60;
+		qr_modal_timer = setInterval(function() {
+			qr_modal_seconds_left--;
+			if (qr_modal_seconds_left <= 0) {
+				hide_qr_modal();
+			}
+		}, 1000);
 	}
 
 	$.ajax({
@@ -1603,7 +1649,19 @@ function show_qr_onboarding() {
 	}).done(function(info) {
 		render_qr_with_info(info);
 	}).fail(function() {
-		render_qr_with_info(null);
+		if (baseServer) {
+			$.ajax({
+				url: baseServer + "/api/info",
+				dataType: "json",
+				timeout: 1500
+			}).done(function(sInfo) {
+				render_qr_with_info(sInfo);
+			}).fail(function() {
+				render_qr_with_info(null);
+			});
+		} else {
+			render_qr_with_info(null);
+		}
 	});
 }
 
@@ -1970,12 +2028,16 @@ function init_menu() {
 	});
 	$("#qr_close_btn").on("click", function(e) {
 		e.stopPropagation();
-		$("#qr_modal").removeClass("qr_modal_open");
+		hide_qr_modal();
 	});
 	$("#qr_modal").on("click", function(e) {
+		reset_qr_modal_timer();
 		if (e.target === this) {
-			$(this).removeClass("qr_modal_open");
+			hide_qr_modal();
 		}
+	});
+	$("#qr_modal").on("touchstart touchmove keydown", function() {
+		reset_qr_modal_timer();
 	});
 
 	// Универсальный обработчик тач-тапа с защитой от срыва скролла и 300мс задержки
@@ -2375,6 +2437,10 @@ function load_config(callback) {
 		if (cfg.lon !== undefined) lon = cfg.lon;
 		base_lat = lat; base_lon = lon;
 		if (cfg.server_url !== undefined) server_url = cfg.server_url;
+		if (cfg.device_ip !== undefined) {
+			device_ip_cfg = String(cfg.device_ip);
+			try { localStorage.setItem("weather_device_ip", device_ip_cfg); } catch (e) {}
+		}
 		if (cfg.city_name !== undefined) city_name_cfg = String(cfg.city_name);
 		if (cfg.night_dim_start_hour !== undefined) night_dim_start = parseInt(cfg.night_dim_start_hour, 10) || 23;
 		if (cfg.night_dim_end_hour !== undefined) night_dim_end = parseInt(cfg.night_dim_end_hour, 10) || 6;
@@ -2404,6 +2470,10 @@ function load_config(callback) {
 		base_lat = lat;
 		base_lon = lon;
 		if (cfg.server_url !== undefined) server_url = cfg.server_url;
+		if (cfg.device_ip !== undefined) {
+			device_ip_cfg = String(cfg.device_ip);
+			try { localStorage.setItem("weather_device_ip", device_ip_cfg); } catch (e) {}
+		}
 		if (cfg.city_name !== undefined) city_name_cfg = String(cfg.city_name);
 		if (cfg.primary_source !== undefined) primary_source_cfg = String(cfg.primary_source);
 		if (cfg.duration_mode !== undefined) duration_mode_cfg = String(cfg.duration_mode);
