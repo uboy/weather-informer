@@ -1,5 +1,5 @@
 #!/system/bin/sh
-# Единый boot-скрипт флота информеров (v2, 2026-11-21).
+# Единый boot-скрипт флота информеров (v4, 2026-11-21).
 # Путь на планшете: /data/adb/service.d/informer_autostart.sh
 # Механизм запуска: BOOT_COMPLETED -> ru.weather.informer BootReceiver -> su.
 # (service.d НЕ исполняется ни одним ROM: SuperSU 2.79/2.82 игнорирует каталог,
@@ -33,22 +33,34 @@ while [ "$(getprop sys.boot_completed)" != "1" ] && [ $i -lt 50 ]; do
     i=$((i+1))
 done
 
-# 1. Пин MAC: ждём wlan0 (до 120 c от старта скрипта)
+# 1. Пин MAC: ждём wlan0 и РЕТРАИМ смену адреса до совпадения (до ~3 мин).
+# Доказано 21.11 boot.log Oysters: ROM рандомизирует MAC в момент поднятия wifi,
+# ранняя попытка на неготовом драйвере = RTNETLINK "Operation not supported";
+# после готовности драйвера down/set/up проходит и wifi переассоциируется.
 i=0
 while [ ! -e /sys/class/net/wlan0/address ] && [ $i -lt 60 ]; do
     sleep 2
     i=$((i+1))
 done
+if [ "$MAC" = "skip" ]; then
+    echo "mac pin skipped (driver refuses change: RTNETLINK+ioctl denied в любом состоянии, доказано 21.11 Oysters)"
+else
 CUR=$(cat /sys/class/net/wlan0/address 2>/dev/null)
 echo "wlan0: $CUR target: $MAC"
-if [ -n "$CUR" ] && [ "$CUR" != "$MAC" ]; then
-    ip link set dev wlan0 down
-    ip link set dev wlan0 address "$MAC"
-    ip link set dev wlan0 up
-    sleep 3
-    echo "mac pinned: $(cat /sys/class/net/wlan0/address 2>/dev/null)"
+tries=0
+while [ "$CUR" != "$MAC" ] && [ $tries -lt 30 ]; do
+    tries=$((tries+1))
+    ip link set dev wlan0 down 2>/dev/null
+    ip link set dev wlan0 address "$MAC" 2>/dev/null
+    ip link set dev wlan0 up 2>/dev/null
+    sleep 6
+    CUR=$(cat /sys/class/net/wlan0/address 2>/dev/null)
+done
+if [ "$CUR" = "$MAC" ]; then
+    echo "mac pinned: $CUR (tries=$tries)"
 else
-    echo "mac ok/no-iface: $CUR"
+    echo "mac PIN-FAIL: $CUR after $tries tries"
+fi
 fi
 
 # 2. adb-over-WiFi: выставляем пропы (persist стирается при загрузке) и перезапускаем adbd.

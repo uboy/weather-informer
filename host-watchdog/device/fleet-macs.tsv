@@ -1,8 +1,10 @@
 # room	dns_alias	model	ip_mac_target	mac
-spalnya-stol	spalnya-stol	Oysters T74HMi 4G	192.168.4.41	00:08:22:b0:0d:fc
+spalnya-stol	spalnya-stol	Oysters T74HMi 4G	динамический	00:08:22:* (только OUI)
 spalnya-okno	spalnya-okno	Digma Plane 7514S 4G	192.168.4.13	40:45:da:f9:c0:d3
 prihozhaya	prihozhaya	4GOOD Light AT200	192.168.4.21	90:09:19:11:82:ab
 gostinaya	gostinaya	IRBIS TZ175	192.168.4.38	0c:8b:2f:37:3e:ac
-# MAC пиннится скриптом informer_autostart.sh при каждой загрузке (ROM Oysters
-# рандомизирует MAC; остальные пока держат, но скрипт покрывает все случаи).
+# MAC пиннится скриптом informer_autostart.sh при каждой загрузке.
+# Oysters: пин MAC НЕВОЗМОЖЕН (NVRAM Err 0x10, драйвер отклоняет смену в любом
+# состоянии - доказано 21.11) - IP уезжает за рандомизированным MAC; обнаружение -
+# хост-сторож fleet-adb-watchdog.sh по HTTP /health (health-OK и не из трёх известных).
 # Источник комнат/DNS: карточка work/keenetic-vpn/task-keenetic-home-dns-device-mapping.md
