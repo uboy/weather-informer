@@ -21,6 +21,10 @@ import logging
 import re
 import shutil
 import socket
+import struct
+import base64
+import hashlib
+import hmac
 import tempfile
 import ipaddress
 import html
@@ -2404,6 +2408,7 @@ class RateLimiter:
             "admin": (10, 60),      # POST /api/settings, /sync_time, /reverse, /geocode, /accuracy
             "weather": (30, 180),   # /weather.json, /forecast.json, /v2/forecast
             "static": (30, 180),    # /settings, /install, /informer.apk, /health, /status
+            "cam": (30, 180),       # /ws/cam, /dashboard, /api/cam/* (фаза 1 камер)
         }
 
     def get_client_ip(self, handler):
@@ -2489,6 +2494,488 @@ class RateLimiter:
 RATE_LIMITER = RateLimiter()
 
 
+# ======================================================================
+# Фаза 1 камер: WebSocket-сигналинг /ws/cam (stdlib RFC6455) и дашборд.
+# Роли: publisher (планшет, tablet_token) и viewer (браузер, viewer_token).
+# 1 publisher на комнату -> N зрителей; медиа напрямую viewer<->tablet
+# (WebRTC), сервер релеит только сигналинг (offer/answer/ice).
+# ======================================================================
+
+WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+WS_MAX_FRAME_BYTES = 512 * 1024   # лимит кадра (SDP с ICE-кандидатами помещается с запасом)
+WS_AUTH_TIMEOUT_S = 10.0          # сколько ждём hello после handshake
+WS_READ_TIMEOUT_S = 30.0          # тишина 30 с -> ping; дольше 60 с без кадров -> drop
+WS_MAX_SILENCE_S = 60.0
+
+WS_OP_CONT = 0x0
+WS_OP_TEXT = 0x1
+WS_OP_BINARY = 0x2
+WS_OP_CLOSE = 0x8
+WS_OP_PING = 0x9
+WS_OP_PONG = 0xA
+
+
+class CamWsClosed(Exception):
+    """Нормальное/аварийное закрытие WS-сессии."""
+
+    def __init__(self, code=1000, reason=""):
+        super().__init__("%s %s" % (code, reason))
+        self.code = code
+        self.reason = reason
+
+
+def cam_section():
+    """Секция cameras из config.json (или пустой dict)."""
+    cfg = load_config()
+    cc = cfg.get("cameras")
+    return cc if isinstance(cc, dict) else {}
+
+
+def cam_room_cfg(room):
+    cc = cam_section()
+    rooms = cc.get("rooms")
+    if not isinstance(rooms, dict):
+        return None
+    rc = rooms.get(room)
+    return rc if isinstance(rc, dict) else None
+
+
+def ws_compute_accept(client_key):
+    digest = hashlib.sha1((client_key + WS_GUID).encode("ascii")).digest()
+    return base64.b64encode(digest).decode("ascii")
+
+
+def ws_build_frame(opcode, payload=b""):
+    """Сервер -> клиент: FIN=1, без маски (RFC6455 5.1)."""
+    header = bytearray([0x80 | opcode])
+    n = len(payload)
+    if n < 126:
+        header.append(n)
+    elif n < 65536:
+        header.append(126)
+        header += struct.pack(">H", n)
+    else:
+        header.append(127)
+        header += struct.pack(">Q", n)
+    return bytes(header) + payload
+
+
+def ws_read_exact(rfile, n):
+    buf = bytearray()
+    while len(buf) < n:
+        chunk = rfile.read(n - len(buf))
+        if not chunk:
+            raise CamWsClosed(1006, "connection closed mid-frame")
+        buf += chunk
+    return bytes(buf)
+
+
+def ws_read_frame(rfile):
+    """Клиент -> сервер: кадр ОБЯЗАН быть маскированным (RFC6455 5.3).
+
+    Возвращает (fin, opcode, payload). Незамаскированный клиентский кадр -
+    нарушение протокола: CamWsClosed(1002) (RFC6455 5.1: server MUST close).
+    """
+    hdr = ws_read_exact(rfile, 2)
+    fin = hdr[0] & 0x80
+    opcode = hdr[0] & 0x0F
+    masked = bool(hdr[1] & 0x80)
+    length = hdr[1] & 0x7F
+    if length == 126:
+        length = struct.unpack(">H", ws_read_exact(rfile, 2))[0]
+    elif length == 127:
+        length = struct.unpack(">Q", ws_read_exact(rfile, 8))[0]
+    if length > WS_MAX_FRAME_BYTES:
+        raise CamWsClosed(1009, "frame too big")
+    if not masked:
+        raise CamWsClosed(1002, "unmasked client frame")
+    mask = ws_read_exact(rfile, 4)
+    data = ws_read_exact(rfile, length)
+    out = bytearray(data)
+    for i in range(length):
+        out[i] ^= mask[i & 3]
+    return fin, opcode, bytes(out)
+
+
+class CamConnection:
+    """Одно WS-соединение /ws/cam после handshake и успешного hello."""
+
+    def __init__(self, sock, rfile, addr, role, room, viewer_id=""):
+        self.sock = sock
+        self.rfile = rfile
+        self.addr = addr
+        self.role = role
+        self.room = room
+        self.viewer_id = viewer_id
+        self.send_lock = threading.Lock()
+        self.alive = True
+        self.connected_ts = time.time()
+        self.last_seen = time.time()
+        self.cam_state = None  # у publisher: последний cam_state
+
+    def send_text(self, text):
+        try:
+            frame = ws_build_frame(WS_OP_TEXT, text.encode("utf-8"))
+        except Exception:
+            return False
+        with self.send_lock:
+            if not self.alive:
+                return False
+            try:
+                self.sock.sendall(frame)
+                return True
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                return False
+
+    def send_ping(self):
+        try:
+            frame = ws_build_frame(WS_OP_PING, b"cam")
+        except Exception:
+            return False
+        with self.send_lock:
+            try:
+                self.sock.sendall(frame)
+                return True
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                return False
+
+    def send_close(self, code, reason):
+        try:
+            frame = ws_build_frame(WS_OP_CLOSE, struct.pack(">H", code) + reason.encode("utf-8")[:100])
+        except Exception:
+            return
+        with self.send_lock:
+            try:
+                self.sock.sendall(frame)
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
+
+
+class CameraRegistry:
+    """Живые WS-сессии камер и последнее известное состояние комнат."""
+
+    def __init__(self):
+        self.lock = threading.RLock()
+        self.publishers = {}   # room -> CamConnection
+        self.viewers = {}      # viewer_id -> CamConnection
+        self.room_viewers = {} # room -> set(viewer_id)
+        self.cam_state = {}    # room -> dict из cam_state планшета
+        self.counter = 0
+
+    def next_viewer_id(self):
+        with self.lock:
+            self.counter += 1
+            return "v%d" % self.counter
+
+    def add_publisher(self, room, conn):
+        """True если занялось (комната свободна)."""
+        with self.lock:
+            prev = self.publishers.get(room)
+            if prev is not None and prev.alive:
+                return False
+            self.publishers[room] = conn
+            return True
+
+    def add_viewer(self, room, conn):
+        with self.lock:
+            self.viewers[conn.viewer_id] = conn
+            self.room_viewers.setdefault(room, set()).add(conn.viewer_id)
+
+    def get_publisher(self, room):
+        with self.lock:
+            conn = self.publishers.get(room)
+            return conn if (conn is not None and conn.alive) else None
+
+    def get_viewer(self, viewer_id):
+        with self.lock:
+            conn = self.viewers.get(viewer_id)
+            return conn if (conn is not None and conn.alive) else None
+
+    def set_cam_state(self, room, state):
+        with self.lock:
+            self.cam_state[room] = state
+
+    def remove(self, conn):
+        """Убрать соединение из реестра; вернуть (роль, комната)."""
+        with self.lock:
+            if conn.role == "publisher":
+                if self.publishers.get(conn.room) is conn:
+                    del self.publishers[conn.room]
+            else:
+                self.viewers.pop(conn.viewer_id, None)
+                ids = self.room_viewers.get(conn.room)
+                if ids is not None:
+                    ids.discard(conn.viewer_id)
+                    if not ids:
+                        self.room_viewers.pop(conn.room, None)
+            return conn.role, conn.room
+
+    def viewers_of(self, room):
+        with self.lock:
+            ids = list(self.room_viewers.get(room, ()))
+            return [self.viewers[i] for i in ids if self.viewers.get(i) and self.viewers[i].alive]
+
+    def summary(self):
+        with self.lock:
+            rooms = {}
+            for room in set(list(self.publishers.keys()) + list(self.cam_state.keys())):
+                pub = self.publishers.get(room)
+                rooms[room] = {
+                    "publisher_connected": bool(pub is not None and pub.alive),
+                    "viewers": len(self.room_viewers.get(room, ()) or ()),
+                    "cam_state": self.cam_state.get(room),
+                }
+            return rooms
+
+
+CAM_REGISTRY = CameraRegistry()
+
+
+def cam_state_snapshot(room):
+    """Последнее известное состояние комнаты (или синтетическое offline)."""
+    state = CAM_REGISTRY.cam_state.get(room)
+    if isinstance(state, dict):
+        return state
+    return {"type": "cam_state", "state": "OFFLINE", "enabled": False,
+            "viewers": 0, "last_error": "publisher offline", "ts": int(time.time())}
+
+
+def cam_send_viewer_error(conn, code):
+    conn.send_text(json.dumps({"type": "error", "code": code}))
+
+
+def cam_dispatch_publisher(conn, msg):
+    """Сообщение от планшета: релеит answer/ice к зрителю, кэширует cam_state."""
+    mtype = msg.get("type")
+    if mtype in ("answer", "ice"):
+        to = msg.get("to") or ""
+        payload = msg.get("payload")
+        viewer = CAM_REGISTRY.get_viewer(to)
+        if viewer is None:
+            return
+        routed = {"type": mtype, "payload": payload}
+        viewer.send_text(json.dumps(routed, ensure_ascii=False))
+    elif mtype == "cam_state":
+        CAM_REGISTRY.set_cam_state(conn.room, msg)
+        for viewer in CAM_REGISTRY.viewers_of(conn.room):
+            viewer.send_text(json.dumps(msg, ensure_ascii=False))
+    elif mtype == "pong_app":
+        return
+    # прочие типы от планшета игнорируются
+
+
+def cam_dispatch_viewer(conn, msg):
+    """Сообщение от зрителя: offer/ice уходят издателю с from=viewer_id."""
+    mtype = msg.get("type")
+    if mtype not in ("offer", "ice"):
+        return
+    pub = CAM_REGISTRY.get_publisher(conn.room)
+    if pub is None:
+        cam_send_viewer_error(conn, "no_publisher")
+        return
+    if mtype == "offer":
+        state = CAM_REGISTRY.cam_state.get(conn.room)
+        if isinstance(state, dict) and state.get("enabled") is False:
+            cam_send_viewer_error(conn, "camera_disabled")
+            return
+    payload = msg.get("payload")
+    routed = {"type": mtype, "from": conn.viewer_id, "payload": payload}
+    pub.send_text(json.dumps(routed, ensure_ascii=False))
+
+
+def ws_cam_session(handler):
+    """Жизненный цикл WS-сессии после отправки 101. Висит в потоке запроса."""
+    sock = handler.connection
+    sock.settimeout(WS_AUTH_TIMEOUT_S)
+    conn = None
+    try:
+        fin, opcode, payload = ws_read_frame(handler.rfile)
+        if opcode != WS_OP_TEXT:
+            raise CamWsClosed(4000, "first frame must be hello text")
+        try:
+            hello = json.loads(payload.decode("utf-8", "replace"))
+        except (ValueError, UnicodeDecodeError):
+            raise CamWsClosed(4000, "hello is not valid json")
+        if not isinstance(hello, dict):
+            raise CamWsClosed(4000, "hello must be json object")
+
+        role = hello.get("role")
+        room = hello.get("room") or ""
+        token = hello.get("token") or ""
+        cc = cam_section()
+        if not cc.get("enabled", False):
+            raise CamWsClosed(4005, "cameras disabled")
+        rc = cam_room_cfg(room)
+        if rc is None:
+            raise CamWsClosed(4002, "unknown room")
+        if role == "publisher":
+            want = rc.get("tablet_token") or ""
+            if not token or not hmac.compare_digest(token.encode("utf-8"), want.encode("utf-8")):
+                raise CamWsClosed(4001, "bad tablet token")
+        elif role == "viewer":
+            want = cc.get("viewer_token") or ""
+            if not token or not hmac.compare_digest(token.encode("utf-8"), want.encode("utf-8")):
+                raise CamWsClosed(4001, "bad viewer token")
+        else:
+            raise CamWsClosed(4000, "unknown role")
+
+        conn = CamConnection(sock, handler.rfile, handler.client_address, role, room)
+        if role == "publisher":
+            if not CAM_REGISTRY.add_publisher(room, conn):
+                raise CamWsClosed(4003, "publisher busy")
+        else:
+            conn.viewer_id = CAM_REGISTRY.next_viewer_id()
+            CAM_REGISTRY.add_viewer(room, conn)
+
+        conn.send_text(json.dumps({
+            "type": "hello_ok", "role": role, "room": room,
+            "viewer": conn.viewer_id,
+        }))
+        if role == "viewer":
+            conn.send_text(json.dumps(cam_state_snapshot(room), ensure_ascii=False))
+        log.info("cam ws %s %s room=%s viewer=%s from %s",
+                 "hello_ok" if role == "publisher" else "hello_ok", role, room, conn.viewer_id,
+                 conn.addr[0] if conn.addr else "?")
+
+        sock.settimeout(WS_READ_TIMEOUT_S)
+        fragments = bytearray()
+        frag_open = False
+        while conn.alive:
+            try:
+                fin, opcode, data = ws_read_frame(handler.rfile)
+            except socket.timeout:
+                now = time.time()
+                if now - conn.last_seen > WS_MAX_SILENCE_S:
+                    raise CamWsClosed(1001, "silence timeout")
+                conn.send_ping()
+                continue
+            conn.last_seen = time.time()
+            if opcode == WS_OP_PING:
+                try:
+                    with conn.send_lock:
+                        sock.sendall(ws_build_frame(WS_OP_PONG, data))
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    raise CamWsClosed(1006, "write failed")
+                continue
+            if opcode == WS_OP_PONG:
+                continue
+            if opcode == WS_OP_CLOSE:
+                raise CamWsClosed(1000, "peer close")
+            if opcode == WS_OP_BINARY:
+                raise CamWsClosed(1003, "binary frames unsupported")
+
+            # Сборка текстовых сообщений (одиночных и фрагментированных).
+            if opcode == WS_OP_TEXT:
+                if frag_open:
+                    raise CamWsClosed(1002, "new text mid-message")
+                if fin:
+                    text = data.decode("utf-8", "replace")
+                else:
+                    fragments = bytearray(data)
+                    frag_open = True
+                    if len(fragments) > WS_MAX_FRAME_BYTES:
+                        raise CamWsClosed(1009, "message too big")
+                    continue
+            elif opcode == WS_OP_CONT:
+                if not frag_open:
+                    raise CamWsClosed(1002, "continuation without start")
+                fragments += data
+                if len(fragments) > WS_MAX_FRAME_BYTES:
+                    raise CamWsClosed(1009, "message too big")
+                if not fin:
+                    continue
+                text = bytes(fragments).decode("utf-8", "replace")
+                fragments = bytearray()
+                frag_open = False
+            else:
+                raise CamWsClosed(1002, "bad opcode")
+
+            try:
+                msg = json.loads(text)
+            except (ValueError, UnicodeDecodeError):
+                continue
+            if not isinstance(msg, dict):
+                continue
+            if conn.role == "publisher":
+                cam_dispatch_publisher(conn, msg)
+            else:
+                cam_dispatch_viewer(conn, msg)
+    except CamWsClosed as closed:
+        if conn is not None:
+            conn.send_close(closed.code, closed.reason)
+        log.info("cam ws closed: code=%s reason=%s role=%s room=%s",
+                 closed.code, closed.reason,
+                 conn.role if conn else "?", conn.room if conn else "?")
+    except (BrokenPipeError, ConnectionResetError, OSError, ValueError):
+        log.info("cam ws dropped (io error) role=%s room=%s",
+                 conn.role if conn else "?", conn.room if conn else "?")
+    finally:
+        if conn is not None:
+            role, room = CAM_REGISTRY.remove(conn)
+            conn.alive = False
+            if role == "publisher":
+                offline = {"type": "cam_state", "state": "OFFLINE", "enabled": False,
+                           "viewers": 0, "last_error": "publisher offline",
+                           "ts": int(time.time())}
+                for viewer in CAM_REGISTRY.viewers_of(room):
+                    viewer.send_text(json.dumps(offline, ensure_ascii=False))
+            else:
+                pub = CAM_REGISTRY.get_publisher(room)
+                if pub is not None:
+                    pub.send_text(json.dumps({"type": "viewer_leave", "viewer": conn.viewer_id}))
+            try:
+                sock.settimeout(2.0)
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+
+def check_cam_basic_auth(handler):
+    """HTTP Basic для дашборда камер. Учётка - cameras.dashboard_user/password."""
+    cc = cam_section()
+    user = cc.get("dashboard_user") or ""
+    pwd = cc.get("dashboard_password") or ""
+    if not user or not pwd:
+        return False  # не настроено - доступ закрыт, а не открыт
+    header = handler.headers.get("Authorization") or ""
+    if not header.startswith("Basic "):
+        return False
+    try:
+        raw = base64.b64decode(header[6:].strip(), validate=True).decode("utf-8", "replace")
+    except Exception:
+        return False
+    got_user, _sep, got_pwd = raw.partition(":")
+    return (hmac.compare_digest(got_user.encode("utf-8"), user.encode("utf-8"))
+            and hmac.compare_digest(got_pwd.encode("utf-8"), pwd.encode("utf-8")))
+
+
+def send_cam_401(handler):
+    body = json.dumps({"error": "unauthorized"}).encode("utf-8")
+    handler.send_response(401)
+    handler.send_header("WWW-Authenticate", 'Basic realm="weather-cams"')
+    handler.send_cors_headers()
+    handler.send_header("Content-Type", "application/json; charset=utf-8")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    try:
+        handler.wfile.write(body)
+    except (BrokenPipeError, ConnectionResetError):
+        pass
+
+
+def cam_builtin_dashboard_html():
+    """Аварийная страница, если dashboard.html отсутствует."""
+    return """<!DOCTYPE html><html><head><meta charset="utf-8"><title>Камеры</title></head>
+<body style="background:#121212;color:#e0e0e0;font-family:sans-serif">
+<h2>Камеры: файл dashboard.html не найден на сервере</h2>
+<p>Эндпоинты: /api/cam/summary, /api/cam/snapshot?room=..., /api/cam/viewer-token</p>
+</body></html>"""
+
+
 class WeatherHTTPHandler(BaseHTTPRequestHandler):
     # Жесткий таймаут сокета 10 с (защита от подвисания при плохом Wi-Fi на планшетах)
     timeout = 10.0
@@ -2502,6 +2989,8 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
             return "admin"
         if path in ("/", "/weather.json", "/forecast.json", "/v2/forecast"):
             return "weather"
+        if path == "/ws/cam" or path.startswith("/api/cam/") or path in ("/dashboard", "/dashboard.html"):
+            return "cam"
         return "static"
 
     def enforce_rate_limit(self, category):
@@ -2533,6 +3022,167 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "X-Yandex-Weather-Key, X-Gismeteo-Token, Content-Type")
+
+    # ===== Фаза 1 камер: WS handshake и HTTP-эндпоинты дашборда =====
+
+    def handle_ws_cam(self):
+        """RFC6455 handshake на /ws/cam, затем сессия в текущем потоке."""
+        upgrade = (self.headers.get("Upgrade") or "").strip().lower()
+        key = (self.headers.get("Sec-WebSocket-Key") or "").strip()
+        version = (self.headers.get("Sec-WebSocket-Version") or "").strip()
+        if upgrade != "websocket" or not key:
+            body = json.dumps({"error": "websocket upgrade required"}).encode("utf-8")
+            self.send_response(400)
+            self.send_cors_headers()
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return
+        if version != "13":
+            body = json.dumps({"error": "unsupported websocket version"}).encode("utf-8")
+            self.send_response(426)
+            self.send_header("Sec-WebSocket-Version", "13")
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return
+        accept = ws_compute_accept(key)
+        response = (
+            "HTTP/1.1 101 Switching Protocols\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            "Sec-WebSocket-Accept: %s\r\n\r\n" % accept
+        )
+        self.wfile.write(response.encode("ascii"))
+        self.wfile.flush()
+        self.close_connection = True  # после сессии соединение закрывается, новых запросов нет
+        ws_cam_session(self)
+
+    def serve_dashboard(self):
+        """Дашборд камер (dashboard.html по образцу settings.html), HTTP Basic."""
+        if not check_cam_basic_auth(self):
+            send_cam_401(self)
+            return
+        s_file = os.path.join(SCRIPT_DIR, "dashboard.html")
+        try:
+            with open(s_file, "r", encoding="utf-8") as f:
+                html_text = f.read()
+        except OSError as e:
+            log.warning("Failed to read dashboard.html: %s", e)
+            html_text = cam_builtin_dashboard_html()
+        body = html_text.encode("utf-8")
+        try:
+            self.send_response(200)
+            self.send_cors_headers()
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def serve_cam_viewer_token(self):
+        """Отдать viewer_token авторизованному браузеру (для WS hello)."""
+        if not check_cam_basic_auth(self):
+            send_cam_401(self)
+            return
+        cc = cam_section()
+        body = json.dumps({
+            "viewer_token": cc.get("viewer_token", ""),
+            "rooms": sorted((cc.get("rooms") or {}).keys()),
+        }).encode("utf-8")
+        try:
+            self.send_response(200)
+            self.send_cors_headers()
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def serve_cam_summary(self):
+        """Сводка по комнатам: живые сессии и последнее cam_state планшетов."""
+        if not check_cam_basic_auth(self):
+            send_cam_401(self)
+            return
+        body = json.dumps({
+            "rooms": CAM_REGISTRY.summary(),
+            "ts": int(time.time()),
+        }, ensure_ascii=False).encode("utf-8")
+        try:
+            self.send_response(200)
+            self.send_cors_headers()
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def serve_cam_snapshot(self):
+        """Прокси на планшет: GET /api/snapshot?token=... (tablet_token не покидает сервер)."""
+        if not check_cam_basic_auth(self):
+            send_cam_401(self)
+            return
+        qs = parse_qs(urlparse(self.path).query)
+        room = (qs.get("room", [""])[0] or "").strip()
+        rc = cam_room_cfg(room)
+        if rc is None:
+            self._send_cam_json(400, {"error": "unknown room"})
+            return
+        tablet = rc.get("tablet") or ""
+        token = rc.get("tablet_token") or ""
+        if not tablet or not token:
+            self._send_cam_json(502, {"error": "room not configured"})
+            return
+        url = "http://%s:8080/api/snapshot?token=%s" % (tablet, urllib.parse.quote(token, safe=""))
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "weather-informer-cam-proxy"})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                status = resp.status
+                ctype = resp.headers.get("Content-Type", "application/octet-stream")
+                data = resp.read()
+        except urllib.error.HTTPError as e:
+            # 403 disabled/forbidden и 503 busy планшета пробрасываем как есть
+            try:
+                payload = e.read() or b""
+                ctype = e.headers.get("Content-Type", "application/json") if e.headers else "application/json"
+            except Exception:
+                payload, ctype = b"", "application/json"
+            self._send_cam_raw(e.code, ctype, payload)
+            return
+        except (urllib.error.URLError, OSError, socket.timeout) as e:
+            self._send_cam_json(502, {"error": "tablet unreachable", "detail": sanitize_secrets(str(e))})
+            return
+        self._send_cam_raw(status, ctype, data)
+
+    def _send_cam_raw(self, status, ctype, data):
+        try:
+            self.send_response(status)
+            self.send_cors_headers()
+            self.send_header("Content-Type", ctype)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            if data:
+                self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def _send_cam_json(self, status, obj):
+        self._send_cam_raw(status, "application/json; charset=utf-8", json.dumps(obj).encode("utf-8"))
 
     def get_settings_html(self):
         return """<!DOCTYPE html><html><head><meta charset="utf-8">
@@ -2737,6 +3387,23 @@ doSave();
         path = self.path.split("?")[0]
         cat = self.get_path_category(path, "GET")
         if not self.enforce_rate_limit(cat):
+            return
+
+        # Фаза 1 камер: WS-сигналинг и дашборд (route-хуки до старых маршрутов)
+        if path == "/ws/cam":
+            self.handle_ws_cam()
+            return
+        if path in ("/dashboard", "/dashboard.html"):
+            self.serve_dashboard()
+            return
+        if path == "/api/cam/summary":
+            self.serve_cam_summary()
+            return
+        if path == "/api/cam/snapshot":
+            self.serve_cam_snapshot()
+            return
+        if path == "/api/cam/viewer-token":
+            self.serve_cam_viewer_token()
             return
 
         if path == "/sync_time":
@@ -3291,7 +3958,8 @@ code {{ color: #81D4FA; }}
                     "server_url", "cache_interval_minutes",
                     "fallback_interval_minutes", "ntp_server",
                     "rate_limit_enabled", "rate_limit_admin_per_minute",
-                    "rate_limit_weather_per_minute", "rate_limit_static_per_minute"
+                    "rate_limit_weather_per_minute", "rate_limit_static_per_minute",
+                    "rate_limit_cam_per_minute"
                 ]
                 to_update = {}
                 for k in allowed_fields:
