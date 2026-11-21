@@ -4,27 +4,24 @@
 # лечение только перезапуском adbd под su приложения: сессия su живёт в процессе
 # приложения и переживает разрыв adb-соединения (прогоны su по adb-сессии убивают
 # adbd насовсем: stop рвёт сессию до start - доказано 21.11 на Digma/AT200/Oysters).
-# Oysters T74HMi: ROM рандомизирует MAC при каждой загрузке (wifi-область NVRAM
-# повреждена: фантомный AP «NVRAM WARNING: Err = 0x10», пин MAC отклоняется драйвером
-# в любом состоянии - доказано 21.11, карточка task-weather-informer-mac-pin-boot-restore),
-# IP уезжает за MAC. ARP/OUI на asrock не виден (планшеты за роутером, L2 чужой) -
-# находим по HTTP /health: информер стоит только на 4 планшетах, значит
-# «health-OK и не один из трёх известных» = Oysters.
+# Oysters T74HMi: с вечера 21.11 MAC пиннится ПАТЧЕМ ЯДРА (владелец) - ребут-тест
+# 19:11:19 доказал 00:08:22:b0:0d:fc до == после; раньше ROM рандомизировал MAC/IP
+# при каждой загрузке (NVRAM WARNING: Err = 0x10). Фолбэк сохранён: если .41 не
+# отвечает по /health, ищем планшет по health-дискриминации (информер стоит только
+# на 4 планшетах парка; ARP/OUI из asrock не виден - планшеты за роутером, L2 чужой).
 # Лог: ~/runs/weather-informer-boot-adb/watchdog.log
 # Остановка: systemctl --user disable --now fleet-adb-watchdog.timer
-TABLETS="192.168.4.13 192.168.4.21 192.168.4.38"
+TABLETS="192.168.4.13 192.168.4.21 192.168.4.38 192.168.4.41"
 LOG="$HOME/runs/weather-informer-boot-adb/watchdog.log"
 mkdir -p "$(dirname "$LOG")"
 
 find_oysters() {
   local ip i
-  # быстрые кандидаты (история уезжающих IP Oysters)
   for ip in 192.168.4.3 192.168.4.5 192.168.4.7 192.168.4.2 192.168.4.14; do
     if curl -s -m 2 "http://$ip:8080/health" 2>/dev/null | grep -q '"status":"ok"'; then
       case " $TABLETS " in *" $ip "*) ;; *) echo "$ip"; return 0 ;; esac
     fi
   done
-  # фолбэк: ping-sweep + HTTP-проба на живых, исключая остальные планшеты
   for i in $(seq 2 60); do ping -c1 -W1 "192.168.4.$i" >/dev/null 2>&1 & done
   wait
   for i in $(seq 2 60); do
@@ -36,11 +33,15 @@ find_oysters() {
   done
 }
 
-oysters_ip=$(find_oysters)
-if [ -n "$oysters_ip" ]; then
-  TABLETS="$TABLETS $oysters_ip"
-else
-  echo "$(date -Is) oysters: не найден в сети по OUI 00:08:22 - нужен power-cycle/физический заход" >> "$LOG"
+# Фолбэк только при мёртвом .41: здоровый список не трогаем.
+if ! curl -s -m 2 "http://192.168.4.41:8080/health" 2>/dev/null | grep -q '"status":"ok"'; then
+  alt=$(find_oysters)
+  if [ -n "$alt" ]; then
+    echo "$(date -Is) oysters: .41 мёртв, найден на $alt (MAC-патч ядром больше не держит?)" >> "$LOG"
+    TABLETS="$TABLETS $alt"
+  else
+    echo "$(date -Is) oysters: .41 мёртв, в сети не найден - нужен boot/физический заход" >> "$LOG"
+  fi
 fi
 
 for ip in $TABLETS; do
