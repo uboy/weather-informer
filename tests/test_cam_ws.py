@@ -398,6 +398,23 @@ class TestCamWs(unittest.TestCase):
         self.assertTrue(rooms[ROOM].get("configured"), ROOM)
         conn.close()
 
+    def test_settings_cameras_rooms_no_token_leak(self):
+        """GET /api/settings: cameras_rooms = room+tablet (для подсказки UI);
+        tablet_token никогда не покидает конфиг (негатив по утечке секрета)."""
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        conn.request("GET", "/api/settings")
+        resp = conn.getresponse()
+        data = json.loads(resp.read().decode("utf-8"))
+        self.assertEqual(resp.status, 200)
+        conn.close()
+        rooms = data.get("cameras_rooms")
+        self.assertIsInstance(rooms, list)
+        self.assertTrue(rooms, "configured cam rooms must be listed")
+        self.assertTrue(all(sorted(r.keys()) == ["room", "tablet"] for r in rooms),
+                        "cameras_rooms entries must carry only room and tablet")
+        self.assertNotIn("tablet_token", json.dumps(data),
+                         "tablet_token must not leak via /api/settings")
+
     def test_cam_rooms_admin_auth_add_remove(self):
         """Админ комнат: 401 без пары, add пишет конфиг (токен показан раз),
         remove убирает только целевую комнату (остальные не теряются)."""

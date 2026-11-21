@@ -11,7 +11,7 @@
 # на 4 планшетах парка; ARP/OUI из asrock не виден - планшеты за роутером, L2 чужой).
 # Лог: ~/runs/weather-informer-boot-adb/watchdog.log
 # Остановка: systemctl --user disable --now fleet-adb-watchdog.timer
-TABLETS="192.168.4.13 192.168.4.21 192.168.4.38 192.168.4.41"
+TABLETS="192.168.4.13 192.168.4.21 192.168.4.38 192.168.4.5"
 LOG="$HOME/runs/weather-informer-boot-adb/watchdog.log"
 mkdir -p "$(dirname "$LOG")"
 
@@ -34,7 +34,7 @@ find_oysters() {
 }
 
 # Фолбэк только при мёртвом .41: здоровый список не трогаем.
-if ! curl -s -m 2 "http://192.168.4.41:8080/health" 2>/dev/null | grep -q '"status":"ok"'; then
+if ! curl -s -m 2 "http://192.168.4.5:8080/health" 2>/dev/null | grep -q '"status":"ok"'; then
   alt=$(find_oysters)
   if [ -n "$alt" ]; then
     echo "$(date -Is) oysters: .41 мёртв, найден на $alt (MAC-патч ядром больше не держит?)" >> "$LOG"

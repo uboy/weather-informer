@@ -241,6 +241,13 @@ public class CamSignalingClient {
 
     private void sendControl(int opcode, byte[] payload) {
         synchronized (sendLock) {
+            if (out == null) {
+                // Некуда писать: connect не дошёл до handshake (напр. ECONNREFUSED),
+                // а shutdown/disconnect всё равно вызывает sendClose. Раньше здесь был
+                // NPE, валивший весь киоск (logcat 22:30:28, T74HMi/spalnya-stol).
+                Log.w(TAG, "control frame skipped: output stream not open");
+                return;
+            }
             try {
                 byte[] mask = new byte[4];
                 random.nextBytes(mask);

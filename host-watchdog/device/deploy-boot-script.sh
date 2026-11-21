@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Деплой единого boot-скрипта на планшет флота информеров.
 # Использование: deploy-boot-script.sh <ip> <mac>
-# Пример:         deploy-boot-script.sh 192.168.4.41 00:08:22:b0:0d:fc
+# Пример:         deploy-boot-script.sh 192.168.4.5 00:08:22:b0:0d:fc
 # Кладёт /data/adb/service.d/informer_autostart.sh с пином MAC данного устройства
 # (шаблон рядом с этим скриптом), затем делает контрольный прогон вручную.
 set -euo pipefail
