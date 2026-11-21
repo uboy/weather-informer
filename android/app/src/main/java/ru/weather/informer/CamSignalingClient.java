@@ -12,7 +12,7 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
-import java.util.Base64;
+import android.util.Base64;
 
 /**
  * Минимальный RFC6455 WebSocket-клиент (stdlib, без внешних зависимостей).
@@ -122,7 +122,7 @@ public class CamSignalingClient {
             String query = uri.getQuery() != null ? "?" + uri.getQuery() : "";
             byte[] keyBytes = new byte[16];
             random.nextBytes(keyBytes);
-            String wsKey = Base64.getEncoder().encodeToString(keyBytes);
+            String wsKey = android.util.Base64.encodeToString(keyBytes, android.util.Base64.NO_WRAP);
             String handshake = "GET " + path + query + " HTTP/1.1\r\n"
                     + "Host: " + uri.getHost() + ":" + port + "\r\n"
                     + "Upgrade: websocket\r\n"
@@ -287,7 +287,7 @@ public class CamSignalingClient {
         try {
             MessageDigest md = MessageDigest.getInstance("SHA-1");
             byte[] digest = md.digest((wsKey + WS_GUID).getBytes(StandardCharsets.US_ASCII));
-            return Base64.getEncoder().encodeToString(digest);
+            return android.util.Base64.encodeToString(digest, android.util.Base64.NO_WRAP);
         } catch (Exception e) {
             throw new IllegalStateException(e);
         }
