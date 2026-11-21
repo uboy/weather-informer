@@ -216,6 +216,11 @@ public class ClientHandler implements Runnable {
                 if (server.getActivity() != null) {
                     server.getActivity().reloadInformer();
                 }
+                // Конфиг сохранён: камерный publish получает свежий бюджет попыток (D4).
+                CameraService camSvc = CameraService.getInstance();
+                if (camSvc != null) {
+                    camSvc.noteConfigChanged();
+                }
                 sendResponse(out, 200, "OK", "application/json; charset=utf-8",
                         "{\"status\":\"saved\"}".getBytes(StandardCharsets.UTF_8));
                 return;

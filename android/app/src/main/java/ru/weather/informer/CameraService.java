@@ -151,6 +151,9 @@ public class CameraService {
     public JSONObject buildStateJson() {
         JSONObject o = new JSONObject();
         jput(o, "enabled", isEnabled());
+        // Какой device index будет использован (-1 = авто front-first);
+        // верификация выбора камеры снаружи, без logcat.
+        jput(o, "camera_id", camDeviceOverride());
         jput(o, "state", state);
         jput(o, "last_error", lastError == null ? "" : lastError);
         jput(o, "viewers", sessionsCount());
@@ -166,7 +169,8 @@ public class CameraService {
 
     // ===== Конфиг камеры с планшета (web/config.json, секция cam) =====
 
-    private JSONObject getCamConfig() {
+    /** Секция cam конфига планшета как есть (без требований к ws_url/room). */
+    private JSONObject camSection() {
         try {
             InformerServer server = InformerServer.getInstance();
             if (server == null) {
@@ -174,25 +178,32 @@ public class CameraService {
             }
             byte[] cfgBytes = server.readConfigFile();
             JSONObject cfg = new JSONObject(new String(cfgBytes, java.nio.charset.StandardCharsets.UTF_8));
-            JSONObject cam = cfg.optJSONObject("cam");
-            if (cam == null) {
-                return null;
-            }
-            String ws = cam.optString("ws_url", "");
-            String room = cam.optString("room", "");
-            if (ws.isEmpty() || room.isEmpty()) {
-                return null;
-            }
-            return cam;
+            return cfg.optJSONObject("cam");
         } catch (Exception e) {
-            Log.w(TAG, "getCamConfig: " + e.getMessage());
+            Log.w(TAG, "camSection: " + e.getMessage());
             return null;
         }
     }
 
-    /** cam.camera_id из конфига планшета (override device index); -1 = авто (front-first). */
+    /** Для сигналинга: секция cam только если publish настроен (ws_url и room). */
+    private JSONObject getCamConfig() {
+        JSONObject cam = camSection();
+        if (cam == null) {
+            return null;
+        }
+        String ws = cam.optString("ws_url", "");
+        String room = cam.optString("room", "");
+        if (ws.isEmpty() || room.isEmpty()) {
+            return null;
+        }
+        return cam;
+    }
+
+    /** cam.camera_id из конфига планшета (override device index); -1 = авто (front-first).
+     *  Читается напрямую из секции cam: override не зависит от ws_url/room
+     *  (pull-модель D4: ws_url умирает, override остаётся). */
     private int camDeviceOverride() {
-        JSONObject cam = getCamConfig();
+        JSONObject cam = camSection();
         if (cam == null) {
             return -1;
         }
@@ -208,8 +219,10 @@ public class CameraService {
         }
         JSONObject cam = getCamConfig();
         if (cam == null) {
-            setLastError("cam config (ws_url/room) not set in tablet config.json");
-            scheduleReconnect();
+            // D4 pull-модель: ws_url/room не заданы - publish ВЫКЛЮЧЕН по дизайну.
+            // Это не ошибка и не повод для исходящих попыток.
+            setLastError("");
+            Log.i(TAG, "publish disabled (cam.ws_url/room not set), D4 pull-model");
             return;
         }
         // Конфиг прочитан успешно: транзиентная ошибка старта (файл ещё не был
@@ -233,13 +246,23 @@ public class CameraService {
         }
     }
 
+    /** D4: publish-петля снесена - ограниченный бюджет попыток, не вечный цикл. */
+    private static final int MAX_RECONNECT_ATTEMPTS = 5;
+
     private void scheduleReconnect() {
         if (!isEnabled()) {
             return;
         }
         int attempt = reconnectAttempt.incrementAndGet();
+        if (attempt > MAX_RECONNECT_ATTEMPTS) {
+            setLastError("publish endpoint unreachable after " + MAX_RECONNECT_ATTEMPTS
+                    + " attempts; повтор при включении камеры, сохранении конфига или перезапуске");
+            Log.w(TAG, "reconnect limit reached, publish attempts stopped (D4)");
+            return;
+        }
         long delayMs = Math.min(30000L, 2000L * attempt);
-        Log.i(TAG, "reconnect in " + delayMs + "ms (attempt " + attempt + ")");
+        Log.i(TAG, "reconnect in " + delayMs + "ms (attempt " + attempt
+                + "/" + MAX_RECONNECT_ATTEMPTS + ")");
         camHandler.postDelayed(new CamConnectTask(this), delayMs);
     }
 
@@ -594,7 +617,7 @@ public class CameraService {
         if (!isEnabled()) {
             return SNAP_FORBIDDEN_DISABLED;
         }
-        JSONObject cam = getCamConfig();
+        JSONObject cam = camSection();
         String expected = cam == null ? "" : cam.optString("token", "");
         if (expected.isEmpty() || token == null || !expected.equals(token)) {
             return SNAP_FORBIDDEN_TOKEN;
@@ -662,8 +685,13 @@ public class CameraService {
             camera.setParameters(params);
             CamPictureCallback cb = new CamPictureCallback(this);
             final Object done = new Object();
+            // AE-прогрев: мгновенный takePicture сразу после startPreview на холодном
+            // MTK HAL возвращает чёрный JPEG (T74HMi: 1.8/255 на обоих camera_id,
+            // hot+cold, сборка 21:11). Ждём реальные кадры preview, потом снимаем.
+            CamPreviewWarmup warmup = new CamPreviewWarmup();
+            camera.setPreviewCallback(warmup);
             camera.startPreview();
-            CameraSnapshotWaiter.waitAndTake(camera, cb, done);
+            CameraSnapshotWaiter.waitAndTake(camera, cb, done, warmup);
             return cb.getJpeg();
         } finally {
             try {
@@ -694,9 +722,35 @@ public class CameraService {
         }
     }
 
+    /** Счётчик preview-кадров для AE-прогрева (без анонимных классов). */
+    private static final class CamPreviewWarmup implements Camera.PreviewCallback {
+        private volatile int frames;
+
+        int getFrames() {
+            return frames;
+        }
+
+        @Override
+        public void onPreviewFrame(byte[] data, Camera camera) {
+            frames++;
+        }
+    }
+
     /** Хелпер ожидания кадра (без анонимных классов). */
     private static final class CameraSnapshotWaiter {
-        static void waitAndTake(Camera camera, CamPictureCallback cb, Object lock) throws Exception {
+        private static final int WARMUP_FRAMES = 3;
+        private static final long WARMUP_MAX_MS = 1500;
+
+        static void waitAndTake(Camera camera, CamPictureCallback cb, Object lock,
+                                CamPreviewWarmup warmup) throws Exception {
+            long t0 = System.currentTimeMillis();
+            // Фаза AE: первые кадры preview до сошедшейся экспозиции чёрные.
+            while (warmup.getFrames() < WARMUP_FRAMES
+                    && System.currentTimeMillis() - t0 < WARMUP_MAX_MS) {
+                Thread.sleep(100);
+            }
+            Log.i(TAG, "snapshot warmup frames=" + warmup.getFrames()
+                    + " ms=" + (System.currentTimeMillis() - t0));
             synchronized (lock) {
                 camera.takePicture(null, null, null, cb);
                 long deadline = System.currentTimeMillis() + 6000;
@@ -711,6 +765,15 @@ public class CameraService {
     }
 
     // ===== Управление жизненным циклом =====
+
+    /** Сохранение конфига планшета (POST /api/settings): свежий бюджет publish-попыток.
+     *  По D4 вечных петель нет; это единственная точка повторной попытки без перезапуска. */
+    public void noteConfigChanged() {
+        try {
+            camHandler.post(new CamConfigChangedTask(this));
+        } catch (Exception ignored) {
+        }
+    }
 
     public void shutdown() {
         try {
@@ -746,6 +809,22 @@ public class CameraService {
         @Override
         public void run() {
             service.reconnectAttempt.set(0);
+            service.connectSignaling();
+        }
+    }
+
+    /** Конфиг изменён: свежий бюджет publish-попыток и пересоединение (D4). */
+    private static final class CamConfigChangedTask implements Runnable {
+        private final CameraService service;
+
+        CamConfigChangedTask(CameraService service) {
+            this.service = service;
+        }
+
+        @Override
+        public void run() {
+            service.reconnectAttempt.set(0);
+            service.clearLastErrorIf("publish endpoint unreachable");
             service.connectSignaling();
         }
     }
