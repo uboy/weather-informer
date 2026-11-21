@@ -209,6 +209,31 @@ public class MainActivity extends Activity implements Runnable {
         }
 
         mainHandler.postDelayed(this, 500);
+        // Гонка после install -r: сервис создаёт InformerServer позже Activity;
+        // ре-аттач активности, иначе cam-оверлей не найдёт foreground activity.
+        mainHandler.postDelayed(new CamAttachTask(this), 1500);
+        mainHandler.postDelayed(new CamAttachTask(this), 4000);
+    }
+
+    /** Отложенный ре-аттач activity в InformerServer (именованное статическое вложение). */
+    private static final class CamAttachTask implements Runnable {
+        private final MainActivity activity;
+
+        CamAttachTask(MainActivity activity) {
+            this.activity = activity;
+        }
+
+        @Override
+        public void run() {
+            if (activity.isFinishing() || (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1 && activity.isDestroyed())) {
+                return;
+            }
+            InformerServer server = InformerServer.getInstance();
+            if (server != null && server.getActivity() != activity) {
+                server.setActivity(activity);
+                Log.i(TAG, "activity re-attached to InformerServer (delayed)");
+            }
+        }
     }
 
     @Override
