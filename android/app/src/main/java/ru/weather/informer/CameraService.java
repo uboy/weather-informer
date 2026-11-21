@@ -2,7 +2,13 @@ package ru.weather.informer;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.ImageFormat;
+import android.graphics.Matrix;
+import android.graphics.Rect;
 import android.graphics.SurfaceTexture;
+import android.graphics.YuvImage;
 import android.hardware.Camera;
 import android.os.Handler;
 import android.os.HandlerThread;
@@ -23,6 +29,7 @@ import org.webrtc.SurfaceTextureHelper;
 import org.webrtc.VideoSource;
 import org.webrtc.VideoTrack;
 
+import java.io.ByteArrayOutputStream;
 import java.net.URI;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -644,6 +651,9 @@ public class CameraService {
         }
     }
 
+    /** Ниже этой средней яркости still-кадр считается чёрным (замеры T74HMi: 1.6-1.8). */
+    private static final int BLACK_LUMA = 8;
+
     private byte[] captureJpeg() throws Exception {
         Camera.CameraInfo info = new Camera.CameraInfo();
         int cameraId = -1;
@@ -668,6 +678,7 @@ public class CameraService {
                 throw new IllegalStateException("no front camera: front-only by policy 5.1.6");
             }
         }
+        Camera.getCameraInfo(cameraId, info);
         Camera camera = Camera.open(cameraId);
         try {
             SurfaceTexture dummy = new SurfaceTexture(0);
@@ -679,8 +690,12 @@ public class CameraService {
             Camera.Parameters params = camera.getParameters();
             params.setJpegQuality(70);
             try {
-                params.setPreviewSize(320, 240);
-            } catch (Exception ignored) {
+                params.setPreviewSize(640, 480);
+            } catch (Exception e) {
+                try {
+                    params.setPreviewSize(320, 240);
+                } catch (Exception ignored) {
+                }
             }
             camera.setParameters(params);
             CamPictureCallback cb = new CamPictureCallback(this);
@@ -692,7 +707,30 @@ public class CameraService {
             camera.setPreviewCallback(warmup);
             camera.startPreview();
             CameraSnapshotWaiter.waitAndTake(camera, cb, done, warmup);
-            return cb.getJpeg();
+            byte[] still = cb.getJpeg();
+            int stillLuma = jpegLuma(still);
+            boolean stillBad = (still == null) || (stillLuma >= 0 && stillLuma < BLACK_LUMA);
+            if (!stillBad) {
+                Log.i(TAG, "snapshot: still used, luma=" + stillLuma + " bytes=" + still.length);
+                return still;
+            }
+            // Still-путь на холодном MTK HAL отдаёт чёрный кадр (T74HMi: 1.6-1.8/255
+            // на обоих camera_id hot+cold) при живом preview-конвейере - собираем
+            // кадр из последнего preview-буфера.
+            byte[] fb = previewFallbackJpeg(warmup,
+                    info.facing == Camera.CameraInfo.CAMERA_FACING_FRONT, info.orientation);
+            if (fb != null) {
+                Log.i(TAG, "snapshot: still black/none (luma=" + stillLuma
+                        + "), preview fallback used, preview_luma=" + warmup.getLastLuma()
+                        + " bytes=" + fb.length);
+                return fb;
+            }
+            if (still != null) {
+                Log.w(TAG, "snapshot: still black (luma=" + stillLuma
+                        + "), no preview frame kept - returning black still");
+                return still;
+            }
+            throw new IllegalStateException("takePicture timeout and no preview frame");
         } finally {
             try {
                 camera.stopPreview();
@@ -722,17 +760,116 @@ public class CameraService {
         }
     }
 
-    /** Счётчик preview-кадров для AE-прогрева (без анонимных классов). */
+    /** Preview-колбэк: счётчик кадров для AE-прогрева + последний кадр (Y-яркость)
+     *  для fallback-снапшота (без анонимных классов). */
     private static final class CamPreviewWarmup implements Camera.PreviewCallback {
         private volatile int frames;
+        private volatile byte[] lastData;
+        private volatile Camera.Size lastSize;
+        private volatile int lastLuma = -1;
 
         int getFrames() {
             return frames;
         }
 
+        byte[] getLastData() {
+            return lastData;
+        }
+
+        Camera.Size getLastSize() {
+            return lastSize;
+        }
+
+        int getLastLuma() {
+            return lastLuma;
+        }
+
         @Override
         public void onPreviewFrame(byte[] data, Camera camera) {
             frames++;
+            if (data == null || data.length == 0) {
+                return;
+            }
+            if (lastSize == null) {
+                try {
+                    lastSize = camera.getParameters().getPreviewSize();
+                } catch (Exception e) {
+                    return;
+                }
+            }
+            Camera.Size sz = lastSize;
+            if (sz == null || data.length < sz.width * sz.height) {
+                return;
+            }
+            int n = sz.width * sz.height;
+            long sum = 0;
+            int count = 0;
+            for (int i = 0; i < n; i += 4) {
+                sum += data[i] & 0xFF;
+                count++;
+            }
+            lastData = data;
+            lastLuma = (int) (sum / Math.max(1, count));
+        }
+    }
+
+    /** Средняя яркость JPEG (выборка пикселей); -1 = не удалось декодировать. */
+    private static int jpegLuma(byte[] jpeg) {
+        if (jpeg == null || jpeg.length == 0) {
+            return -1;
+        }
+        try {
+            Bitmap bmp = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.length);
+            if (bmp == null) {
+                return -1;
+            }
+            long sum = 0;
+            int count = 0;
+            for (int y = 0; y < bmp.getHeight(); y += 8) {
+                for (int x = 0; x < bmp.getWidth(); x += 8) {
+                    int c = bmp.getPixel(x, y);
+                    int r = (c >> 16) & 0xFF;
+                    int g = (c >> 8) & 0xFF;
+                    int b = c & 0xFF;
+                    sum += (r + g + b) / 3;
+                    count++;
+                }
+            }
+            bmp.recycle();
+            return (int) (sum / Math.max(1, count));
+        } catch (Throwable t) {
+            return -1;
+        }
+    }
+
+    /** Fallback: JPEG из последнего preview-кадра (NV21) с поворотом по CameraInfo
+     *  и зеркалом для фронтальной; null = кадра нет или конвертация не удалась. */
+    private static byte[] previewFallbackJpeg(CamPreviewWarmup warmup, boolean front, int orientation) {
+        byte[] yuv = warmup == null ? null : warmup.getLastData();
+        Camera.Size sz = warmup == null ? null : warmup.getLastSize();
+        if (yuv == null || sz == null || sz.width <= 0 || sz.height <= 0) {
+            return null;
+        }
+        try {
+            YuvImage yuvImage = new YuvImage(yuv, ImageFormat.NV21, sz.width, sz.height, null);
+            ByteArrayOutputStream raw = new ByteArrayOutputStream();
+            yuvImage.compressToJpeg(new Rect(0, 0, sz.width, sz.height), 70, raw);
+            Bitmap src = BitmapFactory.decodeByteArray(raw.toByteArray(), 0, raw.size());
+            if (src == null) {
+                return null;
+            }
+            Matrix m = new Matrix();
+            m.postRotate(orientation);
+            if (front) {
+                m.postScale(-1, 1);
+            }
+            Bitmap rot = Bitmap.createBitmap(src, 0, 0, src.getWidth(), src.getHeight(), m, true);
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            rot.compress(Bitmap.CompressFormat.JPEG, 70, out);
+            return out.toByteArray();
+        } catch (Throwable t) {
+            Log.w(TAG, "preview fallback failed: " + t.getMessage());
+            return null;
         }
     }
 
