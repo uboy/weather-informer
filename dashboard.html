@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Камеры - Informer</title>
+<style>
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin: 0; background: #101820; color: #dfe7ee; font: 14px/1.45 system-ui, sans-serif; }
+header { display: flex; align-items: baseline; gap: 12px; padding: 14px 20px 8px; }
+header h1 { font-size: 18px; margin: 0; }
+header .hint { color: #8aa0b4; font-size: 12px; }
+#grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; padding: 12px 20px 24px; }
+.card { background: #182430; border: 1px solid #243447; border-radius: 10px; padding: 10px 12px; }
+.card .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.card .name { font-weight: 600; font-size: 15px; }
+.badge { padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; letter-spacing: .3px; }
+.badge.off { background: #2a3646; color: #9fb2c4; }
+.badge.idle { background: #1d3a2a; color: #6fd394; }
+.badge.streaming { background: #3a2a1d; color: #ffb457; }
+.badge.busy { background: #40232a; color: #ff7a8a; }
+.meta { color: #8aa0b4; font-size: 12px; margin: 4px 0 8px; }
+.snapbox { background: #0b1218; border-radius: 8px; overflow: hidden; min-height: 180px; display: flex; align-items: center; justify-content: center; }
+.snapbox img { width: 100%; display: block; }
+.snapbox .empty { color: #4d6377; font-size: 12px; padding: 12px; }
+.row { display: flex; gap: 8px; margin-top: 10px; }
+button { background: #24425c; color: #dfe7ee; border: 0; border-radius: 8px; padding: 8px 14px; font: inherit; font-weight: 600; cursor: pointer; }
+button:hover { background: #2d5273; }
+button.stop { background: #55242e; }
+button.stop:hover { background: #6d2d39; }
+button[disabled] { opacity: .45; cursor: default; }
+#player { position: fixed; inset: 0; background: rgba(6,10,14,.92); display: none; align-items: center; justify-content: center; flex-direction: column; gap: 12px; }
+#player.open { display: flex; }
+#player video { max-width: 92vw; max-height: 74vh; background: #000; border-radius: 10px; }
+#player .mjpeg { max-width: 92vw; max-height: 74vh; }
+#pstatus { color: #8aa0b4; }
+.hidden { display: none !important; }
+.err { color: #ff7a8a; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Камеры дома</h1>
+  <span class="hint" id="hint">загрузка...</span>
+</header>
+<div id="grid"></div>
+<div id="player">
+  <div class="head" style="width:92vw; display:flex; justify-content:space-between; align-items:center;">
+    <div id="ptitle" style="font-weight:600;"></div>
+    <button class="stop" id="pclose">Закрыть</button>
+  </div>
+  <video id="pvideo" class="hidden" autoplay playsinline muted></video>
+  <img id="pmjpeg" class="mjpeg hidden" alt="">
+  <div id="pstatus"></div>
+</div>
+<script>
+"use strict";
+var ROOMS = [];
+var TOKEN = "";
+var snapTimers = {};
+var pollTimer = null;
+var viewer = null; // {room, ws, pc, mjpegTimer, mediaSeen, closed}
+
+function $(id) { return document.getElementById(id); }
+
+function api(path, cb) {
+  fetch(path, {cache: "no-store"})
+    .then(function (r) {
+      if (r.status === 401) { $("hint").textContent = "требуется вход (HTTP Basic)"; return null; }
+      return r.json();
+    })
+    .then(function (j) { if (j) cb(j); })
+    .catch(function () {});
+}
+
+function badgeFor(cs) {
+  if (!cs) return ["off", "нет данных"];
+  if (!cs.enabled) return ["off", "выключена"];
+  if (cs.state === "STREAMING") return ["streaming", "стрим"];
+  if (cs.state === "SNAPSHOT") return ["busy", "снапшот"];
+  if (cs.state === "IDLE") return ["idle", "готова"];
+  return ["busy", cs.state || "?"];
+}
+
+function buildGrid() {
+  var g = $("grid");
+  g.innerHTML = "";
+  ROOMS.forEach(function (room) {
+    var card = document.createElement("div");
+    card.className = "card";
+    card.innerHTML =
+      '<div class="head"><span class="name">' + room + '</span>' +
+      '<span class="badge off" id="b-' + room + '">нет данных</span></div>' +
+      '<div class="meta" id="m-' + room + '">камера выключена по умолчанию</div>' +
+      '<div class="snapbox" id="s-' + room + '"><span class="empty">снапшот по запросу</span></div>' +
+      '<div class="row">' +
+      '<button id="w-' + room + '">Смотреть</button>' +
+      '<button id="r-' + room + '">Снапшот</button>' +
+      '</div>';
+    g.appendChild(card);
+    $("w-" + room).addEventListener("click", function () { openViewer(room); });
+    $("r-" + room).addEventListener("click", function () { refreshSnap(room); });
+  });
+}
+
+function refreshSnap(room) {
+  var box = $("s-" + room);
+  var img = box.querySelector("img");
+  if (!img) {
+    box.innerHTML = "";
+    img = document.createElement("img");
+    img.alt = room;
+    box.appendChild(img);
+  }
+  img.src = "/api/cam/snapshot?room=" + encodeURIComponent(room) + "&t=" + Date.now();
+  img.onerror = function () {
+    box.innerHTML = '<span class="empty">снапшот недоступен (выключена или занята)</span>';
+    delete snapTimers[room];
+  };
+}
+
+function updateSummary(sum) {
+  var rooms = sum.rooms || {};
+  var live = 0;
+  ROOMS.forEach(function (room) {
+    var info = rooms[room] || {};
+    var cs = info.cam_state;
+    var b = $("b-" + room), m = $("m-" + room);
+    if (!b || !m) return;
+    var cls = badgeFor(cs);
+    b.className = "badge " + cls[0];
+    b.textContent = cls[1];
+    var bits = [];
+    if (info.publisher_connected) { bits.push("издатель на связи"); live += 1; }
+    else { bits.push("издатель не подключен"); }
+    bits.push("зрителей: " + (info.viewers || 0));
+    if (cs && cs.enabled === false) bits.push("выключена на планшете");
+    if (cs && cs.last_error) bits.push("ошибка: " + cs.last_error);
+    m.textContent = bits.join(", ");
+    var wb = $("w-" + room);
+    if (wb) wb.disabled = !(cs && cs.enabled);
+  });
+  $("hint").textContent = "комнат: " + ROOMS.length + ", издателей на связи: " + live +
+    " (обновлено " + new Date().toLocaleTimeString() + ")";
+}
+
+function pollLoop() {
+  if (document.hidden) return;
+  api("/api/cam/summary", updateSummary);
+}
+
+// ===== Зритель: WebRTC с фолбэком на MJPEG =====
+
+function closeViewer() {
+  if (!viewer) return;
+  viewer.closed = true;
+  try { if (viewer.ws) viewer.ws.close(); } catch (e) {}
+  try { if (viewer.pc) viewer.pc.close(); } catch (e) {}
+  if (viewer.mjpegTimer) clearInterval(viewer.mjpegTimer);
+  viewer = null;
+  $("player").classList.remove("open");
+  $("pvideo").classList.add("hidden");
+  $("pmjpeg").classList.add("hidden");
+}
+
+function pmsg(text) { $("pstatus").textContent = text; }
+
+function sendWs(ws, obj) { ws.send(JSON.stringify(obj)); }
+
+function openViewer(room) {
+  if (viewer) closeViewer();
+  viewer = {room: room, ws: null, pc: null, mjpegTimer: null, mediaSeen: 0, closed: false};
+  $("ptitle").textContent = "Комната: " + room;
+  $("player").classList.add("open");
+  pmsg("подключение к сигналингу...");
+
+  api("/api/cam/viewer-token", function (tok) {
+    if (!tok || !tok.viewer_token) { pmsg("не удалось получить токен зрителя (вход?)"); return; }
+    startWs(room, tok.viewer_token);
+  });
+}
+
+function startWs(room, token) {
+  if (!viewer || viewer.closed) return;
+  var proto = location.protocol === "https:" ? "wss://" : "ws://";
+  var ws = new WebSocket(proto + location.host + "/ws/cam");
+  viewer.ws = ws;
+  var failTimer = setTimeout(function () {
+    if (viewer && !viewer.mediaSeen) {
+      pmsg("видео не пошло за 15 с - переключаюсь на снапшоты (MJPEG-режим)");
+      startMjpeg(room);
+    }
+  }, 15000);
+  ws.onopen = function () {
+    // hello обязан уйти ДО offer: сервер маршрутизирует только после hello_ok
+    sendWs(ws, {type: "hello", role: "viewer", room: room, token: token});
+    pmsg("hello отправлен, жду hello_ok...");
+  };
+  ws.onmessage = function (ev) {
+    var msg;
+    try { msg = JSON.parse(ev.data); } catch (e) { return; }
+    if (!msg || !viewer) return;
+    if (msg.type === "hello_ok") {
+      pmsg("создаю offer...");
+      startPeer(room, token, failTimer);
+    } else if (msg.type === "answer" && viewer.pc) {
+      viewer.pc.setRemoteDescription(msg.payload).catch(function (e) { pmsg("answer: " + e); });
+    } else if (msg.type === "ice" && viewer.pc && msg.payload) {
+      viewer.pc.addIceCandidate(msg.payload).catch(function () {});
+    } else if (msg.type === "cam_state") {
+      if (msg.enabled === false) pmsg("камера выключена на планшете");
+    } else if (msg.type === "error") {
+      pmsg("сервер: " + (msg.code || "ошибка"));
+      clearTimeout(failTimer);
+    }
+  };
+  ws.onclose = function () {
+    if (viewer && !viewer.closed) pmsg("сигналинг закрылся");
+  };
+}
+
+function startPeer(room, token, failTimer) {
+  var pc = new RTCPeerConnection(null); // LAN, без STUN
+  viewer.pc = pc;
+  pc.addTransceiver("video", {direction: "recvonly"});
+  pc.addTransceiver("audio", {direction: "recvonly"});
+  pc.ontrack = function (ev) {
+    var v = $("pvideo");
+    if (ev.streams && ev.streams[0]) {
+      v.srcObject = ev.streams[0];
+    } else {
+      var st = new MediaStream([ev.track]);
+      v.srcObject = st;
+    }
+    v.classList.remove("hidden");
+    v.play().catch(function () {});
+  };
+  pc.oniceconnectionstatechange = function () {
+    if (!viewer) return;
+    if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
+      viewer.mediaSeen = Date.now();
+      clearTimeout(failTimer);
+      pmsg("видео: соединение установлено (" + pc.iceConnectionState + ")");
+    }
+  };
+  pc.onicecandidate = function (ev) {
+    if (viewer && viewer.ws && viewer.ws.readyState === 1 && ev.candidate) {
+      sendWs(viewer.ws, {type: "ice", payload: ev.candidate.toJSON()});
+    }
+  };
+  pc.createOffer().then(function (offer) {
+    return pc.setLocalDescription(offer);
+  }).then(function () {
+    // мы здесь только после hello_ok: локальное описание готово, шлём offer
+    sendWs(viewer.ws, {type: "offer", payload: {type: "offer", sdp: viewer.pc.localDescription.sdp}});
+  }).catch(function (e) { pmsg("offer: " + e); });
+}
+
+// Примечание к порядку: hello уходит первым сообщением после открытия WS,
+// offer создаётся по hello_ok; фолбэк MJPEG стартует по таймеру 15 с без видео.
+
+function startMjpeg(room) {
+  var img = $("pmjpeg");
+  $("pvideo").classList.add("hidden");
+  img.classList.remove("hidden");
+  function tick() {
+    if (viewer && !viewer.closed) img.src = "/api/cam/snapshot?room=" + encodeURIComponent(room) + "&t=" + Date.now();
+  }
+  tick();
+  viewer.mjpegTimer = setInterval(tick, 25000);
+  // hello для cam_state всё равно нужен: закрываем WS, чтобы не мешать паблишеру
+  if (viewer.ws) { try { viewer.ws.close(); } catch (e) {} }
+}
+
+// перехват не используется: startWs уже отправляет hello и создаёт offer по hello_ok
+
+$("pclose").addEventListener("click", closeViewer);
+document.addEventListener("visibilitychange", function () {
+  if (document.hidden) {
+    // свобода камеры важнее фона: закрываем зрителя при уходе со вкладки
+    if (viewer) closeViewer();
+    Object.keys(snapTimers).forEach(function (k) { clearInterval(snapTimers[k]); delete snapTimers[k]; });
+  } else {
+    pollLoop();
+  }
+});
+
+api("/api/cam/viewer-token", function (tok) {
+  if (!tok) return;
+  TOKEN = tok.viewer_token;
+  ROOMS = tok.rooms || [];
+  buildGrid();
+  pollLoop();
+  pollTimer = setInterval(pollLoop, 5000);
+});
+</script>
+</body>
+</html>
