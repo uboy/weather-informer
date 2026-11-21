@@ -1,0 +1,6 @@
+[Unit]
+Description=adb-over-WiFi watchdog for weather-informer fleet (192.168.4.x)
+
+[Service]
+Type=oneshot
+ExecStart=%h/wt/wi-boot/host-watchdog/fleet-adb-watchdog.sh

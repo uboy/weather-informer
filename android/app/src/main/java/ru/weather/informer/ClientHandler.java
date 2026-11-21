@@ -226,6 +226,22 @@ public class ClientHandler implements Runnable {
             return;
         }
 
+        // 6b. Обслуживание adb-over-WiFi (boot-линия): статус и перезапуск/пробуждение adbd.
+        // Вызов по HTTP, поэтому разрыв adb-соединения обработке не мешает.
+        // Аутентификация появится вместе с HTTP Basic дашборда (дизайн 5.1 п. 7).
+        if (path.equals("/api/adb/status")) {
+            sendResponse(out, 200, "OK", "application/json; charset=utf-8",
+                    AdbMaintainer.statusJson().getBytes(StandardCharsets.UTF_8));
+            return;
+        }
+        if (path.equals("/api/adb/restart") && method.equals("POST")) {
+            String mode = body != null && new String(body, StandardCharsets.UTF_8).contains("wake")
+                    ? "wake" : "restart";
+            sendResponse(out, 200, "OK", "application/json; charset=utf-8",
+                    AdbMaintainer.restartJson(mode).getBytes(StandardCharsets.UTF_8));
+            return;
+        }
+
         // 7. CORS Прокси /proxy/weather
         if (path.equals("/proxy/weather")) {
             handleProxy(query, out);
