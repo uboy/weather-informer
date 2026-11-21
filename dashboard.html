@@ -186,6 +186,7 @@ function refreshSnap(room) {
     box.appendChild(img);
   }
   img.src = "/api/cam/snapshot?room=" + encodeURIComponent(room) + "&t=" + Date.now();
+  applyOrientation(room);
   img.onerror = function () {
     box.innerHTML = '<span class="empty">снапшот недоступен (выключена или занята)</span>';
     delete snapTimers[room];
