@@ -209,7 +209,8 @@ function startWs(room, token) {
     } else if (msg.type === "ice" && viewer.pc && msg.payload) {
       viewer.pc.addIceCandidate(msg.payload).catch(function () {});
     } else if (msg.type === "cam_state") {
-      if (msg.enabled === false) pmsg("камера выключена на планшете");
+      if (msg.state === "OFFLINE") pmsg("издатель не на связи");
+      else if (msg.enabled === false) pmsg("камера выключена на планшете");
     } else if (msg.type === "error") {
       pmsg("сервер: " + (msg.code || "ошибка"));
       clearTimeout(failTimer);
