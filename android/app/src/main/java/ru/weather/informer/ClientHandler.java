@@ -116,12 +116,29 @@ public class ClientHandler implements Runnable {
                              Map<String, String> headers, byte[] body,
                              OutputStream out, String contentType) throws Exception {
 
-        // 1. Статус /health
+        // 1. Статус /health (+ поле cam, обратно совместимо - фаза 1 камер)
         if (path.equals("/health")) {
             long uptime = (System.currentTimeMillis() - server.getStartTime()) / 1000;
+            CameraService cam = CameraService.getInstance();
+            String camJson = cam != null ? cam.buildStateJson().toString() : "{}";
             String json = "{\"status\":\"ok\",\"app\":\"WeatherInformerKiosk\",\"port\":" + InformerServer.PORT +
-                    ",\"uptime_sec\":" + uptime + ",\"version\":\"1.0\"}";
+                    ",\"uptime_sec\":" + uptime + ",\"version\":\"1.0\",\"cam\":" + camJson + "}";
             sendResponse(out, 200, "OK", "application/json; charset=utf-8", json.getBytes(StandardCharsets.UTF_8));
+            return;
+        }
+
+        // 1b. Камерные маршруты (фаза 1). Включение камеры через сеть НЕВОЗМОЖНО:
+        // /api/cam/toggle-request только показывает оверлей на экране планшета.
+        if (path.equals("/api/cam/state")) {
+            handleCamState(out);
+            return;
+        }
+        if (path.equals("/api/snapshot")) {
+            handleCamSnapshot(query, out);
+            return;
+        }
+        if (path.equals("/api/cam/toggle-request") && method.equals("POST")) {
+            handleCamToggleRequest(body, out);
             return;
         }
 
@@ -627,6 +644,83 @@ public class ClientHandler implements Runnable {
             server.getContext().sendBroadcast(broadcast);
         } catch (Exception e) {
             Log.e(TAG, "Failed to send reload broadcast: " + e.getMessage());
+        }
+    }
+
+    // ===== Камерные обработчики (фаза 1) =====
+
+    private void handleCamState(OutputStream out) throws Exception {
+        CameraService cam = CameraService.getInstance();
+        JSONObject o;
+        if (cam != null) {
+            o = cam.buildStateJson();
+        } else {
+            o = new JSONObject();
+            o.put("enabled", false);
+            o.put("state", "IDLE");
+            o.put("last_error", "camera service not initialized");
+        }
+        sendResponse(out, 200, "OK", "application/json; charset=utf-8",
+                o.toString().getBytes(StandardCharsets.UTF_8));
+    }
+
+    private void handleCamSnapshot(String query, OutputStream out) throws Exception {
+        Map<String, String> params = parseQuery(query);
+        String token = params.get("token");
+        CameraService cam = CameraService.getInstance();
+        if (cam == null) {
+            sendResponse(out, 403, "Forbidden", "application/json; charset=utf-8",
+                    "{\"error\":\"disabled\"}".getBytes(StandardCharsets.UTF_8));
+            return;
+        }
+        byte[][] jpegOut = new byte[1][];
+        int result = cam.getSnapshot(token, jpegOut);
+        if (result == CameraService.SNAP_OK) {
+            byte[] jpeg = jpegOut[0] != null ? jpegOut[0] : new byte[0];
+            sendResponse(out, 200, "OK", "image/jpeg", jpeg);
+            return;
+        }
+        if (result == CameraService.SNAP_BUSY) {
+            sendResponse(out, 503, "Service Unavailable", "application/json; charset=utf-8",
+                    "{\"error\":\"busy\"}".getBytes(StandardCharsets.UTF_8));
+            return;
+        }
+        sendResponse(out, 403, "Forbidden", "application/json; charset=utf-8",
+                (result == CameraService.SNAP_FORBIDDEN_DISABLED
+                        ? "{\"error\":\"disabled\"}"
+                        : "{\"error\":\"forbidden\"}").getBytes(StandardCharsets.UTF_8));
+    }
+
+    private void handleCamToggleRequest(byte[] body, OutputStream out) throws Exception {
+        CameraService cam = CameraService.getInstance();
+        MainActivity activity = server.getActivity();
+        if (cam == null || activity == null) {
+            sendResponse(out, 409, "Conflict", "application/json; charset=utf-8",
+                    "{\"error\":\"no activity foreground\"}".getBytes(StandardCharsets.UTF_8));
+            return;
+        }
+        boolean enable = true;
+        try {
+            JSONObject req = new JSONObject(new String(body == null ? new byte[0] : body, StandardCharsets.UTF_8));
+            enable = req.optBoolean("enable", true);
+        } catch (Exception ignored) {
+            // пустое/кривое тело: трактуем как включение
+        }
+        // Оверлей на экране планшета; флаг меняется ТОЛЬКО тапом на экране.
+        activity.showCamConfirmOverlay(enable, new CamToggleConfirmLogger());
+        JSONObject resp = new JSONObject();
+        resp.put("status", "confirm_pending");
+        resp.put("enable", enable);
+        resp.put("enabled_now", cam.isEnabled());
+        sendResponse(out, 200, "OK", "application/json; charset=utf-8",
+                resp.toString().getBytes(StandardCharsets.UTF_8));
+    }
+
+    /** Логгер результата подтверждения тапом (именованное вложение). */
+    private static final class CamToggleConfirmLogger implements MainActivity.CamConfirmCallback {
+        @Override
+        public void onConfirmed(boolean allowed) {
+            Log.i(TAG, "cam toggle confirmed on device screen: " + allowed);
         }
     }
 

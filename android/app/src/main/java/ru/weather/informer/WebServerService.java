@@ -55,6 +55,8 @@ public class WebServerService extends Service {
             server = new InformerServer(this);
             server.start();
             Log.i(TAG, "WebServerService started successfully");
+            // Камерная подсистема (фаза 1): init до Activity (boot-путь)
+            CameraService.init(getApplicationContext());
         } catch (Exception e) {
             Log.e(TAG, "Failed to start HTTP server: " + e.getMessage());
         }
