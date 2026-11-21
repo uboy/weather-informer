@@ -30,6 +30,8 @@ button:hover { background: #2d5273; }
 button.stop { background: #55242e; }
 button.stop:hover { background: #6d2d39; }
 button[disabled] { opacity: .45; cursor: default; }
+button.del { background: #55242e; padding: 2px 8px; font-size: 11px; line-height: 1; }
+button.del:hover { background: #6d2d39; }
 #player { position: fixed; inset: 0; background: rgba(6,10,14,.92); display: none; align-items: center; justify-content: center; flex-direction: column; gap: 12px; }
 #player.open { display: flex; }
 #player video { max-width: 92vw; max-height: 74vh; background: #000; border-radius: 10px; }
@@ -110,7 +112,10 @@ function buildGrid() {
     card.className = "card";
     card.innerHTML =
       '<div class="head"><span class="name">' + room + '</span>' +
-      '<span class="badge off" id="b-' + room + '">нет данных</span></div>' +
+      '<span style="display:flex; gap:6px; align-items:center;">' +
+      '<span class="badge off" id="b-' + room + '">нет данных</span>' +
+      '<button class="del" id="d-' + room + '" title="удалить комнату из конфига сервера">✕</button>' +
+      '</span></div>' +
       '<div class="meta" id="m-' + room + '">камера выключена по умолчанию</div>' +
       '<div class="snapbox" id="s-' + room + '"><span class="empty">снапшот по запросу</span></div>' +
       '<div class="row">' +
@@ -120,6 +125,10 @@ function buildGrid() {
     g.appendChild(card);
     $("w-" + room).addEventListener("click", function () { openViewer(room); });
     $("r-" + room).addEventListener("click", function () { refreshSnap(room); });
+    $("d-" + room).addEventListener("click", function () {
+      if (!window.confirm("Удалить комнату " + room + " из конфига сервера?")) return;
+      adminPost({action: "remove", room: room}, function () { reloadRooms(); });
+    });
   });
 }
 
@@ -192,6 +201,19 @@ function closeViewer() {
 
 function pmsg(text) { $("pstatus").textContent = text; }
 
+function startViewerSnapshot(room) {
+  // один свежий снапшот в окно просмотра (fallback без сигналинга)
+  if (!viewer || viewer.closed) return;
+  viewer.pc = null;
+  var img = $("pmjpeg");
+  $("pvideo").classList.add("hidden");
+  img.classList.remove("hidden");
+  img.src = "/api/cam/snapshot?room=" + encodeURIComponent(room) + "&t=" + Date.now();
+  img.onerror = function () {
+    if (viewer && !viewer.closed) pmsg("снапшот недоступен (камера занята или выключена)");
+  };
+}
+
 function sendWs(ws, obj) { ws.send(JSON.stringify(obj)); }
 
 function openViewer(room) {
@@ -238,8 +260,17 @@ function startWs(room, token) {
       if (msg.state === "OFFLINE") pmsg("издатель не на связи");
       else if (msg.enabled === false) pmsg("камера выключена на планшете");
     } else if (msg.type === "error") {
-      pmsg("сервер: " + (msg.code || "ошибка"));
       clearTimeout(failTimer);
+      var code = msg.code || "ошибка";
+      if (code === "no_publisher") {
+        // транзитная схема: сигналинг-пути к этой комнате нет
+        pmsg("сигналинг недоступен (переходная схема) - живое видео появится с pull-моделью; показываю свежий снапшот");
+        startViewerSnapshot(room);
+      } else if (code === "camera_disabled") {
+        pmsg("камера выключена на планшете - включите в настройках планшета (секция Камера)");
+      } else {
+        pmsg("сигналинг недоступен (код " + code + ")");
+      }
     }
   };
   ws.onclose = function () {
@@ -353,19 +384,16 @@ function reloadRooms() {
 }
 
 function renderAdminRooms() {
+  // кнопки удаления переехали на плитки комнат; здесь остаётся форма добавления
   var box = $("admin_rooms");
   if (!box) return;
   box.innerHTML = "";
   ROOMS.forEach(function (room) {
-    var b = document.createElement("button");
-    b.className = "stop";
-    b.textContent = "удалить: " + room;
-    b.title = "убрать комнату из конфига сервера";
-    b.addEventListener("click", function () {
-      if (!window.confirm("Удалить комнату " + room + " из конфига сервера?")) return;
-      adminPost({action: "remove", room: room}, function () { reloadRooms(); });
-    });
-    box.appendChild(b);
+    var s = document.createElement("span");
+    s.className = "meta";
+    s.textContent = room;
+    s.style.cssText = "border:1px solid #243447; border-radius:999px; padding:2px 10px; font-size:12px;";
+    box.appendChild(s);
   });
 }
 
