@@ -438,11 +438,8 @@ public class CameraService {
                 break;
             }
         }
-        if (frontDevice == null && enumerator.getDeviceNames().length > 0) {
-            frontDevice = enumerator.getDeviceNames()[0];
-        }
         if (frontDevice == null) {
-            throw new IllegalStateException("no camera device");
+            throw new IllegalStateException("no front camera: front-only by policy 5.1.6");
         }
         CamCaptureEvents events = new CamCaptureEvents(this);
         capturer = enumerator.createCapturer(frontDevice, events);
@@ -589,11 +586,8 @@ public class CameraService {
                 break;
             }
         }
-        if (cameraId < 0 && n > 0) {
-            cameraId = 0;
-        }
         if (cameraId < 0) {
-            throw new IllegalStateException("no camera");
+            throw new IllegalStateException("no front camera: front-only by policy 5.1.6");
         }
         Camera camera = Camera.open(cameraId);
         try {
