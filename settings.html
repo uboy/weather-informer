@@ -706,9 +706,10 @@ select {
                 </div>
                 <div id="cam_server_block" style="display:none;">
                     <div style="font-size:0.85rem; color:#bbb;">
-                        Просмотр камер дома: <a href="/dashboard" style="color:#8ab4f8;">Дашборд камер</a>
+                        Просмотр камер дома: <span id="cam_dash_link"></span>
                         (вход по паролю дашборда).
                     </div>
+                    <div id="cam_tablets_hint" style="font-size:0.78rem; color:#999; margin-top:8px;"></div>
                 </div>
             </div>
         </div>
@@ -751,7 +752,7 @@ function escapeHtml(str) {
 function updateDeviceRoleUI() {
     var loc = window.location;
     var port = loc.port || "8080";
-    var isServer = (port === "8085" || (currentCfg && (currentCfg.port === 8085 || currentCfg.role === "caching_server")));
+    var isServer = (port === "8085" || port === "8099" || (currentCfg && (currentCfg.port === 8085 || currentCfg.role === "caching_server")));
     var devLabel = document.getElementById("device_info_label");
     var navTitle = document.getElementById("main_nav_title");
     var roleBanner = document.getElementById("role_banner");
@@ -776,6 +777,7 @@ function updateDeviceRoleUI() {
         var camS = document.getElementById("cam_server_block");
         if (camT) camT.style.display = "none";
         if (camS) camS.style.display = "block";
+        camSetupServerBlock();
     } else {
         document.title = "📱 Планшет погоды (8080) — Настройки";
         if (navTitle) navTitle.innerText = "⚙️ Настройки информера";
@@ -803,6 +805,40 @@ function updateDeviceRoleUI() {
 
 // ===== Камера (фаза 1): состояние + запрос переключения =====
 var camEnabled = null;
+
+// Ссылка на дашборд и подсказка по планшетам. /dashboard живёт на дев-сервере 8099
+// (переходная схема до разворота прода); на планшетных страницах (8080) этот блок
+// вообще не показывается, ссылка с них не торчит.
+function camSetupServerBlock() {
+    var port = window.location.port || "8080";
+    var holder = document.getElementById("cam_dash_link");
+    if (holder) {
+        holder.innerHTML = "";
+        var a = document.createElement("a");
+        a.style.color = "#8ab4f8";
+        a.href = (port === "8099") ? "/dashboard" : "http://192.168.1.55:8099/dashboard";
+        a.textContent = "Дашборд камер (дев)";
+        holder.appendChild(a);
+    }
+    var hint = document.getElementById("cam_tablets_hint");
+    if (!hint) return;
+    hint.innerHTML = "";
+    var intro = document.createElement("div");
+    intro.textContent = "Переключение камеры - на settings странице самого планшета: http://<адрес-планшета>:8080/settings.html";
+    hint.appendChild(intro);
+    var rooms = (currentCfg && currentCfg.cameras_rooms) || [];
+    rooms.forEach(function(rc) {
+        if (!rc || !rc.tablet) return;
+        var line = document.createElement("div");
+        var a = document.createElement("a");
+        a.style.color = "#8ab4f8";
+        a.href = "http://" + rc.tablet + ":8080/settings.html";
+        a.textContent = rc.room;
+        line.appendChild(a);
+        line.appendChild(document.createTextNode(" → http://" + rc.tablet + ":8080/settings.html"));
+        hint.appendChild(line);
+    });
+}
 
 function camRender(s) {
     var badge = document.getElementById("cam_state_badge");

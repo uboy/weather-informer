@@ -31,6 +31,8 @@ button.stop { background: #55242e; }
 button.stop:hover { background: #6d2d39; }
 button[disabled] { opacity: .45; cursor: default; }
 button.del { background: #55242e; padding: 2px 8px; font-size: 11px; line-height: 1; }
+button.orient { background: #1d2f45; padding: 2px 8px; font-size: 11px; line-height: 1; }
+.srot { transition: transform .15s; }
 button.del:hover { background: #6d2d39; }
 #player { position: fixed; inset: 0; background: rgba(6,10,14,.92); display: none; align-items: center; justify-content: center; flex-direction: column; gap: 12px; }
 #player.open { display: flex; }
@@ -115,6 +117,8 @@ function buildGrid() {
       '<span style="display:flex; gap:6px; align-items:center;">' +
       '<span class="badge off" id="b-' + room + '">нет данных</span>' +
       '<button class="del" id="d-' + room + '" title="удалить комнату из конфига сервера">✕</button>' +
+      '<button class="orient" id="rot-' + room + '" title="повернуть на 90°">⟳</button>' +
+      '<button class="orient" id="flip-' + room + '" title="отразить по горизонтали">⇄</button>' +
       '</span></div>' +
       '<div class="meta" id="m-' + room + '">камера выключена по умолчанию</div>' +
       '<div class="snapbox" id="s-' + room + '"><span class="empty">снапшот по запросу</span></div>' +
@@ -129,7 +133,47 @@ function buildGrid() {
       if (!window.confirm("Удалить комнату " + room + " из конфига сервера?")) return;
       adminPost({action: "remove", room: room}, function () { reloadRooms(); });
     });
+    $("rot-" + room).addEventListener("click", function () {
+      try { localStorage.setItem("camrot_" + room, String((camOrientation(room) + 90) % 360)); } catch (e) {}
+      applyOrientation(room);
+    });
+    $("flip-" + room).addEventListener("click", function () {
+      try { localStorage.setItem("camflip_" + room, camFlip(room) ? "0" : "1"); } catch (e) {}
+      applyOrientation(room);
+    });
   });
+  ROOMS.forEach(applyOrientation);
+}
+
+// ===== Ориентация кадра (per-room, localStorage): поворот 0/90/180/270 + отражение =====
+// Владелец физически переворачивает камеры; поворот применяется к preview-плитке
+// и к содержимому окна просмотра (видео/снапшот). Кроп делает overflow контейнера.
+
+function camOrientation(room) {
+  try {
+    var v = parseInt(localStorage.getItem("camrot_" + room) || "0", 10);
+    return (v === 90 || v === 180 || v === 270) ? v : 0;
+  } catch (e) { return 0; }
+}
+
+function camFlip(room) {
+  try { return localStorage.getItem("camflip_" + room) === "1"; } catch (e) { return false; }
+}
+
+function orientTransform(room) {
+  return "rotate(" + camOrientation(room) + "deg)" + (camFlip(room) ? " scaleX(-1)" : "");
+}
+
+function applyOrientation(room) {
+  var t = orientTransform(room);
+  var boxImg = document.querySelector("#s-" + room + " img");
+  if (boxImg) { boxImg.classList.add("srot"); boxImg.style.transform = t; }
+  if (viewer && !viewer.closed && viewer.room === room) {
+    ["pvideo", "pmjpeg"].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) { el.classList.add("srot"); el.style.transform = t; }
+    });
+  }
 }
 
 function refreshSnap(room) {
@@ -221,6 +265,10 @@ function openViewer(room) {
   viewer = {room: room, ws: null, pc: null, mjpegTimer: null, mediaSeen: 0, closed: false};
   $("ptitle").textContent = "Комната: " + room;
   $("player").classList.add("open");
+  ["pvideo", "pmjpeg"].forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el) { el.style.transform = orientTransform(room); }
+  });
   pmsg("подключение к сигналингу...");
 
   api("/api/cam/viewer-token", function (tok) {

@@ -3883,7 +3883,13 @@ code {{ color: #81D4FA; }}
                 "update_interval_sec": cfg.get("update_interval_sec", 300),
                 "direct_update_interval_sec": cfg.get("direct_update_interval_sec", 1800),
                 "port": cfg.get("port", 8085),
-                "nearest_airport": find_nearest_icao(cur_lat, cur_lon)
+                "nearest_airport": find_nearest_icao(cur_lat, cur_lon),
+                # адреса планшетов камерных комнат (подсказка в settings UI);
+                # tablet_token сознательно не отдаём - только room и tablet
+                "cameras_rooms": [
+                    {"room": str(r), "tablet": str((rc or {}).get("tablet", ""))}
+                    for r, rc in sorted(((cfg.get("cameras") or {}).get("rooms") or {}).items())
+                ]
             }
             body = json.dumps(safe_cfg, ensure_ascii=False).encode("utf-8")
             try:
