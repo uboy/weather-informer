@@ -376,6 +376,75 @@ class TestCamWs(unittest.TestCase):
         self.assertIn("rooms", data)
         conn.close()
 
+    def test_summary_includes_all_configured_rooms_without_publisher(self):
+        """Summary обязан показывать все конфиг-комнаты, не только с паблишером."""
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        conn.request("GET", "/api/cam/summary", headers=basic_header(DASH_USER, DASH_PASS))
+        resp = conn.getresponse()
+        data = json.loads(resp.read().decode("utf-8"))
+        self.assertEqual(resp.status, 200)
+        rooms = data.get("rooms") or {}
+        self.assertIn(ROOM, rooms)
+        self.assertIn("kabinet", rooms)
+        # Реестр глобален и порядок тестов не фиксирован: строгий офлайн-контракт
+        # проверяем на комнате, которую ни один тест не подключал (kabinet).
+        entry = rooms["kabinet"]
+        self.assertTrue(entry.get("configured"), "kabinet")
+        self.assertFalse(entry.get("publisher_connected"), "kabinet")
+        cs = entry.get("cam_state") or {}
+        self.assertEqual(cs.get("state"), "OFFLINE", "kabinet")
+        # офлайн = флаг неизвестен, а не "выключена"
+        self.assertNotIn("enabled", cs)
+        self.assertTrue(rooms[ROOM].get("configured"), ROOM)
+        conn.close()
+
+    def test_cam_rooms_admin_auth_add_remove(self):
+        """Админ комнат: 401 без пары, add пишет конфиг (токен показан раз),
+        remove убирает только целевую комнату (остальные не теряются)."""
+        # 1) без Basic - 401
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        conn.request("POST", "/api/cam/rooms",
+                     body=json.dumps({"action": "add", "room": "kabinet2", "tablet": "127.0.0.2"}),
+                     headers={"Content-Type": "application/json"})
+        resp = conn.getresponse()
+        resp.read()
+        self.assertEqual(resp.status, 401, "rooms admin without creds must be 401")
+        conn.close()
+        # 2) add с Basic: сгенерированный tablet_token возвращается один раз
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        conn.request("POST", "/api/cam/rooms",
+                     body=json.dumps({"action": "add", "room": "kabinet2", "tablet": "127.0.0.2"}),
+                     headers=dict(basic_header(DASH_USER, DASH_PASS),
+                                  **{"Content-Type": "application/json"}))
+        resp = conn.getresponse()
+        data = json.loads(resp.read().decode("utf-8"))
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(data.get("action"), "add")
+        self.assertIn("kabinet2", data.get("rooms") or [])
+        tok = data.get("tablet_token") or ""
+        self.assertGreaterEqual(len(tok), 16, "generated tablet_token must be returned once")
+        conn.close()
+        # 3) конфиг persist: kabinet2 с токеном
+        cfg = json.load(open(self.config_path, encoding="utf-8"))
+        rooms = (cfg.get("cameras") or {}).get("rooms") or {}
+        self.assertIn("kabinet2", rooms)
+        self.assertGreaterEqual(len(rooms["kabinet2"].get("tablet_token") or ""), 16)
+        # 4) remove: уходит только kabinet2
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        conn.request("POST", "/api/cam/rooms",
+                     body=json.dumps({"action": "remove", "room": "kabinet2"}),
+                     headers=dict(basic_header(DASH_USER, DASH_PASS),
+                                  **{"Content-Type": "application/json"}))
+        resp = conn.getresponse()
+        data = json.loads(resp.read().decode("utf-8"))
+        self.assertEqual(resp.status, 200)
+        self.assertNotIn("kabinet2", data.get("rooms") or [])
+        conn.close()
+        cfg = json.load(open(self.config_path, encoding="utf-8"))
+        rooms = (cfg.get("cameras") or {}).get("rooms") or {}
+        self.assertNotIn("kabinet2", rooms)
+        self.assertIn(ROOM, rooms, "no-loss: other rooms must survive remove")
+
     def test_viewer_token_endpoint_auth(self):
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
         conn.request("GET", "/api/cam/viewer-token")

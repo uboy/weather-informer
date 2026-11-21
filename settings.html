@@ -686,6 +686,31 @@ select {
                     </div>
                 </div>
             </div>
+            </div>
+
+            <!-- Карточка: Камера (переключение подтверждается тапом на планшете) -->
+            <div class="card" id="card_camera">
+                <div class="card-title">
+                    <span>📷 Камера</span>
+                </div>
+                <div id="cam_tablet_block">
+                    <div style="margin-bottom:8px;">
+                        <span class="badge badge-empty" id="cam_state_badge">○ …</span>
+                        <div id="cam_state_text" style="font-size:0.85rem; color:#bbb; margin-top:6px;">Считываю состояние…</div>
+                    </div>
+                    <button type="button" class="btn-action btn-secondary" id="btn_cam_toggle" disabled>…</button>
+                    <div style="font-size:0.78rem; color:#999; margin-top:6px;">
+                        Кнопка только запрашивает переключение: подтвердите тапом на экране этого планшета.
+                        Записи нет — только живой просмотр с домашнего сервера (дашборд).
+                    </div>
+                </div>
+                <div id="cam_server_block" style="display:none;">
+                    <div style="font-size:0.85rem; color:#bbb;">
+                        Просмотр камер дома: <a href="/dashboard" style="color:#8ab4f8;">Дашборд камер</a>
+                        (вход по паролю дашборда).
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -747,6 +772,10 @@ function updateDeviceRoleUI() {
                 '</div>';
             roleBanner.style.display = "flex";
         }
+        var camT = document.getElementById("cam_tablet_block");
+        var camS = document.getElementById("cam_server_block");
+        if (camT) camT.style.display = "none";
+        if (camS) camS.style.display = "block";
     } else {
         document.title = "📱 Планшет погоды (8080) — Настройки";
         if (navTitle) navTitle.innerText = "⚙️ Настройки информера";
@@ -764,8 +793,83 @@ function updateDeviceRoleUI() {
                 '</div>';
             roleBanner.style.display = "flex";
         }
+        var camT2 = document.getElementById("cam_tablet_block");
+        var camS2 = document.getElementById("cam_server_block");
+        if (camT2) camT2.style.display = "block";
+        if (camS2) camS2.style.display = "none";
+        camRefresh();
     }
 }
+
+// ===== Камера (фаза 1): состояние + запрос переключения =====
+var camEnabled = null;
+
+function camRender(s) {
+    var badge = document.getElementById("cam_state_badge");
+    var txt = document.getElementById("cam_state_text");
+    var btn = document.getElementById("btn_cam_toggle");
+    if (!badge || !txt) return;
+    if (!s || typeof s.enabled === "undefined") {
+        badge.className = "badge badge-empty";
+        badge.innerText = "○ нет данных";
+        txt.innerText = "Состояние камеры недоступно (старое приложение или не планшет).";
+        if (btn) btn.disabled = true;
+        return;
+    }
+    camEnabled = !!s.enabled;
+    badge.className = "badge " + (camEnabled ? "badge-ok" : "badge-empty");
+    badge.innerText = camEnabled ? "● включена" : "○ выключена";
+    var bits = [];
+    if (s.state === "STREAMING") bits.push("идёт трансляция" + (s.viewers ? ", зрителей: " + s.viewers : ""));
+    else if (s.state === "SNAPSHOT") bits.push("снимок");
+    else if (s.state && s.state !== "IDLE" && s.state !== "OFFLINE") bits.push("режим: " + s.state);
+    if (s.last_error) bits.push("последняя ошибка: " + s.last_error);
+    txt.innerText = bits.length ? bits.join(" · ") : "Ожидание. Просмотр — через дашборд на домашнем сервере.";
+    if (btn) {
+        btn.disabled = false;
+        btn.innerText = camEnabled ? "⛔ Выключить камеру" : "▶ Включить камеру";
+    }
+}
+
+function camRefresh() {
+    fetch("/api/cam/state")
+        .then(function(r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+        .then(camRender)
+        .catch(function() { camRender(null); });
+}
+
+function camWire() {
+    var btn = document.getElementById("btn_cam_toggle");
+    if (!btn) return;
+    btn.addEventListener("click", function() {
+        if (camEnabled === null) return;
+        var want = !camEnabled;
+        btn.disabled = true;
+        fetch("/api/cam/toggle-request", {
+            method: "POST",
+            headers: { "Content-Type": "application/json; charset=utf-8" },
+            body: JSON.stringify({ enable: want })
+        })
+        .then(function(r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+        .then(function(res) {
+            if (res && res.status === "confirm_pending") {
+                showStatus(want ? "Запрос отправлен. Подтвердите ВКЛЮЧЕНИЕ тапом на экране планшета."
+                                : "Запрос отправлен. Подтвердите ВЫКЛЮЧЕНИЕ тапом на экране планшета.", "ok", 8000);
+                setTimeout(camRefresh, 2000);
+                setTimeout(camRefresh, 6000);
+                setTimeout(camRefresh, 12000);
+            } else {
+                showStatus("Ошибка: " + ((res && res.error) || "запрос не принят"), "err", 4000);
+                camRefresh();
+            }
+        })
+        .catch(function(e) {
+            showStatus("Ошибка сети: " + e, "err", 4000);
+            camRefresh();
+        });
+    });
+}
+
 
 function showStatus(text, type, duration) {
     var el = document.getElementById("status_msg");
@@ -1165,6 +1269,7 @@ for (var iei = 0; iei < idleEvents.length; iei++) {
 }
 startIdleTimer();
 
+camWire();
 loadSettings();
 </script>
 </body>

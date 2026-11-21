@@ -45,6 +45,21 @@ button[disabled] { opacity: .45; cursor: default; }
   <span class="hint" id="hint">загрузка...</span>
 </header>
 <div id="grid"></div>
+<div id="admin" class="card" style="margin: 0 20px 24px;">
+  <div class="head"><span class="name">Комнаты (админ)</span></div>
+  <div class="meta">Добавить комнату: имя (a-z0-9_-) и адрес планшета; tablet_token сгенерируется
+    и будет показан один раз. На планшете: в настройках планшета секция «Камера» - включить тапом
+    на экране; в конфиг планшета вписать cam-секцию (room, tablet_token, ws_url транзитного сервера).
+    Полноценное видео со всех комнат появится с pull-моделью сигналинга (сервер ходит к планшетам сам);
+    сейчас трансляция идёт только там, где есть транзитный путь сигналинга.</div>
+  <div id="admin_rooms" style="display:flex; flex-wrap:wrap; gap:8px; margin-top:8px;"></div>
+  <div class="row" style="margin-top:10px; flex-wrap:wrap;">
+    <input id="adm_room" placeholder="комната, напр. kabinet" style="background:#0b1218;border:1px solid #243447;color:#dfe7ee;border-radius:8px;padding:8px;font:inherit;min-width:200px;">
+    <input id="adm_tablet" placeholder="планшет (ip/хост), напр. 192.168.4.50" style="background:#0b1218;border:1px solid #243447;color:#dfe7ee;border-radius:8px;padding:8px;font:inherit;min-width:220px;">
+    <button id="adm_add">Добавить комнату</button>
+  </div>
+  <div id="adm_msg" class="meta" style="margin-top:6px;"></div>
+</div>
 <div id="player">
   <div class="head" style="width:92vw; display:flex; justify-content:space-between; align-items:center;">
     <div id="ptitle" style="font-weight:600;"></div>
@@ -74,9 +89,13 @@ function api(path, cb) {
     .catch(function () {});
 }
 
+var autoSnap = {};
+var lastRooms = {};
+
 function badgeFor(cs) {
   if (!cs) return ["off", "нет данных"];
-  if (!cs.enabled) return ["off", "выключена"];
+  if (cs.enabled === false) return ["off", "выключена"];
+  if (cs.state === "OFFLINE") return ["off", "нет данных"];
   if (cs.state === "STREAMING") return ["streaming", "стрим"];
   if (cs.state === "SNAPSHOT") return ["busy", "снапшот"];
   if (cs.state === "IDLE") return ["idle", "готова"];
@@ -122,6 +141,7 @@ function refreshSnap(room) {
 
 function updateSummary(sum) {
   var rooms = sum.rooms || {};
+  lastRooms = rooms;
   var live = 0;
   ROOMS.forEach(function (room) {
     var info = rooms[room] || {};
@@ -133,13 +153,19 @@ function updateSummary(sum) {
     b.textContent = cls[1];
     var bits = [];
     if (info.publisher_connected) { bits.push("издатель на связи"); live += 1; }
+    else if (cs && cs.enabled !== false) { bits.push("сигналинг недоступен (переходная схема)"); }
     else { bits.push("издатель не подключен"); }
     bits.push("зрителей: " + (info.viewers || 0));
     if (cs && cs.enabled === false) bits.push("выключена на планшете");
     if (cs && cs.last_error) bits.push("ошибка: " + cs.last_error);
     m.textContent = bits.join(", ");
     var wb = $("w-" + room);
-    if (wb) wb.disabled = !(cs && cs.enabled);
+    if (wb) wb.disabled = !!(cs && cs.enabled === false);
+    // превью: снапшот момента открытия дашборда для каждой включённой комнаты
+    if (!autoSnap[room] && cs && cs.enabled !== false) {
+      autoSnap[room] = true;
+      refreshSnap(room);
+    }
   });
   $("hint").textContent = "комнат: " + ROOMS.length + ", издателей на связи: " + live +
     " (обновлено " + new Date().toLocaleTimeString() + ")";
@@ -284,7 +310,70 @@ document.addEventListener("visibilitychange", function () {
     Object.keys(snapTimers).forEach(function (k) { clearInterval(snapTimers[k]); delete snapTimers[k]; });
   } else {
     pollLoop();
+    Object.keys(lastRooms).forEach(function (room) {
+      var cs = (lastRooms[room] || {}).cam_state;
+      if (cs && cs.enabled !== false) refreshSnap(room);
+    });
   }
+});
+
+// ===== Админ комнат: список/добавить/удалить (POST /api/cam/rooms) =====
+
+function adminPost(payload, cb) {
+  fetch("/api/cam/rooms", {
+    method: "POST",
+    headers: { "Content-Type": "application/json; charset=utf-8" },
+    body: JSON.stringify(payload)
+  }).then(function (r) {
+    if (r.status === 401) { $("adm_msg").textContent = "требуется вход (HTTP Basic)"; return null; }
+    return r.json();
+  }).then(function (j) {
+    if (!j) return;
+    if (j.error) { $("adm_msg").textContent = "ошибка: " + j.error; return; }
+    if (j.tablet_token) {
+      $("adm_msg").textContent = "комната " + j.room + ": tablet_token=" + j.tablet_token +
+        " - впиши его в cam-конфиг планшета; больше он не покажется.";
+    } else {
+      $("adm_msg").textContent = "ок: " + j.action + " " + j.room;
+    }
+    if (cb) cb(j);
+  }).catch(function (e) { $("adm_msg").textContent = "ошибка сети: " + e; });
+}
+
+function reloadRooms() {
+  api("/api/cam/viewer-token", function (tok) {
+    if (!tok) return;
+    TOKEN = tok.viewer_token;
+    ROOMS = tok.rooms || [];
+    autoSnap = {};
+    buildGrid();
+    renderAdminRooms();
+    pollLoop();
+  });
+}
+
+function renderAdminRooms() {
+  var box = $("admin_rooms");
+  if (!box) return;
+  box.innerHTML = "";
+  ROOMS.forEach(function (room) {
+    var b = document.createElement("button");
+    b.className = "stop";
+    b.textContent = "удалить: " + room;
+    b.title = "убрать комнату из конфига сервера";
+    b.addEventListener("click", function () {
+      if (!window.confirm("Удалить комнату " + room + " из конфига сервера?")) return;
+      adminPost({action: "remove", room: room}, function () { reloadRooms(); });
+    });
+    box.appendChild(b);
+  });
+}
+
+$("adm_add").addEventListener("click", function () {
+  var room = ($("adm_room").value || "").trim();
+  var tablet = ($("adm_tablet").value || "").trim();
+  if (!room || !tablet) { $("adm_msg").textContent = "укажи комнату и адрес планшета"; return; }
+  adminPost({action: "add", room: room, tablet: tablet}, function () { reloadRooms(); });
 });
 
 api("/api/cam/viewer-token", function (tok) {
@@ -292,6 +381,7 @@ api("/api/cam/viewer-token", function (tok) {
   TOKEN = tok.viewer_token;
   ROOMS = tok.rooms || [];
   buildGrid();
+  renderAdminRooms();
   pollLoop();
   pollTimer = setInterval(pollLoop, 5000);
 });

@@ -2703,6 +2703,13 @@ class CameraRegistry:
         with self.lock:
             self.cam_state[room] = state
 
+    def drop_room(self, room):
+        """Забыть комнату (админ-удаление): кэш cam_state и записи реестра."""
+        with self.lock:
+            self.cam_state.pop(room, None)
+            self.publishers.pop(room, None)
+            self.room_viewers.pop(room, None)
+
     def remove(self, conn):
         """Убрать соединение из реестра; вернуть (роль, комната)."""
         with self.lock:
@@ -2744,8 +2751,49 @@ def cam_state_snapshot(room):
     state = CAM_REGISTRY.cam_state.get(room)
     if isinstance(state, dict):
         return state
-    return {"type": "cam_state", "state": "OFFLINE", "enabled": False,
+    # enabled не проставляем: паблик офлайн = флаг НЕИЗВЕСТЕН, а не false.
+    return {"type": "cam_state", "state": "OFFLINE",
             "viewers": 0, "last_error": "publisher offline", "ts": int(time.time())}
+
+
+CAM_STATE_POLL_INTERVAL_S = 30.0
+
+
+def cam_state_poll_loop():
+    """Interim (до pull-модели сигналинга): прямой опрос /api/cam/state планшетов.
+
+    Зачем: транзитная схема кладёт cam_state в реестр только от подключённого
+    паблишера, и summary показывает «выключена» там, где камера фактически
+    включена, но не подключена. Поллер сам ходит на планшет :8080 и освежает
+    кэш реестра; недоступный планшет оставляет прошлый кэш. Уходит вместе с
+    транзитной схемой после разворота pull-модели (design.md 9.2-9.3).
+    """
+    while True:
+        try:
+            rooms = cam_section().get("rooms")
+            if isinstance(rooms, dict):
+                for room, rc in rooms.items():
+                    if not isinstance(rc, dict):
+                        continue
+                    tablet = (rc.get("tablet") or rc.get("host") or "").strip()
+                    if not tablet:
+                        continue
+                    port = rc.get("port", 8080)
+                    url = "http://%s:%s/api/cam/state" % (tablet, port)
+                    try:
+                        req = urllib.request.Request(
+                            url, headers={"User-Agent": "weather-informer-cam-poll"})
+                        with urllib.request.urlopen(req, timeout=5) as resp:
+                            st = json.loads(resp.read().decode("utf-8"))
+                        if isinstance(st, dict) and "enabled" in st:
+                            st["source"] = "poll"
+                            st["ts"] = int(time.time())
+                            CAM_REGISTRY.set_cam_state(room, st)
+                    except Exception:
+                        pass  # планшет недоступен - кэш не трогаем
+        except Exception:
+            pass
+        time.sleep(CAM_STATE_POLL_INTERVAL_S)
 
 
 def cam_send_viewer_error(conn, code):
@@ -2937,7 +2985,7 @@ def ws_cam_session(handler):
             role, room = CAM_REGISTRY.remove(conn)
             conn.alive = False
             if role == "publisher":
-                offline = {"type": "cam_state", "state": "OFFLINE", "enabled": False,
+                offline = {"type": "cam_state", "state": "OFFLINE",
                            "viewers": 0, "last_error": "publisher offline",
                            "ts": int(time.time())}
                 for viewer in CAM_REGISTRY.viewers_of(room):
@@ -3139,8 +3187,23 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
         if not check_cam_basic_auth(self):
             send_cam_401(self)
             return
+        configured = sorted((cam_section().get("rooms") or {}).keys())
+        live = CAM_REGISTRY.summary()
+        rooms = {}
+        for room in configured:
+            entry = dict(live.get(room) or {})
+            entry["configured"] = True
+            entry.setdefault("publisher_connected", False)
+            entry.setdefault("viewers", 0)
+            entry.setdefault("cam_state", cam_state_snapshot(room))
+            rooms[room] = entry
+        for room, entry in live.items():
+            if room not in rooms:
+                entry = dict(entry)
+                entry["configured"] = False
+                rooms[room] = entry
         body = json.dumps({
-            "rooms": CAM_REGISTRY.summary(),
+            "rooms": rooms,
             "ts": int(time.time()),
         }, ensure_ascii=False).encode("utf-8")
         try:
@@ -3153,6 +3216,73 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
         except (BrokenPipeError, ConnectionResetError):
             pass
+
+    def serve_cam_rooms_admin(self):
+        """POST /api/cam/rooms: добавить/убрать камерную комнату (правит config.json).
+
+        add: {action:"add", room, tablet, tablet_token?} - без tablet_token
+        генерируется новый (в ответе показывается ОДИН раз, в лог не пишется).
+        remove: {action:"remove", room}.
+        """
+        if not check_cam_basic_auth(self):
+            send_cam_401(self)
+            return
+        try:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            raw = self.rfile.read(length) if length > 0 else b"{}"
+            req = json.loads(raw.decode("utf-8"))
+            if not isinstance(req, dict):
+                raise ValueError("not an object")
+        except Exception:
+            self._send_cam_json(400, {"error": "bad json body"})
+            return
+        action = req.get("action")
+        room = str(req.get("room") or "").strip()
+        if not re.match(r"^[a-z0-9][a-z0-9_-]{1,31}$", room):
+            self._send_cam_json(400, {"error": "bad room name (a-z0-9_- , 2..32)"})
+            return
+        cfg = load_config()
+        cam = dict(cfg.get("cameras") or {})
+        rooms = dict(cam.get("rooms") or {})
+        generated = False
+        if action == "add":
+            tablet = str(req.get("tablet") or "").strip()
+            if not tablet:
+                self._send_cam_json(400, {"error": "tablet (ip/host) required"})
+                return
+            token = str(req.get("tablet_token") or "").strip()
+            if token:
+                if len(token) < 16:
+                    self._send_cam_json(400, {"error": "tablet_token too short (min 16)"})
+                    return
+            else:
+                token = os.urandom(16).hex()
+                generated = True
+            entry = dict(rooms.get(room) or {})
+            entry["tablet"] = tablet
+            entry["tablet_token"] = token
+            rooms[room] = entry
+        elif action == "remove":
+            if room not in rooms:
+                self._send_cam_json(404, {"error": "unknown room"})
+                return
+            rooms.pop(room, None)
+        else:
+            self._send_cam_json(400, {"error": "action must be add|remove"})
+            return
+        cam["rooms"] = rooms
+        cfg["cameras"] = cam
+        try:
+            save_config(cfg)
+        except Exception as e:
+            self._send_cam_json(500, {"error": "save failed", "detail": sanitize_secrets(str(e))})
+            return
+        CAM_REGISTRY.drop_room(room)
+        resp = {"status": "ok", "action": action, "room": room,
+                "rooms": sorted(rooms.keys())}
+        if generated:
+            resp["tablet_token"] = token  # показываем один раз; в лог не пишем
+        self._send_cam_json(200, resp)
 
     def serve_cam_snapshot(self):
         """Прокси на планшет: GET /api/snapshot?token=... (tablet_token не покидает сервер)."""
@@ -3920,6 +4050,10 @@ code {{ color: #81D4FA; }}
         if not self.enforce_rate_limit(cat):
             return
 
+        if path == "/api/cam/rooms":
+            self.serve_cam_rooms_admin()
+            return
+
         if path in ("/api/settings", "/settings", "/api/config"):
             client_ip = RATE_LIMITER.get_client_ip(self)
             if not RATE_LIMITER.is_local(client_ip):
@@ -4045,6 +4179,12 @@ def main():
         sync_thread = threading.Thread(target=tablets_time_sync_loop, daemon=True)
         sync_thread.start()
         log.info("Tablets time sync loop enabled (every %s hours)", cfg.get("tablets_sync_interval_hours", 6))
+
+    # Камеры: interim-поллер cam_state планшетов (до pull-модели)
+    if (cfg.get("cameras") or {}).get("rooms"):
+        cam_poll_thread = threading.Thread(target=cam_state_poll_loop, daemon=True)
+        cam_poll_thread.start()
+        log.info("Cam state poller enabled (interim, every %ss)", CAM_STATE_POLL_INTERVAL_S)
 
     # Первичный запрос в фоне
     t = threading.Thread(target=background_refresher, daemon=True)
