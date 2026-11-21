@@ -202,6 +202,9 @@ public class CameraService {
             scheduleReconnect();
             return;
         }
+        // Конфиг прочитан успешно: транзиентная ошибка старта (файл ещё не был
+        // готов) устарела, иначе health показывает её вечно.
+        clearLastErrorIf("cam config (ws_url/room) not set");
         if (signaling != null && signaling.isOpen()) {
             return;
         }
@@ -350,6 +353,15 @@ public class CameraService {
     private void setLastError(String error) {
         this.lastError = error == null ? "" : error;
         Log.w(TAG, "lastError: " + error);
+    }
+
+    /** Ошибку стираем, когда её условие разрешилось (стартовая гонка и т.п.). */
+    private void clearLastErrorIf(String prefix) {
+        if (lastError != null && lastError.startsWith(prefix)) {
+            lastError = "";
+            Log.i(TAG, "lastError cleared, resolved: " + prefix);
+            sendStateUpdate();
+        }
     }
 
     // ===== Колбэки сессий =====
@@ -564,6 +576,9 @@ public class CameraService {
             setState(STATE_SNAPSHOT, "");
             try {
                 byte[] jpeg = captureJpeg();
+                if (jpeg != null) {
+                    clearLastErrorIf("snapshot failed");
+                }
                 jpegOut[0] = jpeg;
                 return jpeg != null ? SNAP_OK : SNAP_ERROR;
             } catch (Throwable t) {
