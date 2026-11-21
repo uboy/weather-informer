@@ -190,6 +190,16 @@ public class CameraService {
         }
     }
 
+    /** cam.camera_id из конфига планшета (override device index); -1 = авто (front-first). */
+    private int camDeviceOverride() {
+        JSONObject cam = getCamConfig();
+        if (cam == null) {
+            return -1;
+        }
+        int id = cam.optInt("camera_id", -1);
+        return id >= 0 ? id : -1;
+    }
+
     // ===== Сигналинг =====
 
     private void connectSignaling() {
@@ -443,22 +453,43 @@ public class CameraService {
             return;
         }
         Camera1Enumerator enumerator = new Camera1Enumerator(true);
-        String frontDevice = null;
-        for (String name : enumerator.getDeviceNames()) {
-            if (enumerator.isFrontFacing(name)) {
-                frontDevice = name;
-                break;
+        // cam.camera_id (опционально в конфиге планшета): явный индекс device.
+        // Зачем: MTK HAL лжёт в CameraInfo.facing (AT200: единственный
+        // ФРОНТАЛЬНЫЙ модуль помечен BACK), доверять facing нельзя. Override
+        // приватность не ослабляет: включение камеры по-прежнему только тапом
+        // на экране планшета; поле лишь указывает, какой device открывать.
+        int overrideId = camDeviceOverride();
+        String device = null;
+        if (overrideId >= 0) {
+            for (String name : enumerator.getDeviceNames()) {
+                if (name.equals(String.valueOf(overrideId))) {
+                    device = name;
+                    break;
+                }
+            }
+            if (device == null) {
+                throw new IllegalStateException(
+                        "cam.camera_id=" + overrideId + " not found in camera device list");
+            }
+        } else {
+            for (String name : enumerator.getDeviceNames()) {
+                if (enumerator.isFrontFacing(name)) {
+                    device = name;
+                    break;
+                }
+            }
+            if (device == null) {
+                throw new IllegalStateException("no front camera: front-only by policy 5.1.6");
             }
         }
-        if (frontDevice == null) {
-            throw new IllegalStateException("no front camera: front-only by policy 5.1.6");
-        }
         CamCaptureEvents events = new CamCaptureEvents(this);
-        capturer = enumerator.createCapturer(frontDevice, events);
+        capturer = enumerator.createCapturer(device, events);
         surfaceHelper = SurfaceTextureHelper.create("CamCaptureThread", eglBase.getEglBaseContext());
         capturer.initialize(surfaceHelper, appContext, videoSource.getCapturerObserver());
         capturer.startCapture(640, 480, 15);
-        Log.i(TAG, "capture started: front=" + frontDevice + " 640x480@15");
+        Log.i(TAG, "capture started: device=" + device
+                + (overrideId >= 0 ? " (override cam.camera_id)" : " (front)")
+                + " 640x480@15");
     }
 
     /**
@@ -593,16 +624,26 @@ public class CameraService {
     private byte[] captureJpeg() throws Exception {
         Camera.CameraInfo info = new Camera.CameraInfo();
         int cameraId = -1;
+        int overrideId = camDeviceOverride();
         int n = Camera.getNumberOfCameras();
-        for (int i = 0; i < n; i++) {
-            Camera.getCameraInfo(i, info);
-            if (info.facing == Camera.CameraInfo.CAMERA_FACING_FRONT) {
-                cameraId = i;
-                break;
+        if (overrideId >= 0) {
+            // Явный override (см. ensureCapture): facing на MTK бывает лжив.
+            if (overrideId >= n) {
+                throw new IllegalStateException(
+                        "cam.camera_id=" + overrideId + " out of range (" + n + " cameras)");
             }
-        }
-        if (cameraId < 0) {
-            throw new IllegalStateException("no front camera: front-only by policy 5.1.6");
+            cameraId = overrideId;
+        } else {
+            for (int i = 0; i < n; i++) {
+                Camera.getCameraInfo(i, info);
+                if (info.facing == Camera.CameraInfo.CAMERA_FACING_FRONT) {
+                    cameraId = i;
+                    break;
+                }
+            }
+            if (cameraId < 0) {
+                throw new IllegalStateException("no front camera: front-only by policy 5.1.6");
+            }
         }
         Camera camera = Camera.open(cameraId);
         try {
