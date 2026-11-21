@@ -2504,7 +2504,7 @@ RATE_LIMITER = RateLimiter()
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 WS_MAX_FRAME_BYTES = 512 * 1024   # лимит кадра (SDP с ICE-кандидатами помещается с запасом)
 WS_AUTH_TIMEOUT_S = 10.0          # сколько ждём hello после handshake
-WS_READ_TIMEOUT_S = 30.0          # тишина 30 с -> ping; дольше 60 с без кадров -> drop
+WS_READ_TIMEOUT_S = 15.0          # тишина 15 с -> ping (nc/idle-пути живут < 30 с); 60 с без кадров -> drop
 WS_MAX_SILENCE_S = 60.0
 
 WS_OP_CONT = 0x0
@@ -2558,6 +2558,14 @@ def ws_build_frame(opcode, payload=b""):
         header.append(127)
         header += struct.pack(">Q", n)
     return bytes(header) + payload
+
+
+def ws_send_close_raw(sock, code, reason):
+    """Close-кадр в сырой сокет (до создания CamConnection и после него)."""
+    try:
+        sock.sendall(ws_build_frame(WS_OP_CLOSE, struct.pack(">H", code) + reason.encode("utf-8")[:100]))
+    except (BrokenPipeError, ConnectionResetError, OSError):
+        pass
 
 
 def ws_read_exact(rfile, n):
@@ -2811,6 +2819,9 @@ def ws_cam_session(handler):
         if role == "publisher":
             want = rc.get("tablet_token") or ""
             if not token or not hmac.compare_digest(token.encode("utf-8"), want.encode("utf-8")):
+                log.info("cam ws 4001: role=%s room=%s token_len=%d want_len=%d from=%s",
+                         role, room, len(token), len(want),
+                         handler.client_address[0] if handler.client_address else "?")
                 raise CamWsClosed(4001, "bad tablet token")
         elif role == "viewer":
             want = cc.get("viewer_token") or ""
@@ -2847,7 +2858,17 @@ def ws_cam_session(handler):
                 now = time.time()
                 if now - conn.last_seen > WS_MAX_SILENCE_S:
                     raise CamWsClosed(1001, "silence timeout")
-                conn.send_ping()
+                # Паблишер-планшет отвечает на прикладной ping_app (pong_app,
+                # CameraService); браузер-вьюер понгует WS-ping по RFC сам.
+                if conn.role == "publisher":
+                    conn.send_text(json.dumps({"type": "ping_app"}))
+                else:
+                    conn.send_ping()
+                # SocketIO после таймаута отравлен (_timeout_occurred ->
+                # "cannot read from timed out object"): пересоздаём rfile.
+                # На момент таймаута его буфер пуст (иначе чтение было бы
+                # из буфера без обращения к сокету), потерь байт нет.
+                handler.rfile = handler.connection.makefile("rb")
                 continue
             conn.last_seen = time.time()
             if opcode == WS_OP_PING:
@@ -2903,12 +2924,14 @@ def ws_cam_session(handler):
     except CamWsClosed as closed:
         if conn is not None:
             conn.send_close(closed.code, closed.reason)
+        else:
+            ws_send_close_raw(sock, closed.code, closed.reason)
         log.info("cam ws closed: code=%s reason=%s role=%s room=%s",
                  closed.code, closed.reason,
                  conn.role if conn else "?", conn.room if conn else "?")
-    except (BrokenPipeError, ConnectionResetError, OSError, ValueError):
-        log.info("cam ws dropped (io error) role=%s room=%s",
-                 conn.role if conn else "?", conn.room if conn else "?")
+    except (BrokenPipeError, ConnectionResetError, OSError, ValueError) as _e:
+        log.info("cam ws dropped (io error) exc=%r role=%s room=%s",
+                _e, conn.role if conn else "?", conn.room if conn else "?")
     finally:
         if conn is not None:
             role, room = CAM_REGISTRY.remove(conn)
