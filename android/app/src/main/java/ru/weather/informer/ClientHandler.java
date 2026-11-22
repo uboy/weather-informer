@@ -831,9 +831,23 @@ public class ClientHandler implements Runnable {
             sendResponse(out, 504, "Gateway Timeout", "application/json; charset=utf-8",
                     "{\"error\":\"answer timeout\"}".getBytes(StandardCharsets.UTF_8));
         } else {
+            String detail = pullDetailJson(cam);
+            Log.w(TAG, "pull offer failed: viewer=" + viewer + " code=" + code
+                    + (detail.isEmpty() ? "" : " detail=" + detail));
             sendResponse(out, 500, "Internal Server Error", "application/json; charset=utf-8",
-                    "{\"error\":\"session failed\"}".getBytes(StandardCharsets.UTF_8));
+                    ("{\"error\":\"session failed\"" + detail + "}")
+                            .getBytes(StandardCharsets.UTF_8));
         }
+    }
+
+    /** Причина последней неудачи pull-старта (без секретов) в виде JSON-фрагмента. */
+    private static String pullDetailJson(CameraService cam) {
+        String d = cam.lastPullError();
+        if (d == null || d.isEmpty()) {
+            return "";
+        }
+        d = d.replace("\\", "\\\\").replace("\"", "\\\"").replaceAll("[\\r\\n\\t]", " ");
+        return ",\"detail\":\"" + d + "\"";
     }
 
     /** POST /api/cam/webrtc/close?token=&viewer=: сервер сообщает, что зритель ушёл. */

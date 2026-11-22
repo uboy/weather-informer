@@ -497,6 +497,13 @@ public class CameraService {
      * удержания мониторов. Offer-путь совпадает с WS-сигналингом: та же
      * карта sessions, тот же арбитр состояния и stopCapture при уходе зрителей.
      */
+    /** Причина последней неудачи pull-старта (для diagnose-ответа 500, без секретов). */
+    private volatile String lastPullError = "";
+
+    public String lastPullError() {
+        return lastPullError;
+    }
+
     public int startPullSession(String viewerId, String token, JSONObject offerPayload,
                                 boolean wantAudio, long timeoutMs, JSONObject[] answerOut) {
         int gate = checkPullToken(token);
@@ -504,9 +511,11 @@ public class CameraService {
             return gate;
         }
         CamPeerSession session = new CamPeerSession(viewerId, this, null, wantAudio);
+        lastPullError = "";
         camHandler.post(new CamPullOfferTask(this, viewerId, offerPayload, session));
         if (!session.waitForAnswerAndIce(timeoutMs)) {
             String err = session.pullError();
+            lastPullError = err;
             dropSession(viewerId, err.isEmpty() ? "pull answer timeout" : "pull start failed: " + err);
             return err.isEmpty() ? PULL_TIMEOUT : PULL_ERROR;
         }
@@ -561,19 +570,19 @@ public class CameraService {
         // на экране планшета; поле лишь указывает, какой device открывать.
         int overrideId = camDeviceOverride();
         String device = null;
+        String[] deviceNames = enumerator.getDeviceNames();
         if (overrideId >= 0) {
-            for (String name : enumerator.getDeviceNames()) {
-                if (name.equals(String.valueOf(overrideId))) {
-                    device = name;
-                    break;
-                }
+            // getDeviceNames() возвращает человекочитаемые имена ("Camera 0,
+            // Facing back, Orientation 90"), а не индексы: равенство имени и
+            // "0" не срабатывает никогда (500 на .21 23:14). Список строится
+            // в порядке device 0..n-1 - имя берём по индексу override.
+            if (overrideId >= deviceNames.length) {
+                throw new IllegalStateException("cam.camera_id=" + overrideId
+                        + " not found in camera device list (" + deviceNames.length + " devices)");
             }
-            if (device == null) {
-                throw new IllegalStateException(
-                        "cam.camera_id=" + overrideId + " not found in camera device list");
-            }
+            device = deviceNames[overrideId];
         } else {
-            for (String name : enumerator.getDeviceNames()) {
+            for (String name : deviceNames) {
                 if (enumerator.isFrontFacing(name)) {
                     device = name;
                     break;
@@ -587,10 +596,15 @@ public class CameraService {
         capturer = enumerator.createCapturer(device, events);
         surfaceHelper = SurfaceTextureHelper.create("CamCaptureThread", eglBase.getEglBaseContext());
         capturer.initialize(surfaceHelper, appContext, videoSource.getCapturerObserver());
-        capturer.startCapture(640, 480, 15);
+        // fps=30 (не 15): findClosestCaptureFormat по дистанции 2*|min-req|+|max-req|
+        // выбирает диапазон; при запросе 15 выигрывает (15000,25000) и AE в тёмной
+        // комнате сползает до ~8 fps (гоча .38 22:53 "Camera fps: 8"). При запросе
+        // 30 дистанция 0 у фиксированного (30000,30000) - HAL прижат к 30 fps.
+        // Цена: выдержка <= 1/30 с - в темноте картинка темнее (проверено E2E).
+        capturer.startCapture(640, 480, 30);
         Log.i(TAG, "capture started: device=" + device
                 + (overrideId >= 0 ? " (override cam.camera_id)" : " (front)")
-                + " 640x480@15");
+                + " 640x480@30");
     }
 
     /**
@@ -1294,11 +1308,30 @@ public class CameraService {
 
         @Override
         public void run() {
-            try {
-                service.ensureCapture();
-            } catch (Throwable t) {
-                service.setLastError("capture start failed: " + t.getMessage());
-                session.failPull("capture start failed: " + t.getMessage());
+            // Камера может быть занята snapshot-поллером (карточки дашборда и
+            // MJPEG-фолбэк открывают Camera.open каждые ~4 с, снимок держит
+            // камеру 2-3 с): тогда ensureCapture бросает сразу. Ретраим до ~4 с,
+            // иначе зритель, только что закрытый из MJPEG, не откроет pull.
+            Throwable failure = null;
+            for (int attempt = 0; attempt < 8; attempt++) {
+                try {
+                    service.ensureCapture();
+                    failure = null;
+                    break;
+                } catch (Throwable t) {
+                    failure = t;
+                    Log.w(TAG, "pull ensureCapture attempt " + attempt + " failed: " + t);
+                    try {
+                        Thread.sleep(500);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                }
+            }
+            if (failure != null) {
+                service.setLastError("capture start failed: " + failure.getMessage());
+                session.failPull("capture start failed: " + failure.getMessage());
                 return;
             }
             synchronized (service.sessionsLock) {

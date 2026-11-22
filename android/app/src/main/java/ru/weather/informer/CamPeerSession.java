@@ -7,6 +7,8 @@ import org.json.JSONObject;
 import org.webrtc.IceCandidate;
 import org.webrtc.MediaConstraints;
 import org.webrtc.PeerConnection;
+import org.webrtc.RtpParameters;
+import org.webrtc.RtpSender;
 import org.webrtc.SdpObserver;
 import org.webrtc.SessionDescription;
 
@@ -85,12 +87,20 @@ public class CamPeerSession {
             return;
         }
         if (service.getVideoTrack() != null) {
-            pc.addTrack(service.getVideoTrack(), Arrays.asList("weather-cam"));
+            RtpSender videoSender = pc.addTrack(service.getVideoTrack(), Arrays.asList("weather-cam"));
+            // Софт-энкодер VP8 (H264 HW на Spreadtrum не даёт libwebrtc) упирается
+            // в CPU: при BALANCED WebRTC держит разрешение и роняет fps (640x480@8).
+            // MAINTAIN_FRAMERATE - наоборот: fps держим, режем разрешение.
+            RtpParameters vp = videoSender.getParameters();
+            vp.degradationPreference = RtpParameters.DegradationPreference.MAINTAIN_FRAMERATE;
+            videoSender.setParameters(vp);
         }
         if (audioEnabled && service.getAudioTrack() != null) {
             pc.addTrack(service.getAudioTrack(), Arrays.asList("weather-cam"));
         }
-        pc.setBitrate(150000, 350000, 500000);
+        // LAN без ограничений: капы подняты, 640x480@15 требует ~1 Мбит;
+        // прежние 150k/350k/500k душили адаптацию (падала до 320x240).
+        pc.setBitrate(200000, 800000, 1500000);
         SessionDescription remote =
                 new SessionDescription(SessionDescription.Type.OFFER, sdp);
         pc.setRemoteDescription(new CamSetRemoteObserver(this), remote);
