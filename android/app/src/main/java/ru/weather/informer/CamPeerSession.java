@@ -2,6 +2,7 @@ package ru.weather.informer;
 
 import android.util.Log;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 import org.webrtc.IceCandidate;
 import org.webrtc.MediaConstraints;
@@ -9,7 +10,11 @@ import org.webrtc.PeerConnection;
 import org.webrtc.SdpObserver;
 import org.webrtc.SessionDescription;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Одна сессия WebRTC с одним зрителем (фаза 1 камер).
@@ -31,10 +36,27 @@ public class CamPeerSession {
     private volatile boolean answerSent = false;
     private volatile boolean closed = false;
 
+    // ===== Pull-режим (sink == null): сервер сам прислал offer HTTP-запросом =====
+    // Кандидаты не trickle-ятся через WS, а собираются локально до COMPLETE и
+    // уезжают одним HTTP-ответом (non-trickle) вместе с answer.
+    private final boolean audioEnabled;
+    private final List<IceCandidate> localCandidates = new ArrayList<IceCandidate>();
+    private final CountDownLatch answerReady = new CountDownLatch(1);
+    private final CountDownLatch gatherDone = new CountDownLatch(1);
+    private volatile String answerSdpText = "";
+    private volatile String pullError = "";
+
     public CamPeerSession(String viewerId, CameraService service, SignalingSink sink) {
+        this(viewerId, service, sink, true);
+    }
+
+    /** audioEnabled=false: зритель не просил звук - микрофонный трек в answer не попадает. */
+    public CamPeerSession(String viewerId, CameraService service, SignalingSink sink,
+                          boolean audioEnabled) {
         this.viewerId = viewerId;
         this.service = service;
         this.sink = sink;
+        this.audioEnabled = audioEnabled;
     }
 
     public boolean isClosed() {
@@ -65,7 +87,7 @@ public class CamPeerSession {
         if (service.getVideoTrack() != null) {
             pc.addTrack(service.getVideoTrack(), Arrays.asList("weather-cam"));
         }
-        if (service.getAudioTrack() != null) {
+        if (audioEnabled && service.getAudioTrack() != null) {
             pc.addTrack(service.getAudioTrack(), Arrays.asList("weather-cam"));
         }
         pc.setBitrate(150000, 350000, 500000);
@@ -110,6 +132,12 @@ public class CamPeerSession {
     }
 
     private void sendAnswer(SessionDescription sdp) {
+        if (sink == null) {
+            // Pull-режим: ответ заберёт HTTP-поток через waitForAnswerAndIce.
+            answerSdpText = sdp.description;
+            answerReady.countDown();
+            return;
+        }
         JSONObject msg = new JSONObject();
         jput(msg, "type", "answer");
         JSONObject payload = new JSONObject();
@@ -120,6 +148,12 @@ public class CamPeerSession {
     }
 
     private void sendLocalIce(IceCandidate candidate) {
+        if (sink == null) {
+            synchronized (localCandidates) {
+                localCandidates.add(candidate);
+            }
+            return;
+        }
         JSONObject msg = new JSONObject();
         jput(msg, "type", "ice");
         JSONObject payload = new JSONObject();
@@ -136,6 +170,62 @@ public class CamPeerSession {
         } catch (Exception e) {
             throw new IllegalStateException("json put failed: " + key, e);
         }
+    }
+
+    // ===== Pull-режим: API для HTTP-обработчика планшета =====
+
+    /** Ошибка старта сессии на camThread (capture/регистрация) - пустая строка = нет ошибки. */
+    public String pullError() {
+        return pullError;
+    }
+
+    /** Пометить сессию ошибшей: ожидающий HTTP-поток получит отказ сразу, а не по таймауту. */
+    public void failPull(String reason) {
+        pullError = reason == null || reason.isEmpty() ? "session failed" : reason;
+        answerReady.countDown();
+        gatherDone.countDown();
+    }
+
+    /**
+     * Дождаться answer и сбора ICE-кандидатов (host-only, без STUN, обычно < 1 с).
+     * Вызывается из HTTP-потока; мы не держим мониторы CameraService.
+     * false = таймаут или ошибка старта (см. pullError()).
+     */
+    public boolean waitForAnswerAndIce(long timeoutMs) {
+        try {
+            if (!answerReady.await(timeoutMs, TimeUnit.MILLISECONDS)) {
+                return false;
+            }
+            if (!pullError.isEmpty()) {
+                return false;
+            }
+            // Хвост на сбор кандидатов: если gathering завис (нет сетевых интерфейсов),
+            // отдаём answer с тем, что успело собраться.
+            gatherDone.await(Math.max(1000L, timeoutMs / 2), TimeUnit.MILLISECONDS);
+            return !pullError.isEmpty() ? false : !answerSdpText.isEmpty();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+    }
+
+    /** Тело HTTP-ответа планшета: {type:"answer", sdp, candidates:[{candidate,sdpMid,sdpMLineIndex}]}. */
+    public JSONObject buildAnswerJson() {
+        JSONObject o = new JSONObject();
+        jput(o, "type", "answer");
+        jput(o, "sdp", answerSdpText);
+        JSONArray cands = new JSONArray();
+        synchronized (localCandidates) {
+            for (IceCandidate c : localCandidates) {
+                JSONObject c2 = new JSONObject();
+                jput(c2, "candidate", c.sdp);
+                jput(c2, "sdpMid", c.sdpMid);
+                jput(c2, "sdpMLineIndex", c.sdpMLineIndex);
+                cands.put(c2);
+            }
+        }
+        jput(o, "candidates", cands);
+        return o;
     }
 
     // ===== Именованные наблюдатели org.webrtc =====
@@ -169,6 +259,9 @@ public class CamPeerSession {
 
         @Override
         public void onIceGatheringChange(PeerConnection.IceGatheringState state) {
+            if (state == PeerConnection.IceGatheringState.COMPLETE) {
+                session.gatherDone.countDown();
+            }
         }
 
         @Override

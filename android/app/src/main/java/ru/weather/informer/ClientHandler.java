@@ -142,6 +142,18 @@ public class ClientHandler implements Runnable {
             return;
         }
 
+        // 1c. Pull-сигналинг WebRTC (D4): сервер сам приходит на планшет HTTP-запросом,
+        // offer зрителя уходит в теле, ответ - answer+ICE одним телом. Включение
+        // камеры через сеть по-прежнему невозможно: маршрут лишь отдаёт видео.
+        if (path.equals("/api/cam/webrtc/offer") && method.equals("POST")) {
+            handleCamPullOffer(query, body, out);
+            return;
+        }
+        if (path.equals("/api/cam/webrtc/close") && method.equals("POST")) {
+            handleCamPullClose(query, out);
+            return;
+        }
+
         // 2. Страница настроек /settings и мобильный конфигуратор /setup
         if (path.equals("/settings")) {
             serveFile("settings.html", "text/html; charset=utf-8", out);
@@ -743,6 +755,109 @@ public class ClientHandler implements Runnable {
         public void onConfirmed(boolean allowed) {
             Log.i(TAG, "cam toggle confirmed on device screen: " + allowed);
         }
+    }
+
+    // ===== Pull-сигналинг WebRTC (сервер инициирует соединение, D4) =====
+
+    /** Бюджет ответа: ensureCapture (холодный старт ~1-2 с) + answer + сбор host-ICE.
+     *  Меньше таймаута сервера (18 с) - клиент успевает получить отказ внятным кодом. */
+    private static final long PULL_ANSWER_TIMEOUT_MS = 12000;
+    /** SDP с ICE-кандидатами помещается с запасом; большее - мусор, не SDP. */
+    private static final int PULL_MAX_SDP_CHARS = 200000;
+
+    /** Тот же токен-гейт, что у снапшота: cam.token из конфига планшета.
+     *  false = ответ уже отправлен (403 disabled/forbidden). */
+    private static boolean checkCamToken(CameraService cam, String token, OutputStream out) throws IOException {
+        int code = cam.checkPullToken(token);
+        if (code == CameraService.PULL_OK) {
+            return true;
+        }
+        if (code == CameraService.PULL_FORBIDDEN_DISABLED) {
+            sendResponse(out, 403, "Forbidden", "application/json; charset=utf-8",
+                    "{\"error\":\"disabled\"}".getBytes(StandardCharsets.UTF_8));
+        } else {
+            sendResponse(out, 403, "Forbidden", "application/json; charset=utf-8",
+                    "{\"error\":\"forbidden\"}".getBytes(StandardCharsets.UTF_8));
+        }
+        return false;
+    }
+
+    /** POST /api/cam/webrtc/offer?token=&viewer=&audio=: offer зрителя -> answer+ICE планшета. */
+    private void handleCamPullOffer(String query, byte[] body, OutputStream out) throws Exception {
+        Map<String, String> params = parseQuery(query);
+        String token = params.get("token");
+        String viewer = params.get("viewer");
+        boolean wantAudio = "1".equals(params.get("audio"));
+        CameraService cam = CameraService.getInstance();
+        if (cam == null) {
+            sendResponse(out, 403, "Forbidden", "application/json; charset=utf-8",
+                    "{\"error\":\"disabled\"}".getBytes(StandardCharsets.UTF_8));
+            return;
+        }
+        if (!checkCamToken(cam, token, out)) {
+            return;
+        }
+        if (viewer == null || viewer.isEmpty() || viewer.length() > 128) {
+            sendResponse(out, 400, "Bad Request", "application/json; charset=utf-8",
+                    "{\"error\":\"viewer required\"}".getBytes(StandardCharsets.UTF_8));
+            return;
+        }
+        JSONObject offer;
+        try {
+            offer = new JSONObject(new String(body == null ? new byte[0] : body, StandardCharsets.UTF_8));
+        } catch (Exception e) {
+            offer = null;
+        }
+        String sdp = offer == null ? "" : offer.optString("sdp", "");
+        if (offer == null || !"offer".equals(offer.optString("type", ""))
+                || sdp.isEmpty() || sdp.length() > PULL_MAX_SDP_CHARS) {
+            sendResponse(out, 400, "Bad Request", "application/json; charset=utf-8",
+                    "{\"error\":\"offer (type/sdp) required\"}".getBytes(StandardCharsets.UTF_8));
+            return;
+        }
+        JSONObject[] answerOut = new JSONObject[1];
+        int code = cam.startPullSession(viewer, token, offer, wantAudio,
+                PULL_ANSWER_TIMEOUT_MS, answerOut);
+        if (code == CameraService.PULL_OK) {
+            sendResponse(out, 200, "OK", "application/json; charset=utf-8",
+                    answerOut[0].toString().getBytes(StandardCharsets.UTF_8));
+        } else if (code == CameraService.PULL_FORBIDDEN_DISABLED) {
+            sendResponse(out, 403, "Forbidden", "application/json; charset=utf-8",
+                    "{\"error\":\"disabled\"}".getBytes(StandardCharsets.UTF_8));
+        } else if (code == CameraService.PULL_FORBIDDEN_TOKEN) {
+            sendResponse(out, 403, "Forbidden", "application/json; charset=utf-8",
+                    "{\"error\":\"forbidden\"}".getBytes(StandardCharsets.UTF_8));
+        } else if (code == CameraService.PULL_TIMEOUT) {
+            sendResponse(out, 504, "Gateway Timeout", "application/json; charset=utf-8",
+                    "{\"error\":\"answer timeout\"}".getBytes(StandardCharsets.UTF_8));
+        } else {
+            sendResponse(out, 500, "Internal Server Error", "application/json; charset=utf-8",
+                    "{\"error\":\"session failed\"}".getBytes(StandardCharsets.UTF_8));
+        }
+    }
+
+    /** POST /api/cam/webrtc/close?token=&viewer=: сервер сообщает, что зритель ушёл. */
+    private void handleCamPullClose(String query, OutputStream out) throws Exception {
+        Map<String, String> params = parseQuery(query);
+        String token = params.get("token");
+        String viewer = params.get("viewer");
+        CameraService cam = CameraService.getInstance();
+        if (cam == null) {
+            sendResponse(out, 403, "Forbidden", "application/json; charset=utf-8",
+                    "{\"error\":\"disabled\"}".getBytes(StandardCharsets.UTF_8));
+            return;
+        }
+        if (!checkCamToken(cam, token, out)) {
+            return;
+        }
+        if (viewer == null || viewer.isEmpty()) {
+            sendResponse(out, 400, "Bad Request", "application/json; charset=utf-8",
+                    "{\"error\":\"viewer required\"}".getBytes(StandardCharsets.UTF_8));
+            return;
+        }
+        cam.dropSession(viewer, "server close");
+        sendResponse(out, 200, "OK", "application/json; charset=utf-8",
+                "{\"status\":\"closed\"}".getBytes(StandardCharsets.UTF_8));
     }
 
     private static byte[] readFileBytes(File file) {

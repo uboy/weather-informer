@@ -22,6 +22,7 @@ echo "=== python fallback hierarchy ==="; python3 tests/test_fallback.py 2>&1 | 
 echo "=== python server hardening ==="; python3 tests/test_server_hardening.py 2>&1 | tail -1
 echo "=== python server endpoints ==="; python3 tests/test_server_endpoints.py 2>&1 | tail -1
 echo "=== python cam ws ==="; python3 tests/test_cam_ws.py 2>&1 | tail -1
+echo "=== python cam pull ==="; python3 tests/test_cam_pull.py 2>&1 | tail -1
 echo "=== python metar and discovery ==="; python3 tests/test_metar_and_discovery.py 2>&1 | tail -1
 echo "=== python pressure hold ==="; python3 tests/test_pressure_hold.py 2>&1 | tail -1
 echo "=== ВСЁ ЗЕЛЁНОЕ ==="

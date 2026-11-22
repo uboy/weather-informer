@@ -63,6 +63,12 @@ public class CameraService {
     public static final int SNAP_BUSY = 3;
     public static final int SNAP_ERROR = 4;
 
+    public static final int PULL_OK = 0;
+    public static final int PULL_FORBIDDEN_DISABLED = 1;
+    public static final int PULL_TIMEOUT = 2;
+    public static final int PULL_ERROR = 3;
+    public static final int PULL_FORBIDDEN_TOKEN = 4;
+
     private static volatile CameraService instance;
     private static final Object INSTANCE_LOCK = new Object();
 
@@ -465,6 +471,49 @@ public class CameraService {
     void notifySessionFailed(String viewerId, String reason) {
         Log.w(TAG, "session " + viewerId + " failed: " + reason);
         dropSession(viewerId, reason);
+    }
+
+    // ===== Pull-сигналинг (сервер сам подключается к планшету, D4) =====
+
+    /** Токен-гейт pull-маршрутов: тот же cam.token, что у снапшота.
+     *  PULL_OK / PULL_FORBIDDEN_DISABLED / PULL_FORBIDDEN_TOKEN. */
+    public int checkPullToken(String token) {
+        if (!isEnabled()) {
+            return PULL_FORBIDDEN_DISABLED;
+        }
+        JSONObject cam = camSection();
+        String expected = cam == null ? "" : cam.optString("token", "");
+        if (expected.isEmpty() || token == null || !expected.equals(token)) {
+            return PULL_FORBIDDEN_TOKEN;
+        }
+        return PULL_OK;
+    }
+
+    /**
+     * Синхронный pull-offer: сервер POST-ит offer зрителя, планшет отвечает
+     * answer+ICE одним HTTP-ответом (non-trickle). Вызывается из потока
+     * HTTP-обработчика; работа с камерой (ensureCapture/регистрация сессии)
+     * идёт на camThread (CamPullOfferTask), ожидание - на latch сессии, без
+     * удержания мониторов. Offer-путь совпадает с WS-сигналингом: та же
+     * карта sessions, тот же арбитр состояния и stopCapture при уходе зрителей.
+     */
+    public int startPullSession(String viewerId, String token, JSONObject offerPayload,
+                                boolean wantAudio, long timeoutMs, JSONObject[] answerOut) {
+        int gate = checkPullToken(token);
+        if (gate != PULL_OK) {
+            return gate;
+        }
+        CamPeerSession session = new CamPeerSession(viewerId, this, null, wantAudio);
+        camHandler.post(new CamPullOfferTask(this, viewerId, offerPayload, session));
+        if (!session.waitForAnswerAndIce(timeoutMs)) {
+            String err = session.pullError();
+            dropSession(viewerId, err.isEmpty() ? "pull answer timeout" : "pull start failed: " + err);
+            return err.isEmpty() ? PULL_TIMEOUT : PULL_ERROR;
+        }
+        answerOut[0] = session.buildAnswerJson();
+        Log.i(TAG, "pull session ready for " + viewerId
+                + " audio=" + wantAudio + " viewers=" + sessionsCount());
+        return PULL_OK;
     }
 
     private void closeAllSessions(String reason) {
@@ -1228,9 +1277,44 @@ public class CameraService {
         }
     }
 
-    /** Диспетчеризация сообщения сигналинга на camThread. */
-    private static final class CamDispatchTask implements Runnable {
+    /** Регистрация pull-сессии и handleOffer на camThread (аналог offer-ветки dispatchSignaling). */
+    private static final class CamPullOfferTask implements Runnable {
         private final CameraService service;
+        private final String viewerId;
+        private final JSONObject offerPayload;
+        private final CamPeerSession session;
+
+        CamPullOfferTask(CameraService service, String viewerId,
+                         JSONObject offerPayload, CamPeerSession session) {
+            this.service = service;
+            this.viewerId = viewerId;
+            this.offerPayload = offerPayload;
+            this.session = session;
+        }
+
+        @Override
+        public void run() {
+            try {
+                service.ensureCapture();
+            } catch (Throwable t) {
+                service.setLastError("capture start failed: " + t.getMessage());
+                session.failPull("capture start failed: " + t.getMessage());
+                return;
+            }
+            synchronized (service.sessionsLock) {
+                CamPeerSession prev = service.sessions.get(viewerId);
+                if (prev != null) {
+                    prev.close("replaced by new offer");
+                }
+                service.sessions.put(viewerId, session);
+            }
+            service.setState(STATE_STREAMING, "");
+            session.handleOffer(offerPayload);
+        }
+    }
+
+    /** Диспетчеризация сообщения сигналинга на camThread. */
+    private static final class CamDispatchTask implements Runnable {        private final CameraService service;
         private final String type;
         private final JSONObject msg;
 

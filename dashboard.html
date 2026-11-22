@@ -53,9 +53,9 @@ button.del:hover { background: #6d2d39; }
   <div class="head"><span class="name">Комнаты (админ)</span></div>
   <div class="meta">Добавить комнату: имя (a-z0-9_-) и адрес планшета; tablet_token сгенерируется
     и будет показан один раз. На планшете: в настройках планшета секция «Камера» - включить тапом
-    на экране; в конфиг планшета вписать cam-секцию (room, tablet_token, ws_url транзитного сервера).
-    Полноценное видео со всех комнат появится с pull-моделью сигналинга (сервер ходит к планшетам сам);
-    сейчас трансляция идёт только там, где есть транзитный путь сигналинга.</div>
+    на экране; в конфиг планшета вписать cam-секцию (room, tablet_token; ws_url не нужен).
+    Видео: сервер сам подключается к планшету (pull-сигналинг) - плавное живое видео
+    со звуком на всех комнатах с новой сборкой планшета; старая сборка показывает снапшоты.</div>
   <div id="admin_rooms" style="display:flex; flex-wrap:wrap; gap:8px; margin-top:8px;"></div>
   <div class="row" style="margin-top:10px; flex-wrap:wrap;">
     <input id="adm_room" placeholder="комната, напр. kabinet" style="background:#0b1218;border:1px solid #243447;color:#dfe7ee;border-radius:8px;padding:8px;font:inherit;min-width:200px;">
@@ -67,7 +67,10 @@ button.del:hover { background: #6d2d39; }
 <div id="player">
   <div class="head" style="width:92vw; display:flex; justify-content:space-between; align-items:center;">
     <div id="ptitle" style="font-weight:600;"></div>
-    <button class="stop" id="pclose">Закрыть</button>
+    <div style="display:flex; gap:8px;">
+      <button id="psound" title="звук с планшета (микрофон)">🔊 звук</button>
+      <button class="stop" id="pclose">Закрыть</button>
+    </div>
   </div>
   <video id="pvideo" class="hidden" autoplay playsinline muted></video>
   <img id="pmjpeg" class="mjpeg hidden" alt="">
@@ -255,13 +258,27 @@ function pollLoop() {
   api("/api/cam/summary", updateSummary);
 }
 
-// ===== Зритель: WebRTC с фолбэком на MJPEG =====
+// ===== Зритель: pull-WebRTC (сервер сам подключается к планшету, D4) =====
+// Порядок попыток: 1) pull-сигналинг POST /api/cam/webrtc/offer (новая сборка
+// планшета) -> 2) транзитный WS-путь издателя (старые сборки с релеем) ->
+// 3) MJPEG-снапшоты (слайдшоу, запасной путь).
 
 function closeViewer() {
   if (!viewer) return;
   viewer.closed = true;
+  // pull-зрителя снимаем на планшете явно (PC FAILED/CLOSED догонит сам, но медленнее)
+  if (viewer.pullViewerId) {
+    try {
+      fetch("/api/cam/webrtc/close?room=" + encodeURIComponent(viewer.room), {
+        method: "POST",
+        headers: { "Content-Type": "application/json; charset=utf-8" },
+        body: JSON.stringify({viewer: viewer.pullViewerId})
+      }).catch(function () {});
+    } catch (e) {}
+  }
   try { if (viewer.ws) viewer.ws.close(); } catch (e) {}
   try { if (viewer.pc) viewer.pc.close(); } catch (e) {}
+  if (viewer.failTimer) { clearTimeout(viewer.failTimer); viewer.failTimer = null; }
   if (viewer.mjpegTimer) clearInterval(viewer.mjpegTimer);
   viewer = null;
   $("player").classList.remove("open");
@@ -273,21 +290,163 @@ function pmsg(text) { $("pstatus").textContent = text; }
 
 function sendWs(ws, obj) { ws.send(JSON.stringify(obj)); }
 
+function updateSoundBtn() {
+  var v = $("pvideo");
+  if (viewer) v.muted = !viewer.sound;
+  $("psound").textContent = viewer && viewer.sound ? "🔊 звук: вкл" : "🔇 звук: выкл";
+}
+
+$("psound").addEventListener("click", function () {
+  if (!viewer) return;
+  viewer.sound = !viewer.sound;
+  try { localStorage.setItem("camsound", viewer.sound ? "1" : "0"); } catch (e) {}
+  updateSoundBtn();
+});
+
 function openViewer(room) {
   if (viewer) closeViewer();
+  var sound = true;
+  try { sound = localStorage.getItem("camsound") !== "0"; } catch (e) {}
   viewer = {room: room, ws: null, pc: null, mjpegTimer: null, mediaSeen: 0, closed: false,
-            offered: false};
+            offered: false, pull: true, pullViewerId: "", sound: sound, failTimer: null};
   $("ptitle").textContent = "Комната: " + room;
+  updateSoundBtn();
   $("player").classList.add("open");
   ["pvideo", "pmjpeg"].forEach(function (id) {
     var el = document.getElementById(id);
     if (el) { el.style.transform = orientTransform(room); }
   });
-  pmsg("подключение к сигналингу...");
+  pmsg("подключение: сервер подключается к планшету сам...");
+  startPullPeer(room);
+}
 
+// Дождаться сбора собственных ICE-кандидатов (host-only, быстро) или таймаута.
+function waitForIce(pc, timeoutMs) {
+  return new Promise(function (resolve) {
+    if (pc.iceGatheringState === "complete") { resolve(); return; }
+    var done = false;
+    var finish = function () {
+      if (done) return;
+      done = true;
+      pc.removeEventListener("icegatheringstatechange", onChange);
+      resolve();
+    };
+    var onChange = function () {
+      if (pc.iceGatheringState === "complete") finish();
+    };
+    pc.addEventListener("icegatheringstatechange", onChange);
+    setTimeout(finish, timeoutMs);
+  });
+}
+
+function clearFailTimer() {
+  if (viewer && viewer.failTimer) {
+    clearTimeout(viewer.failTimer);
+    viewer.failTimer = null;
+  }
+}
+
+// Медиа-обработчики, общие для pull- и WS-зрителей.
+function attachMedia(pc) {
+  pc.ontrack = function (ev) {
+    if (!viewer) return;
+    viewer.mediaSeen = Date.now();
+    clearFailTimer();
+    var v = $("pvideo");
+    if (ev.streams && ev.streams[0]) {
+      v.srcObject = ev.streams[0];
+    } else {
+      v.srcObject = new MediaStream([ev.track]);
+    }
+    v.classList.remove("hidden");
+    $("pmjpeg").classList.add("hidden");
+    updateSoundBtn();
+    v.play().catch(function () {});
+    pmsg("видео пошло");
+  };
+  pc.oniceconnectionstatechange = function () {
+    if (!viewer || viewer.pc !== pc) return;
+    if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
+      viewer.mediaSeen = Date.now();
+      clearFailTimer();
+      pmsg("видео: соединение установлено");
+    } else if (pc.iceConnectionState === "failed" && viewer.mediaSeen) {
+      pmsg("соединение потеряно - переключаюсь на снапшоты (MJPEG)");
+      startMjpeg(viewer.room);
+    }
+  };
+}
+
+function startPullPeer(room) {
+  if (!viewer || viewer.closed) return;
+  var pc = new RTCPeerConnection(null); // LAN, без STUN
+  viewer.pc = pc;
+  viewer.offered = true;
+  attachMedia(pc);
+  pc.addTransceiver("video", {direction: "recvonly"});
+  pc.addTransceiver("audio", {direction: "recvonly"});
+  viewer.failTimer = setTimeout(function () {
+    if (viewer && !viewer.closed && !viewer.mediaSeen) {
+      pmsg("видео не пошло за 15 с - переключаюсь на снапшоты (MJPEG)");
+      startMjpeg(room);
+    }
+  }, 15000);
+  pc.createOffer()
+    .then(function (offer) { return pc.setLocalDescription(offer); })
+    .then(function () { return waitForIce(pc, 3000); })
+    .then(function () {
+      if (!viewer || viewer.closed) return null;
+      return fetch("/api/cam/webrtc/offer?room=" + encodeURIComponent(room), {
+        method: "POST",
+        headers: { "Content-Type": "application/json; charset=utf-8" },
+        body: JSON.stringify({type: "offer", sdp: pc.localDescription.sdp, audio: !!viewer.sound})
+      }).then(function (r) {
+        if (r.status === 401) { pmsg("требуется вход (HTTP Basic)"); return null; }
+        return r.json().then(function (j) { return {status: r.status, j: j}; })
+          .catch(function () { return {status: r.status, j: null}; });
+      });
+    })
+    .then(function (res) {
+      if (!viewer || viewer.closed || !res) return;
+      if (res.status !== 200 || !res.j || res.j.type !== "answer") {
+        // 404 = старый APK без pull-маршрута; 502 = планшет недоступен.
+        // Откат на транзитный путь (издатель сам подключается к серверу).
+        pmsg("pull-путь недоступен (HTTP " + res.status + ") - пробую транзитный...");
+        startWsFallback(room);
+        return;
+      }
+      viewer.pullViewerId = res.j.viewer || "";
+      pc.setRemoteDescription({type: "answer", sdp: res.j.sdp}).then(function () {
+        var chain = Promise.resolve();
+        (res.j.candidates || []).forEach(function (c) {
+          chain = chain.then(function () {
+            return pc.addIceCandidate(c).catch(function () {});
+          });
+        });
+        pmsg("ответ планшета получен, устанавливаю ICE...");
+      }).catch(function (e) { pmsg("answer: " + e); });
+    })
+    .catch(function (e) {
+      if (viewer && !viewer.closed) {
+        pmsg("ошибка подключения (" + e + ") - переключаюсь на снапшоты");
+        startMjpeg(room);
+      }
+    });
+}
+
+function startWsFallback(room) {
+  if (!viewer || viewer.closed) return;
+  viewer.pull = false;
+  var go = function (tok) { startWs(room, tok); };
+  if (TOKEN) { go(TOKEN); return; }
   api("/api/cam/viewer-token", function (tok) {
-    if (!tok || !tok.viewer_token) { pmsg("не удалось получить токен зрителя (вход?)"); return; }
-    startWs(room, tok.viewer_token);
+    if (!tok || !tok.viewer_token) {
+      pmsg("нет токена зрителя (вход?) - снапшоты (MJPEG)");
+      startMjpeg(room);
+      return;
+    }
+    TOKEN = tok.viewer_token;
+    go(TOKEN);
   });
 }
 
@@ -302,6 +461,7 @@ function startWs(room, token) {
       startMjpeg(room);
     }
   }, 15000);
+  viewer.failTimer = failTimer;
   ws.onopen = function () {
     // hello обязан уйти ДО offer: сервер маршрутизирует только после hello_ok
     sendWs(ws, {type: "hello", role: "viewer", room: room, token: token});
@@ -361,30 +521,14 @@ function startWs(room, token) {
 }
 
 function startPeer(room, token, failTimer) {
+  // pull-PC мог остаться от первой попытки - закрываем перед WS-зрителем
+  try { if (viewer.pc) viewer.pc.close(); } catch (e) {}
   var pc = new RTCPeerConnection(null); // LAN, без STUN
   viewer.pc = pc;
   viewer.offered = true;
+  attachMedia(pc);
   pc.addTransceiver("video", {direction: "recvonly"});
   pc.addTransceiver("audio", {direction: "recvonly"});
-  pc.ontrack = function (ev) {
-    var v = $("pvideo");
-    if (ev.streams && ev.streams[0]) {
-      v.srcObject = ev.streams[0];
-    } else {
-      var st = new MediaStream([ev.track]);
-      v.srcObject = st;
-    }
-    v.classList.remove("hidden");
-    v.play().catch(function () {});
-  };
-  pc.oniceconnectionstatechange = function () {
-    if (!viewer) return;
-    if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
-      viewer.mediaSeen = Date.now();
-      clearTimeout(failTimer);
-      pmsg("видео: соединение установлено (" + pc.iceConnectionState + ")");
-    }
-  };
   pc.onicecandidate = function (ev) {
     if (viewer && viewer.ws && viewer.ws.readyState === 1 && ev.candidate) {
       sendWs(viewer.ws, {type: "ice", payload: ev.candidate.toJSON()});

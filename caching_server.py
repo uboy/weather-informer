@@ -29,6 +29,7 @@ import resource
 import hmac
 import tempfile
 import ipaddress
+import uuid
 import html
 from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -3448,6 +3449,122 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
             return
         self._send_cam_raw(status, ctype, data)
 
+    # ===== Pull-сигналинг WebRTC (D4: сервер сам подключается к планшету) =====
+    # Зритель шлёт offer дашбордом, сервер релеит его POST-ом на планшет и
+    # возвращает answer+ICE одним ответом (non-trickle). Медиа идёт напрямую
+    # viewer<->tablet (viewer-инициированный ICE к host-кандидату планшета);
+    # tablet_token не покидает сервер. Старые APK без маршрута дают 404 -
+    # дашборд по нему откатывается на транзитный WS-путь.
+
+    def serve_cam_webrtc_offer(self):
+        """POST /api/cam/webrtc/offer?room=X: relay offer -> планшет -> answer."""
+        if not check_cam_basic_auth(self):
+            send_cam_401(self)
+            return
+        qs = parse_qs(urlparse(self.path).query)
+        room = (qs.get("room", [""])[0] or "").strip()
+        rc = cam_room_cfg(room)
+        if rc is None:
+            self._send_cam_json(400, {"error": "unknown room"})
+            return
+        tablet = (rc.get("tablet") or rc.get("host") or "").strip()
+        token = rc.get("tablet_token") or ""
+        if not tablet or not token:
+            self._send_cam_json(502, {"error": "room not configured"})
+            return
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
+        # SDP с кандидатами помещается с запасом; больше - мусор, не offer
+        if length <= 0 or length > 128 * 1024:
+            self._send_cam_json(400, {"error": "bad body"})
+            return
+        try:
+            offer = json.loads(self.rfile.read(length).decode("utf-8"))
+        except Exception:
+            self._send_cam_json(400, {"error": "bad json"})
+            return
+        if (not isinstance(offer, dict) or offer.get("type") != "offer"
+                or not isinstance(offer.get("sdp"), str) or not offer.get("sdp")):
+            self._send_cam_json(400, {"error": "offer (type/sdp) required"})
+            return
+        viewer = "pull-" + uuid.uuid4().hex[:12]
+        audio = "1" if offer.get("audio") else "0"
+        url = "http://%s:%s/api/cam/webrtc/offer?token=%s&viewer=%s&audio=%s" % (
+            tablet, rc.get("port", 8080),
+            urllib.parse.quote(token, safe=""),
+            urllib.parse.quote(viewer, safe=""), audio)
+        body = json.dumps({"type": "offer", "sdp": offer["sdp"]}).encode("utf-8")
+        try:
+            req = urllib.request.Request(
+                url, data=body, method="POST",
+                headers={"User-Agent": "weather-informer-cam-proxy",
+                         "Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=18) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            # 403 disabled/forbidden, 404 старого APK, 504 таймаут - как есть
+            try:
+                payload = e.read() or b""
+                ctype = e.headers.get("Content-Type", "application/json") if e.headers else "application/json"
+            except Exception:
+                payload, ctype = b"", "application/json"
+            self._send_cam_raw(e.code, ctype, payload)
+            return
+        except (urllib.error.URLError, OSError, socket.timeout) as e:
+            self._send_cam_json(502, {"error": "tablet unreachable",
+                                      "detail": sanitize_secrets(str(e))})
+            return
+        if not isinstance(data, dict) or data.get("type") != "answer":
+            self._send_cam_json(502, {"error": "tablet returned non-answer"})
+            return
+        data["viewer"] = viewer
+        self._send_cam_json(200, data)
+
+    def serve_cam_webrtc_close(self):
+        """POST /api/cam/webrtc/close?room=X {viewer}: зритель ушёл - снести сессию."""
+        if not check_cam_basic_auth(self):
+            send_cam_401(self)
+            return
+        qs = parse_qs(urlparse(self.path).query)
+        room = (qs.get("room", [""])[0] or "").strip()
+        rc = cam_room_cfg(room)
+        if rc is None:
+            self._send_cam_json(400, {"error": "unknown room"})
+            return
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
+        viewer = ""
+        if 0 < length <= 4096:
+            try:
+                body = json.loads(self.rfile.read(length).decode("utf-8"))
+                if isinstance(body, dict):
+                    viewer = str(body.get("viewer") or "")[:128]
+            except Exception:
+                viewer = ""
+        tablet = (rc.get("tablet") or rc.get("host") or "").strip()
+        token = rc.get("tablet_token") or ""
+        if not tablet or not token or not viewer:
+            # некому/некуда слать - считаем закрытым (best-effort)
+            self._send_cam_json(200, {"status": "closed"})
+            return
+        url = "http://%s:%s/api/cam/webrtc/close?token=%s&viewer=%s" % (
+            tablet, rc.get("port", 8080),
+            urllib.parse.quote(token, safe=""),
+            urllib.parse.quote(viewer, safe=""))
+        try:
+            req = urllib.request.Request(
+                url, data=b"{}", method="POST",
+                headers={"User-Agent": "weather-informer-cam-proxy",
+                         "Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=5).read()
+        except Exception:
+            pass  # best-effort: PC FAILED/CLOSED на планшете зачистит сессию сам
+        self._send_cam_json(200, {"status": "closed"})
+
     def _send_cam_raw(self, status, ctype, data):
         try:
             self.send_response(status)
@@ -4185,6 +4302,12 @@ code {{ color: #81D4FA; }}
 
         if path == "/api/cam/rooms":
             self.serve_cam_rooms_admin()
+            return
+        if path == "/api/cam/webrtc/offer":
+            self.serve_cam_webrtc_offer()
+            return
+        if path == "/api/cam/webrtc/close":
+            self.serve_cam_webrtc_close()
             return
 
         if path in ("/api/settings", "/settings", "/api/config"):
