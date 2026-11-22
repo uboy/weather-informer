@@ -183,6 +183,38 @@ class TestCamWs(unittest.TestCase):
         with open(cls.config_path, "w", encoding="utf-8") as f:
             json.dump(cfg, f, ensure_ascii=False)
 
+
+    # ---- tolerant handshake (\r\r\n legacy build) ----
+
+    def test_cr_cr_lf_handshake_publisher_hello_ok(self):
+        """Byte-dump 22.11.2026 (.13): handshake lines end \r\r\n; server must
+        still 101 and answer hello_ok to a valid publisher hello."""
+        sock = ws_connect_cr_cr_lf(self.port)
+        try:
+            ws_hello(sock, {"role": "publisher", "room": ROOM, "token": TABLET_TOKEN})
+            resp = ws_recv_json(sock)
+            self.assertEqual(resp.get("type"), "hello_ok",
+                             "publisher with CRLF-CR handshake must get hello_ok, got %r" % resp)
+            self.assertEqual(resp.get("room"), ROOM)
+        finally:
+            sock.close()
+
+    def test_cr_cr_lf_handshake_viewer_gets_cam_state(self):
+        """Viewer over CRLF-CR handshake reaches hello + cam_state snapshot path."""
+        pub = ws_connect_cr_cr_lf(self.port)
+        view = ws_connect_cr_cr_lf(self.port)
+        try:
+            ws_hello(pub, {"role": "publisher", "room": ROOM, "token": TABLET_TOKEN})
+            self.assertEqual(ws_recv_json(pub).get("type"), "hello_ok")
+            ws_hello(view, {"role": "viewer", "room": ROOM, "token": VIEWER_TOKEN})
+            self.assertEqual(ws_recv_json(view).get("type"), "hello_ok")
+            snap = ws_recv_json(view)
+            self.assertEqual(snap.get("type"), "cam_state",
+                             "viewer must get cam_state snapshot, got %r" % snap)
+        finally:
+            pub.close()
+            view.close()
+
     # ---- framing ----
 
     def test_unmasked_client_frame_closed_1002(self):
@@ -478,6 +510,111 @@ class TestCamWs(unittest.TestCase):
                          "authorized dashboard must receive the viewer token")
         self.assertIn(ROOM, data.get("rooms", []))
         conn.close()
+
+
+
+
+# ---- tolerant handshake: legacy kiosk builds send lines with \r\r\n ----
+
+
+def ws_connect_cr_cr_lf(port, path="/ws/cam"):
+    """Handshake exactly like the Digma .13 byte-dump (22.11.2026): every line,
+    including the final blank one, terminated with \r\r\n instead of \r\n.
+    Server must still answer 101 (lenient rfile reader)."""
+    sock = socket.create_connection(("127.0.0.1", port), timeout=5)
+    key = base64.b64encode(os.urandom(16)).decode("ascii")
+    req = ("GET %s HTTP/1.1\r\r\nHost: 127.0.0.1:%d\r\r\n"
+           "Upgrade: websocket\r\r\nConnection: Upgrade\r\r\n"
+           "Sec-WebSocket-Key: %s\r\r\nSec-WebSocket-Version: 13\r\r\n\r\r\n"
+           % (path, port, key))
+    sock.sendall(req.encode("ascii"))
+    resp = b""
+    while b"\r\n\r\n" not in resp:
+        chunk = sock.recv(4096)
+        if not chunk:
+            raise ConnectionError("handshake eof")
+        resp += chunk
+    head = resp.split(b"\r\n\r\n", 1)[0]
+    if b" 101 " not in head.split(b"\r\n")[0]:
+        raise AssertionError("handshake not 101: %r" % head.split(b"\r\n")[0])
+    sock.settimeout(5)
+    return sock
+
+
+class _ChunkyRaw:
+    """Fake BufferedReader: yields buffered data in fixed-size pieces."""
+
+    def __init__(self, data, piece=3):
+        self._data = data
+        self._piece = piece
+        self.reads = 0
+        self.closed = False
+
+    def read1(self, n):
+        self.reads += 1
+        k = min(n, self._piece)
+        out, self._data = self._data[:k], self._data[k:]
+        return out
+
+    def read(self, n=-1):
+        self.reads += 1
+        if n is None or n < 0:
+            out, self._data = self._data, b""
+            return out
+        out, self._data = self._data[:n], self._data[n:]
+        return out
+
+    def close(self):
+        self.closed = True
+
+
+class TestLenientCRLFLineReader(unittest.TestCase):
+    """_LenientCRLFLineReader: \r\r\n -> \r\n, no byte loss across reads."""
+
+    def test_wellformed_crlf_passthrough(self):
+        rd = caching_server._LenientCRLFLineReader(
+            _ChunkyRaw(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n"))
+        self.assertEqual(rd.readline(), b"GET / HTTP/1.1\r\n")
+        self.assertEqual(rd.readline(), b"Host: x\r\n")
+        self.assertEqual(rd.readline(), b"\r\n")
+        self.assertEqual(rd.readline(), b"")
+
+    def test_cr_cr_lf_normalized_byte_per_byte(self):
+        rd = caching_server._LenientCRLFLineReader(_ChunkyRaw(
+            b"GET /ws/cam HTTP/1.1\r\r\nHost: 127.0.0.1:8099\r\r\n\r\r\n",
+            piece=1))
+        self.assertEqual(rd.readline(), b"GET /ws/cam HTTP/1.1\r\n")
+        self.assertEqual(rd.readline(), b"Host: 127.0.0.1:8099\r\n")
+        self.assertEqual(rd.readline(), b"\r\n")
+        self.assertEqual(rd.readline(), b"")
+
+    def test_limit_respected(self):
+        rd = caching_server._LenientCRLFLineReader(_ChunkyRaw(b"abcdef\r\r\ngh\r\n"))
+        self.assertEqual(rd.readline(4), b"abcd")
+        self.assertEqual(rd.readline(), b"ef\r\n")
+        self.assertEqual(rd.readline(), b"gh\r\n")
+
+    def test_read_passthrough_no_byte_loss(self):
+        data = b"GET / HTTP/1.1\r\r\n\r\r\n" + bytes(range(256))
+        rd = caching_server._LenientCRLFLineReader(_ChunkyRaw(data, piece=5))
+        self.assertEqual(rd.readline(), b"GET / HTTP/1.1\r\n")
+        self.assertEqual(rd.readline(), b"\r\n")
+        self.assertEqual(rd.read(10), bytes(range(10)))
+        # read1 returns at most ONE underlying chunk (piece=5 here)
+        self.assertEqual(rd.read1(6), bytes(range(10, 15)))
+        self.assertEqual(rd.read(300), bytes(range(15, 256)))
+        self.assertEqual(rd.read(1), b"")
+
+    def test_read_with_leftover_buffer(self):
+        rd = caching_server._LenientCRLFLineReader(_ChunkyRaw(b"line\r\r\nXY"))
+        self.assertEqual(rd.readline(), b"line\r\n")
+        self.assertEqual(rd.read(1), b"X")
+        self.assertEqual(rd.read(1), b"Y")
+
+    def test_close_delegates(self):
+        raw = _ChunkyRaw(b"x\r\n")
+        caching_server._LenientCRLFLineReader(raw).close()
+        self.assertTrue(raw.closed)
 
 
 if __name__ == "__main__":

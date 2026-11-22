@@ -2616,6 +2616,63 @@ def ws_read_exact(rfile, n):
     return bytes(buf)
 
 
+class _LenientCRLFLineReader:
+    """rfile-обёртка: в readline() нормализует \r\r\n -> \r\n.
+
+    Билд киоска Digma spalnya-okno (192.168.4.13, снято байт-дампом 22.11.2026)
+    пишет строки WS-handshake с терминатором "\r\r\n": http.client.parse_headers
+    ищет пустую строку b"\r\n", не находит её и блокируется до таймаута чтения -
+    WS-издатель с такого планшета не подключается вовсе. Текущий исходник
+    CamSignalingClient пишет корректный \r\n (CamSignalingClient.java:130);
+    обёртка прозрачна и для него. read(n)/read1(n) - кадры WS после handshake -
+    идут насквозь без изменений (единый поток чтения, байты не теряются).
+    """
+
+    def __init__(self, raw):
+        self._raw = raw
+        self._buf = b""
+
+    def readline(self, limit=-1):
+        while b"\n" not in self._buf:
+            chunk = self._raw.read1(65536)
+            if not chunk:
+                break
+            self._buf += chunk
+        if not self._buf:
+            return b""
+        pos = self._buf.find(b"\n")
+        if pos < 0:
+            line, self._buf = self._buf, b""
+        else:
+            line, self._buf = self._buf[:pos + 1], self._buf[pos + 1:]
+        line = line.replace(b"\r\r\n", b"\r\n")
+        if limit is not None and 0 < limit < len(line):
+            self._buf = line[limit:] + self._buf
+            line = line[:limit]
+        return line
+
+    def read(self, n=-1):
+        if self._buf:
+            if n is None or n < 0:
+                data, self._buf = self._buf, b""
+                return data
+            if len(self._buf) >= n:
+                data, self._buf = self._buf[:n], self._buf[n:]
+                return data
+            data, self._buf = self._buf, b""
+            return data + (self._raw.read(n - len(data)) or b"")
+        return self._raw.read(n)
+
+    def read1(self, n):
+        if self._buf:
+            data, self._buf = self._buf[:n], self._buf[n:]
+            return data
+        return self._raw.read1(n)
+
+    def close(self):
+        self._raw.close()
+
+
 def ws_read_frame(rfile):
     """Клиент -> сервер: кадр ОБЯЗАН быть маскированным (RFC6455 5.3).
 
@@ -3089,6 +3146,12 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
     # Жесткий таймаут сокета 10 с (защита от подвисания при плохом Wi-Fi на планшетах)
     timeout = 10.0
     MAX_BODY_SIZE = 64 * 1024  # Максимальный размер входящего POST (64 КБ)
+
+    def setup(self):
+        super().setup()
+        # Терпимость к "\r\r\n" в строках WS-handshake (старые билды киоска,
+        # см. _LenientCRLFLineReader); для корректных клиентов поведение то же.
+        self.rfile = _LenientCRLFLineReader(self.rfile)
 
     @staticmethod
     def get_path_category(path, method="GET"):
