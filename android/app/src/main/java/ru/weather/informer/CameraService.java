@@ -8,8 +8,14 @@ import android.graphics.ImageFormat;
 import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.graphics.SurfaceTexture;
+import android.graphics.SurfaceTexture;
 import android.graphics.YuvImage;
 import android.hardware.Camera;
+import android.opengl.EGL14;
+import android.opengl.EGLConfig;
+import android.opengl.EGLContext;
+import android.opengl.EGLDisplay;
+import android.opengl.GLES20;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
@@ -33,6 +39,7 @@ import java.io.ByteArrayOutputStream;
 import java.net.URI;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -161,6 +168,7 @@ public class CameraService {
         // Какой device index будет использован (-1 = авто front-first);
         // верификация выбора камеры снаружи, без logcat.
         jput(o, "camera_id", camDeviceOverride());
+        jput(o, "exp_profile", camExpProfile());
         jput(o, "state", state);
         jput(o, "last_error", lastError == null ? "" : lastError);
         jput(o, "viewers", sessionsCount());
@@ -216,6 +224,18 @@ public class CameraService {
         }
         int id = cam.optInt("camera_id", -1);
         return id >= 0 ? id : -1;
+    }
+
+    /** Профиль экспозиции (cam.exp_profile, 0 = поведение по умолчанию).
+     * Диагностика чёрных дневных кадров T74HMi (.5): живой кадр вечером при
+     * свете, чёрный днём на обоих индексах и обоих бинарях - подозрение
+     * AE/ISP при высокой освещённости. Переключается POST /api/settings. */
+    private int camExpProfile() {
+        JSONObject cam = camSection();
+        if (cam == null) {
+            return 0;
+        }
+        return cam.optInt("exp_profile", 0);
     }
 
     // ===== Сигналинг =====
@@ -680,12 +700,46 @@ public class CameraService {
         }
         Camera.getCameraInfo(cameraId, info);
         Camera camera = Camera.open(cameraId);
+        int expProfile = camExpProfile();
         try {
             SurfaceTexture dummy = new SurfaceTexture(0);
-            try {
-                camera.setPreviewTexture(dummy);
-            } catch (Exception e) {
-                Log.w(TAG, "setPreviewTexture: " + e.getMessage());
+            SurfaceTexture realTex = null;
+            if (expProfile >= 13) {
+                // реальный GL-потребитель (профили 13/14): SurfaceTexture(0) - имя
+                // текстуры 0 невалидно без GL-контекста; гипотеза: MTK гонит preview
+                // без 3A через bypass-путь -> ночью сырой кадр светлый, днём чёрный.
+                EGLDisplay dpy = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY);
+                int[] ver = new int[2];
+                EGL14.eglInitialize(dpy, ver, 0, ver, 1);
+                int[] attribs = {EGL14.EGL_RED_SIZE, 8, EGL14.EGL_GREEN_SIZE, 8,
+                        EGL14.EGL_BLUE_SIZE, 8,
+                        EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT,
+                        EGL14.EGL_NONE};
+                EGLConfig[] cfgs = new EGLConfig[1];
+                int[] num = new int[1];
+                EGL14.eglChooseConfig(dpy, attribs, 0, cfgs, 0, 1, num, 0);
+                EGLContext ctx = EGL14.eglCreateContext(dpy, cfgs[0],
+                        EGL14.EGL_NO_CONTEXT,
+                        new int[]{EGL14.EGL_CONTEXT_CLIENT_VERSION, 2,
+                                EGL14.EGL_NONE}, 0);
+                EGL14.eglMakeCurrent(dpy, EGL14.EGL_NO_SURFACE,
+                        EGL14.EGL_NO_SURFACE, ctx);
+                int[] tex = new int[1];
+                GLES20.glGenTextures(1, tex, 0);
+                realTex = new SurfaceTexture(tex[0]);
+                realTex.setDefaultBufferSize(640, 480);
+                try {
+                    camera.setPreviewTexture(realTex);
+                    Log.i(TAG, "exp: real texture " + tex[0] + " attached");
+                } catch (Exception e) {
+                    Log.w(TAG, "setPreviewTexture real: " + e.getMessage());
+                }
+            } else {
+                try {
+                    camera.setPreviewTexture(dummy);
+                } catch (Exception e) {
+                    Log.w(TAG, "setPreviewTexture: " + e.getMessage());
+                }
             }
             Camera.Parameters params = camera.getParameters();
             params.setJpegQuality(70);
@@ -697,6 +751,7 @@ public class CameraService {
                 } catch (Exception ignored) {
                 }
             }
+            applyExpProfile(params, expProfile);
             camera.setParameters(params);
             CamPictureCallback cb = new CamPictureCallback(this);
             final Object done = new Object();
@@ -737,8 +792,144 @@ public class CameraService {
             } catch (Exception ignored) {
             }
             camera.release();
+            if (expProfile >= 13) {
+                try {
+                    EGL14.eglMakeCurrent(EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY),
+                            EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE,
+                            EGL14.EGL_NO_CONTEXT);
+                } catch (Exception ignored) {
+                }
+            }
             Log.i(TAG, "snapshot camera released");
         }
+    }
+
+    /** Профили экспозиции диагностики чёрных дневных кадров (.5).
+     * 0 - по умолчанию; 1 - анти-банддинг 50 Гц; 2 - компенсация MIN + AE-lock;
+     * 3 - компенсация MAX + AE-lock; 4 - фикс fps-range (верхний) + анти-банддинг;
+     * 5 - компенсация MAX + самый длинный fps-range + ночная сцена.
+     * Каждый шаг в try/catch (неподдержанное - пропускаем) и в logcat. */
+    private static void applyExpProfile(Camera.Parameters params, int profile) {
+        Log.i(TAG, "exp profile=" + profile
+                + " supported: comp=[" + params.getMinExposureCompensation() + ".."
+                + params.getMaxExposureCompensation()
+                + "] antibanding=" + params.getSupportedAntibanding()
+                + " scenes=" + params.getSupportedSceneModes()
+                + " fpsRanges=" + params.getSupportedPreviewFpsRange());
+        if (profile == 0) {
+            return;
+        }
+        if (profile == 1 || profile == 4) {
+            try {
+                params.setAntibanding(Camera.Parameters.ANTIBANDING_50HZ);
+            } catch (Exception e) {
+                Log.w(TAG, "exp: antibanding: " + e.getMessage());
+            }
+        }
+        if (profile == 2 || profile == 3 || profile == 5 || profile == 11
+                || profile == 12 || profile == 14) {
+            try {
+                int target = profile == 2 ? params.getMinExposureCompensation()
+                        : params.getMaxExposureCompensation();
+                params.setExposureCompensation(target);
+                params.setAutoExposureLock(true);
+                Log.i(TAG, "exp: compensation=" + target + " aeLock=true");
+            } catch (Exception e) {
+                Log.w(TAG, "exp: compensation: " + e.getMessage());
+            }
+        }
+        if (profile == 4) {
+            try {
+                List<int[]> ranges = params.getSupportedPreviewFpsRange();
+                if (ranges != null && !ranges.isEmpty()) {
+                    int[] r = ranges.get(ranges.size() - 1);
+                    params.setPreviewFpsRange(r[0], r[1]);
+                    Log.i(TAG, "exp: fpsRange=" + r[0] + ".." + r[1]);
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "exp: fpsRange: " + e.getMessage());
+            }
+        }
+        if (profile == 6 || profile == 7 || profile == 8) {
+            // зеркало родной камеры (dumpsys 11:10): preview 800x600 + scene hdr
+            try {
+                params.setPreviewSize(800, 600);
+            } catch (Exception e) {
+                Log.w(TAG, "exp: preview 800x600: " + e.getMessage());
+            }
+        }
+        if (profile == 6) {
+            try {
+                params.setSceneMode(Camera.Parameters.SCENE_MODE_HDR);
+                Log.i(TAG, "exp: scene=hdr");
+            } catch (Exception e) {
+                Log.w(TAG, "exp: scene hdr: " + e.getMessage());
+            }
+        }
+        if (profile == 7) {
+            try {
+                params.setSceneMode(Camera.Parameters.SCENE_MODE_NIGHT);
+                Log.i(TAG, "exp: scene=night");
+            } catch (Exception e) {
+                Log.w(TAG, "exp: scene night: " + e.getMessage());
+            }
+        }
+        if (profile == 12) {
+            try {
+                params.set("iso-speed", "1600");
+                params.set("brightness", "high");
+                params.set("eng-mfll-e", "1");
+                params.set("eng-mfll-s", "1");
+                params.setAntibanding(Camera.Parameters.ANTIBANDING_50HZ);
+                Log.i(TAG, "exp: combo iso1600+brightness+mfll+50hz");
+            } catch (Exception e) {
+                Log.w(TAG, "exp: combo: " + e.getMessage());
+            }
+        }
+        if (profile == 9 || profile == 11) {
+            // ручной ISO (iso-speed-values: auto,100,200,400,800,1600 из dumpsys)
+            try {
+                params.set("iso-speed", "1600");
+                Log.i(TAG, "exp: iso=1600");
+            } catch (Exception e) {
+                Log.w(TAG, "exp: iso: " + e.getMessage());
+            }
+        }
+        if (profile == 10) {
+            // MTK-вендорская яркость (brightness-values: low,middle,high)
+            try {
+                params.set("brightness", "high");
+                Log.i(TAG, "exp: brightness=high");
+            } catch (Exception e) {
+                Log.w(TAG, "exp: brightness: " + e.getMessage());
+            }
+        }
+        if (profile == 5) {
+            try {
+                List<int[]> ranges = params.getSupportedPreviewFpsRange();
+                if (ranges != null && !ranges.isEmpty()) {
+                    int[] best = ranges.get(0);
+                    for (int[] r : ranges) {
+                        if (r[0] < best[0]) {
+                            best = r;
+                        }
+                    }
+                    params.setPreviewFpsRange(best[0], best[1]);
+                    Log.i(TAG, "exp: long fpsRange=" + best[0] + ".." + best[1]);
+                }
+                List<String> scenes = params.getSupportedSceneModes();
+                if (scenes != null && scenes.contains(Camera.Parameters.SCENE_MODE_NIGHT)) {
+                    params.setSceneMode(Camera.Parameters.SCENE_MODE_NIGHT);
+                    Log.i(TAG, "exp: scene=night");
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "exp: night/long: " + e.getMessage());
+            }
+        }
+        Log.i(TAG, "exp applied: comp=" + params.getExposureCompensation()
+                + " aeLock=" + params.getAutoExposureLock()
+                + " antibanding=" + params.getAntibanding()
+                + " scene=" + params.getSceneMode());
     }
 
     /** Ожидание JPEG-колбэка (именованное вложение). */
