@@ -23,7 +23,9 @@ import shutil
 import socket
 import struct
 import base64
+import errno
 import hashlib
+import resource
 import hmac
 import tempfile
 import ipaddress
@@ -2346,6 +2348,41 @@ class BoundedThreadingHTTPServer(ThreadingHTTPServer):
     """ThreadingHTTPServer с жестким ограничением параллельных потоков и защитой хоста."""
     daemon_threads = True
 
+    # Accept-бэкофф (домашний прод 8099, 22.11): EMFILE/ENFILE при accept
+    # в ThreadingHTTPServer глотается молча (_handle_request_noblock ловит
+    # OSError) и при переполненном backlog селектор всегда готов -> горячая
+    # петля без единой строки в логе. Превращаем её в бэкофф 1 accept/с
+    # с диагностикой не чаще раза в 30 с.
+    _accept_err_count = 0
+    _accept_err_last_log = 0.0
+    _ACCEPT_BACKOFF_ERRNOS = frozenset((
+        errno.EMFILE, errno.ENFILE, errno.ENOBUFS, errno.ENOMEM))
+
+    def get_request(self):
+        try:
+            request = super().get_request()
+            self._accept_err_count = 0
+            return request
+        except OSError as e:
+            if e.errno in self._ACCEPT_BACKOFF_ERRNOS:
+                self._accept_err_count += 1
+                now = time.time()
+                if now - self._accept_err_last_log >= 30:
+                    try:
+                        nfds = len(os.listdir("/proc/self/fd"))
+                    except Exception:
+                        nfds = -1
+                    try:
+                        fd_limit = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
+                    except Exception:
+                        fd_limit = -1
+                    log.error(
+                        "accept backoff: %s (consecutive=%d, open fds=%d, nofile=%d) - sleep 1s",
+                        e, self._accept_err_count, nfds, fd_limit)
+                    self._accept_err_last_log = now
+                time.sleep(1.0)
+            raise
+
     def process_request(self, request, client_address):
         if not CLIENT_SEMAPHORE.acquire(blocking=False):
             try:
@@ -2409,6 +2446,7 @@ class RateLimiter:
             "weather": (30, 180),   # /weather.json, /forecast.json, /v2/forecast
             "static": (30, 180),    # /settings, /install, /informer.apk, /health, /status
             "cam": (30, 180),       # /ws/cam, /dashboard, /api/cam/* (фаза 1 камер)
+            "cam_snap": (30, 240),  # /api/cam/snapshot (внешний, LAN): pull-режим ~1 кадр/2-4 с (R13)
         }
 
     def get_client_ip(self, handler):
@@ -3060,6 +3098,8 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
             return "admin"
         if path in ("/", "/weather.json", "/forecast.json", "/v2/forecast"):
             return "weather"
+        if path == "/api/cam/snapshot":
+            return "cam_snap"
         if path == "/ws/cam" or path.startswith("/api/cam/") or path in ("/dashboard", "/dashboard.html"):
             return "cam"
         return "static"
