@@ -827,7 +827,8 @@ public class CameraService {
             }
         }
         if (profile == 2 || profile == 3 || profile == 5 || profile == 11
-                || profile == 12 || profile == 14) {
+                || profile == 12 || profile == 14 || profile == 15
+                || profile == 16) {
             try {
                 int target = profile == 2 ? params.getMinExposureCompensation()
                         : params.getMaxExposureCompensation();
@@ -884,6 +885,14 @@ public class CameraService {
                 Log.i(TAG, "exp: combo iso1600+brightness+mfll+50hz");
             } catch (Exception e) {
                 Log.w(TAG, "exp: combo: " + e.getMessage());
+            }
+        }
+        if (profile == 15 || profile == 16) {
+            try {
+                params.set("cap-mode", profile == 15 ? "evbracketshot" : "off");
+                Log.i(TAG, "exp: cap-mode=" + params.get("cap-mode"));
+            } catch (Exception e) {
+                Log.w(TAG, "exp: cap-mode: " + e.getMessage());
             }
         }
         if (profile == 9 || profile == 11) {
