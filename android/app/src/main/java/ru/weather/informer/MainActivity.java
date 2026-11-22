@@ -89,30 +89,34 @@ public class MainActivity extends Activity implements Runnable {
     /** Клик по кнопкам оверлея подтверждения (именованное вложение). */
     private static class CamConfirmClickListener implements View.OnClickListener {
         private final MainActivity activity;
+        private final boolean requested;
         private final boolean allowed;
 
-        CamConfirmClickListener(MainActivity activity, boolean allowed) {
+        CamConfirmClickListener(MainActivity activity, boolean requested, boolean allowed) {
             this.activity = activity;
+            this.requested = requested;
             this.allowed = allowed;
         }
 
         @Override
         public void onClick(View v) {
-            activity.finishCamConfirm(allowed);
+            activity.finishCamConfirm(requested, allowed);
         }
     }
 
     /** Таймаут оверлея подтверждения (именованное вложение). */
     private static class CamConfirmTimeout implements Runnable {
         private final MainActivity activity;
+        private final boolean requested;
 
-        CamConfirmTimeout(MainActivity activity) {
+        CamConfirmTimeout(MainActivity activity, boolean requested) {
             this.activity = activity;
+            this.requested = requested;
         }
 
         @Override
         public void run() {
-            activity.finishCamConfirm(false);
+            activity.finishCamConfirm(requested, false);
         }
     }
 
@@ -306,6 +310,7 @@ public class MainActivity extends Activity implements Runnable {
             return;
         }
         hideCamConfirmOverlay();
+        camConfirmHandled = false;  // новый оверлей - новый цикл подтверждения
         FrameLayout root = (FrameLayout) findViewById(android.R.id.content);
         if (root == null) {
             if (callback != null) {
@@ -342,12 +347,12 @@ public class MainActivity extends Activity implements Runnable {
 
         Button allow = new Button(this);
         allow.setText(enable ? "Разрешить" : "Выключить");
-        allow.setOnClickListener(new CamConfirmClickListener(this, true));
+        allow.setOnClickListener(new CamConfirmClickListener(this, enable, true));
         box.addView(allow);
 
         Button deny = new Button(this);
         deny.setText("Отмена");
-        deny.setOnClickListener(new CamConfirmClickListener(this, false));
+        deny.setOnClickListener(new CamConfirmClickListener(this, enable, false));
         box.addView(deny);
 
         overlay.addView(box);
@@ -355,18 +360,30 @@ public class MainActivity extends Activity implements Runnable {
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
         camOverlay = overlay;
 
-        mainHandler.postDelayed(new CamConfirmTimeout(this), CAM_CONFIRM_TIMEOUT_MS);
+        mainHandler.postDelayed(new CamConfirmTimeout(this, enable), CAM_CONFIRM_TIMEOUT_MS);
         Log.i(TAG, "cam confirm overlay shown: enable=" + enable);
     }
 
-    /** Завершить подтверждение (тап или таймаут). Только с UI-потока. */
-    public void finishCamConfirm(boolean allowed) {
+    /** Оверлей уже обработан (тап/таймаут): guard двойного срабатывания. */
+    private boolean camConfirmHandled = false;
+
+    /**
+     * Завершить подтверждение (тап или таймаут). Только с UI-потока.
+     * requested - ЗАПРОШЕННОЕ состояние с оверлея, а не isEnabled() в момент
+     * тапа: чтение текущего флага инвертировало действие при гонке состояний
+     * (ревью 22.11, item 7). setEnabled идемпотентен к повторному значению.
+     */
+    public void finishCamConfirm(boolean requested, boolean allowed) {
+        if (camConfirmHandled) {
+            return;
+        }
+        camConfirmHandled = true;
         hideCamConfirmOverlay();
         CameraService service = CameraService.getInstance();
         if (service != null && allowed) {
-            service.setEnabled(!service.isEnabled());
+            service.setEnabled(requested);
         }
-        Log.i(TAG, "cam confirm finished: allowed=" + allowed);
+        Log.i(TAG, "cam confirm finished: requested=" + requested + " allowed=" + allowed);
     }
 
     private void hideCamConfirmOverlay() {

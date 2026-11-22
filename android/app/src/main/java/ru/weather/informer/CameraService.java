@@ -71,6 +71,8 @@ public class CameraService {
     private final Handler camHandler;
     private final Handler mainHandler;
     private final Object sessionsLock = new Object();
+    /** Сериализует сами съёмки снапшота (арбитр состояния - на this, короткий). */
+    private final Object snapshotLock = new Object();
     private final Map<String, CamPeerSession> sessions = new LinkedHashMap<String, CamPeerSession>();
     private final AtomicInteger reconnectAttempt = new AtomicInteger(0);
 
@@ -649,25 +651,32 @@ public class CameraService {
         if (expected.isEmpty() || token == null || !expected.equals(token)) {
             return SNAP_FORBIDDEN_TOKEN;
         }
-        // Арбитр: держим замок на весь снапшот, конфликт с стримом исключён.
+        // Арбитр: короткий замок this только на проверку/переключение состояния.
+        // Раньше this держался на всю съёмку (~7.5с) и setEnabled с UI-потока
+        // (MainActivity.finishCamConfirm) блокировался до конца съёмки -> ANR.
+        // Сама съёмка сериализуется отдельным snapshotLock: одновременных
+        // снапшотов нет; гонка с toggle в момент съёмки разрешается ошибкой
+        // Camera.open на одной из сторон (graceful, не краш).
         synchronized (this) {
             if (!STATE_IDLE.equals(state)) {
                 return SNAP_BUSY;
             }
             setState(STATE_SNAPSHOT, "");
-            try {
+        }
+        try {
+            synchronized (snapshotLock) {
                 byte[] jpeg = captureJpeg();
                 if (jpeg != null) {
                     clearLastErrorIf("snapshot failed");
                 }
                 jpegOut[0] = jpeg;
                 return jpeg != null ? SNAP_OK : SNAP_ERROR;
-            } catch (Throwable t) {
-                setLastError("snapshot failed: " + t.getMessage());
-                return SNAP_ERROR;
-            } finally {
-                setStateIdleIfNoSession();
             }
+        } catch (Throwable t) {
+            setLastError("snapshot failed: " + t.getMessage());
+            return SNAP_ERROR;
+        } finally {
+            setStateIdleIfNoSession();
         }
     }
 
@@ -1233,7 +1242,14 @@ public class CameraService {
 
         @Override
         public void run() {
-            service.dispatchSignaling(type, msg);
+            try {
+                service.dispatchSignaling(type, msg);
+            } catch (Throwable t) {
+                // сбой диспетчеризации не должен убить цикл camThread:
+                // фиксируем причину в last_error и продолжаем.
+                service.setLastError("dispatch " + type + " failed: " + t.getMessage());
+                Log.w(TAG, "dispatch failed: type=" + type, t);
+            }
         }
     }
 
