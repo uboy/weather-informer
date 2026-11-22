@@ -218,7 +218,8 @@ function updateSummary(sum) {
     // превью: снапшот момента открытия дашборда для каждой включённой комнаты
     if (!autoSnap[room] && cs && cs.enabled !== false) {
       autoSnap[room] = true;
-      refreshSnap(room);
+      // комната с открытым вьювером: не конкурировать за камеру арбитра
+      if (!(viewer && viewer.room === room)) refreshSnap(room);
     }
   });
   $("hint").textContent = "комнат: " + ROOMS.length + ", издателей на связи: " + live +
@@ -245,19 +246,6 @@ function closeViewer() {
 }
 
 function pmsg(text) { $("pstatus").textContent = text; }
-
-function startViewerSnapshot(room) {
-  // один свежий снапшот в окно просмотра (fallback без сигналинга)
-  if (!viewer || viewer.closed) return;
-  viewer.pc = null;
-  var img = $("pmjpeg");
-  $("pvideo").classList.add("hidden");
-  img.classList.remove("hidden");
-  img.src = "/api/cam/snapshot?room=" + encodeURIComponent(room) + "&t=" + Date.now();
-  img.onerror = function () {
-    if (viewer && !viewer.closed) pmsg("снапшот недоступен (камера занята или выключена)");
-  };
-}
 
 function sendWs(ws, obj) { ws.send(JSON.stringify(obj)); }
 
@@ -312,9 +300,11 @@ function startWs(room, token) {
       clearTimeout(failTimer);
       var code = msg.code || "ошибка";
       if (code === "no_publisher") {
-        // транзитная схема: сигналинг-пути к этой комнате нет
-        pmsg("сигналинг недоступен (переходная схема) - живое видео появится с pull-моделью; показываю свежий снапшот");
-        startViewerSnapshot(room);
+        // pull-модель (D4): сигналинга к комнате нет - живые кадры опросом
+        // снапшотов через сервер (все соединения входящие к планшету);
+        // темп ограничен скоростью захвата планшета (~2-4 с на кадр)
+        pmsg("живое видео pull-моделью: кадры обновляются каждые 2-4 с");
+        startMjpeg(room, 1000);
       } else if (code === "camera_disabled") {
         pmsg("камера выключена на планшете - включите в настройках планшета (секция Камера)");
       } else {
@@ -323,7 +313,7 @@ function startWs(room, token) {
     }
   };
   ws.onclose = function () {
-    if (viewer && !viewer.closed) pmsg("сигналинг закрылся");
+    if (viewer && !viewer.closed && !viewer.pullMode) pmsg("сигналинг закрылся");
   };
 }
 
@@ -367,16 +357,42 @@ function startPeer(room, token, failTimer) {
 // Примечание к порядку: hello уходит первым сообщением после открытия WS,
 // offer создаётся по hello_ok; фолбэк MJPEG стартует по таймеру 15 с без видео.
 
-function startMjpeg(room) {
+function startMjpeg(room, intervalMs) {
+  // pull (intervalMs 1000): живые кадры опросом. Захват планшета занимает
+  // 2-3 с, поэтому цикл completion-driven: следующий кадр запрашивается
+  // через паузу ПОСЛЕ завершения предыдущего (иначе tick прерывает запрос).
+  // 25000 (по умолчанию) = MJPEG-фолбэк при живом издателе (камера занята стримом).
+  var pull = intervalMs === 1000;
+  if (!intervalMs) intervalMs = 25000;
   var img = $("pmjpeg");
   $("pvideo").classList.add("hidden");
   img.classList.remove("hidden");
+  viewer.pullMode = pull;
+  viewer.pullErr = false;
+  var busy = false;
+  img.onload = function () {
+    busy = false;
+    viewer.pullErr = false;
+    schedule(intervalMs);
+  };
+  img.onerror = function () {
+    busy = false;
+    if (viewer && !viewer.closed && pull && !viewer.pullErr) {
+      viewer.pullErr = true;
+      pmsg("кадр пропущен (камера занята/недоступна) - продолжаю опрос");
+    }
+    schedule(Math.max(intervalMs, 2000));
+  };
+  function schedule(delay) {
+    if (viewer && !viewer.closed) viewer.mjpegTimer = setTimeout(tick, delay);
+  }
   function tick() {
-    if (viewer && !viewer.closed) img.src = "/api/cam/snapshot?room=" + encodeURIComponent(room) + "&t=" + Date.now();
+    if (!viewer || viewer.closed || busy) return;
+    busy = true;
+    img.src = "/api/cam/snapshot?room=" + encodeURIComponent(room) + "&t=" + Date.now();
   }
   tick();
-  viewer.mjpegTimer = setInterval(tick, 25000);
-  // hello для cam_state всё равно нужен: закрываем WS, чтобы не мешать паблишеру
+  // сигналинг в pull-режиме не нужен: закрываем WS
   if (viewer.ws) { try { viewer.ws.close(); } catch (e) {} }
 }
 
