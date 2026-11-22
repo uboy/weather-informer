@@ -79,7 +79,8 @@ var ROOMS = [];
 var TOKEN = "";
 var snapTimers = {};
 var pollTimer = null;
-var viewer = null; // {room, ws, pc, mjpegTimer, mediaSeen, closed}
+var viewer = null; // {room, ws, pc, mjpegTimer, mediaSeen, closed, offered}
+var lastPollOk = ""; // время последнего успешного обновления (для сообщения об обрыве)
 
 function $(id) { return document.getElementById(id); }
 
@@ -90,7 +91,11 @@ function api(path, cb) {
       return r.json();
     })
     .then(function (j) { if (j) cb(j); })
-    .catch(function () {});
+    .catch(function () {
+      // item 11: молчаливый сбой выглядел как «данные живые»; показываем,
+      // что связи нет и когда данные обновлялись в последний раз
+      $("hint").textContent = "нет связи с сервером (обновлено " + (lastPollOk || "-") + ")";
+    });
 }
 
 var autoSnap = {};
@@ -108,24 +113,37 @@ function badgeFor(cs) {
 
 function buildGrid() {
   var g = $("grid");
-  g.innerHTML = "";
+  g.textContent = "";
   ROOMS.forEach(function (room) {
-    var card = document.createElement("div");
-    card.className = "card";
-    card.innerHTML =
-      '<div class="head"><span class="name">' + room + '</span>' +
-      '<span style="display:flex; gap:6px; align-items:center;">' +
-      '<span class="badge off" id="b-' + room + '">нет данных</span>' +
-      '<button class="del" id="d-' + room + '" title="удалить комнату из конфига сервера">✕</button>' +
-      '<button class="orient" id="rot-' + room + '" title="повернуть на 90°">⟳</button>' +
-      '<button class="orient" id="flip-' + room + '" title="отразить по горизонтали">⇄</button>' +
-      '</span></div>' +
-      '<div class="meta" id="m-' + room + '">камера выключена по умолчанию</div>' +
-      '<div class="snapbox" id="s-' + room + '"><span class="empty">снапшот по запросу</span></div>' +
-      '<div class="row">' +
-      '<button id="w-' + room + '">Смотреть</button>' +
-      '<button id="r-' + room + '">Снапшот</button>' +
-      '</div>';
+    // item 10: имя комнаты и подписи попадают в DOM как textContent,
+    // не как HTML-строка (инъекция через имя комнаты из конфига)
+    function el(tag, cls, text, id, title) {
+      var n = document.createElement(tag);
+      if (cls) n.className = cls;
+      if (id) n.id = id;
+      if (title) n.title = title;
+      if (text != null) n.textContent = text;
+      return n;
+    }
+    var card = el("div", "card");
+    var head = el("div", "head");
+    head.appendChild(el("span", "name", room));
+    var hs = el("span");
+    hs.style.cssText = "display:flex; gap:6px; align-items:center;";
+    hs.appendChild(el("span", "badge off", "нет данных", "b-" + room));
+    hs.appendChild(el("button", "del", "✕", "d-" + room, "удалить комнату из конфига сервера"));
+    hs.appendChild(el("button", "orient", "⟳", "rot-" + room, "повернуть на 90°"));
+    hs.appendChild(el("button", "orient", "⇄", "flip-" + room, "отразить по горизонтали"));
+    head.appendChild(hs);
+    card.appendChild(head);
+    card.appendChild(el("div", "meta", "камера выключена по умолчанию", "m-" + room));
+    var snap = el("div", "snapbox", null, "s-" + room);
+    snap.appendChild(el("span", "empty", "снапшот по запросу"));
+    card.appendChild(snap);
+    var row = el("div", "row");
+    row.appendChild(el("button", null, "Смотреть", "w-" + room));
+    row.appendChild(el("button", null, "Снапшот", "r-" + room));
+    card.appendChild(row);
     g.appendChild(card);
     $("w-" + room).addEventListener("click", function () { openViewer(room); });
     $("r-" + room).addEventListener("click", function () { refreshSnap(room); });
@@ -214,7 +232,12 @@ function updateSummary(sum) {
     if (cs && cs.last_error) bits.push("ошибка: " + cs.last_error);
     m.textContent = bits.join(", ");
     var wb = $("w-" + room);
-    if (wb) wb.disabled = !!(cs && cs.enabled === false);
+    if (wb) {
+      // item 9: кнопка недоступна, если камера выключена ИЛИ комнату уже
+      // смотрят (кроме собственного открытого зрителя этой вкладки)
+      var ownViewer = viewer && !viewer.closed && viewer.room === room;
+      wb.disabled = !!(cs && cs.enabled === false) || ((info.viewers || 0) > 0 && !ownViewer);
+    }
     // превью: снапшот момента открытия дашборда для каждой включённой комнаты
     if (!autoSnap[room] && cs && cs.enabled !== false) {
       autoSnap[room] = true;
@@ -222,8 +245,9 @@ function updateSummary(sum) {
       if (!(viewer && viewer.room === room)) refreshSnap(room);
     }
   });
+  lastPollOk = new Date().toLocaleTimeString();
   $("hint").textContent = "комнат: " + ROOMS.length + ", издателей на связи: " + live +
-    " (обновлено " + new Date().toLocaleTimeString() + ")";
+    " (обновлено " + lastPollOk + ")";
 }
 
 function pollLoop() {
@@ -251,7 +275,8 @@ function sendWs(ws, obj) { ws.send(JSON.stringify(obj)); }
 
 function openViewer(room) {
   if (viewer) closeViewer();
-  viewer = {room: room, ws: null, pc: null, mjpegTimer: null, mediaSeen: 0, closed: false};
+  viewer = {room: room, ws: null, pc: null, mjpegTimer: null, mediaSeen: 0, closed: false,
+            offered: false};
   $("ptitle").textContent = "Комната: " + room;
   $("player").classList.add("open");
   ["pvideo", "pmjpeg"].forEach(function (id) {
@@ -296,6 +321,13 @@ function startWs(room, token) {
     } else if (msg.type === "cam_state") {
       if (msg.state === "OFFLINE") pmsg("издатель не на связи");
       else if (msg.enabled === false) pmsg("камера выключена на планшете");
+      // item 9: занятое состояние до появления медиа - камеру смотрят/снапшот.
+      // STREAMING после собственного offer - норма (offered=true, не пугаем).
+      else if (msg.state === "STREAMING" && !viewer.mediaSeen && !viewer.offered) {
+        pmsg("камера занята: уже идёт стрим");
+      } else if (msg.state === "SNAPSHOT" && !viewer.mediaSeen) {
+        pmsg("камера занята: выполняется снапшот");
+      }
     } else if (msg.type === "error") {
       clearTimeout(failTimer);
       var code = msg.code || "ошибка";
@@ -312,14 +344,26 @@ function startWs(room, token) {
       }
     }
   };
-  ws.onclose = function () {
-    if (viewer && !viewer.closed && !viewer.pullMode) pmsg("сигналинг закрылся");
+  ws.onclose = function (ev) {
+    // item 9: failTimer снимается и при закрытии WS, а не только при ошибке
+    clearTimeout(failTimer);
+    if (!viewer || viewer.closed || viewer.pullMode) return;
+    var c = ev && ev.code;
+    var why =
+      c === 4001 ? "токен зрителя отклонён (обновите страницу)" :
+      c === 4002 ? "комната не найдена на сервере" :
+      c === 4005 ? "камеры отключены на сервере" :
+      c === 4000 ? "сигналинг отклонил подключение" :
+      c === 1000 ? "сигналинг закрыт сервером" :
+      "сигналинг потерян (код " + (c || "?") + ")";
+    pmsg(why);
   };
 }
 
 function startPeer(room, token, failTimer) {
   var pc = new RTCPeerConnection(null); // LAN, без STUN
   viewer.pc = pc;
+  viewer.offered = true;
   pc.addTransceiver("video", {direction: "recvonly"});
   pc.addTransceiver("audio", {direction: "recvonly"});
   pc.ontrack = function (ev) {
@@ -370,14 +414,22 @@ function startMjpeg(room, intervalMs) {
   viewer.pullMode = pull;
   viewer.pullErr = false;
   var busy = false;
+  var busyStreak = 0; // item 9: подряд идущие неудачи кадра (503 busy/ошибка)
   img.onload = function () {
     busy = false;
+    busyStreak = 0;
     viewer.pullErr = false;
     schedule(intervalMs);
   };
   img.onerror = function () {
     busy = false;
-    if (viewer && !viewer.closed && pull && !viewer.pullErr) {
+    busyStreak += 1;
+    if (viewer && !viewer.closed && pull && busyStreak >= 6) {
+      // устойчивый busy: прекращаем долбить планшет опросом
+      pmsg("камера стабильно занята/недоступна - опрос остановлен (попробуйте позже)");
+      return;
+    }
+    if (viewer && !viewer.closed && pull && busyStreak >= 2 && !viewer.pullErr) {
       viewer.pullErr = true;
       pmsg("кадр пропущен (камера занята/недоступна) - продолжаю опрос");
     }
