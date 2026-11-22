@@ -116,12 +116,41 @@ public class ClientHandler implements Runnable {
                              Map<String, String> headers, byte[] body,
                              OutputStream out, String contentType) throws Exception {
 
-        // 1. Статус /health
+        // 1. Статус /health (+ поле cam, обратно совместимо - фаза 1 камер)
         if (path.equals("/health")) {
             long uptime = (System.currentTimeMillis() - server.getStartTime()) / 1000;
+            CameraService cam = CameraService.getInstance();
+            String camJson = cam != null ? cam.buildStateJson().toString() : "{}";
             String json = "{\"status\":\"ok\",\"app\":\"WeatherInformerKiosk\",\"port\":" + InformerServer.PORT +
-                    ",\"uptime_sec\":" + uptime + ",\"version\":\"1.0\"}";
+                    ",\"uptime_sec\":" + uptime + ",\"version\":\"1.0\",\"cam\":" + camJson + "}";
             sendResponse(out, 200, "OK", "application/json; charset=utf-8", json.getBytes(StandardCharsets.UTF_8));
+            return;
+        }
+
+        // 1b. Камерные маршруты (фаза 1). Включение камеры через сеть НЕВОЗМОЖНО:
+        // /api/cam/toggle-request только показывает оверлей на экране планшета.
+        if (path.equals("/api/cam/state")) {
+            handleCamState(out);
+            return;
+        }
+        if (path.equals("/api/snapshot")) {
+            handleCamSnapshot(query, out);
+            return;
+        }
+        if (path.equals("/api/cam/toggle-request") && method.equals("POST")) {
+            handleCamToggleRequest(body, out);
+            return;
+        }
+
+        // 1c. Pull-сигналинг WebRTC (D4): сервер сам приходит на планшет HTTP-запросом,
+        // offer зрителя уходит в теле, ответ - answer+ICE одним телом. Включение
+        // камеры через сеть по-прежнему невозможно: маршрут лишь отдаёт видео.
+        if (path.equals("/api/cam/webrtc/offer") && method.equals("POST")) {
+            handleCamPullOffer(query, body, out);
+            return;
+        }
+        if (path.equals("/api/cam/webrtc/close") && method.equals("POST")) {
+            handleCamPullClose(query, out);
             return;
         }
 
@@ -199,6 +228,11 @@ public class ClientHandler implements Runnable {
                 if (server.getActivity() != null) {
                     server.getActivity().reloadInformer();
                 }
+                // Конфиг сохранён: камерный publish получает свежий бюджет попыток (D4).
+                CameraService camSvc = CameraService.getInstance();
+                if (camSvc != null) {
+                    camSvc.noteConfigChanged();
+                }
                 sendResponse(out, 200, "OK", "application/json; charset=utf-8",
                         "{\"status\":\"saved\"}".getBytes(StandardCharsets.UTF_8));
                 return;
@@ -223,6 +257,22 @@ public class ClientHandler implements Runnable {
             triggerReload();
             sendResponse(out, 200, "OK", "application/json; charset=utf-8",
                     "{\"status\":\"reloaded\"}".getBytes(StandardCharsets.UTF_8));
+            return;
+        }
+
+        // 6b. Обслуживание adb-over-WiFi (boot-линия): статус и перезапуск/пробуждение adbd.
+        // Вызов по HTTP, поэтому разрыв adb-соединения обработке не мешает.
+        // Аутентификация появится вместе с HTTP Basic дашборда (дизайн 5.1 п. 7).
+        if (path.equals("/api/adb/status")) {
+            sendResponse(out, 200, "OK", "application/json; charset=utf-8",
+                    AdbMaintainer.statusJson().getBytes(StandardCharsets.UTF_8));
+            return;
+        }
+        if (path.equals("/api/adb/restart") && method.equals("POST")) {
+            String mode = body != null && new String(body, StandardCharsets.UTF_8).contains("wake")
+                    ? "wake" : "restart";
+            sendResponse(out, 200, "OK", "application/json; charset=utf-8",
+                    AdbMaintainer.restartJson(mode).getBytes(StandardCharsets.UTF_8));
             return;
         }
 
@@ -628,6 +678,200 @@ public class ClientHandler implements Runnable {
         } catch (Exception e) {
             Log.e(TAG, "Failed to send reload broadcast: " + e.getMessage());
         }
+    }
+
+    // ===== Камерные обработчики (фаза 1) =====
+
+    private void handleCamState(OutputStream out) throws Exception {
+        CameraService cam = CameraService.getInstance();
+        JSONObject o;
+        if (cam != null) {
+            o = cam.buildStateJson();
+        } else {
+            o = new JSONObject();
+            o.put("enabled", false);
+            o.put("state", "IDLE");
+            o.put("last_error", "camera service not initialized");
+        }
+        sendResponse(out, 200, "OK", "application/json; charset=utf-8",
+                o.toString().getBytes(StandardCharsets.UTF_8));
+    }
+
+    private void handleCamSnapshot(String query, OutputStream out) throws Exception {
+        Map<String, String> params = parseQuery(query);
+        String token = params.get("token");
+        CameraService cam = CameraService.getInstance();
+        if (cam == null) {
+            sendResponse(out, 403, "Forbidden", "application/json; charset=utf-8",
+                    "{\"error\":\"disabled\"}".getBytes(StandardCharsets.UTF_8));
+            return;
+        }
+        byte[][] jpegOut = new byte[1][];
+        int result = cam.getSnapshot(token, jpegOut);
+        if (result == CameraService.SNAP_OK) {
+            byte[] jpeg = jpegOut[0] != null ? jpegOut[0] : new byte[0];
+            sendResponse(out, 200, "OK", "image/jpeg", jpeg);
+            return;
+        }
+        if (result == CameraService.SNAP_BUSY) {
+            sendResponse(out, 503, "Service Unavailable", "application/json; charset=utf-8",
+                    "{\"error\":\"busy\"}".getBytes(StandardCharsets.UTF_8));
+            return;
+        }
+        sendResponse(out, 403, "Forbidden", "application/json; charset=utf-8",
+                (result == CameraService.SNAP_FORBIDDEN_DISABLED
+                        ? "{\"error\":\"disabled\"}"
+                        : "{\"error\":\"forbidden\"}").getBytes(StandardCharsets.UTF_8));
+    }
+
+    private void handleCamToggleRequest(byte[] body, OutputStream out) throws Exception {
+        CameraService cam = CameraService.getInstance();
+        MainActivity activity = server.getActivity();
+        if (cam == null || activity == null) {
+            sendResponse(out, 409, "Conflict", "application/json; charset=utf-8",
+                    "{\"error\":\"no activity foreground\"}".getBytes(StandardCharsets.UTF_8));
+            return;
+        }
+        boolean enable = true;
+        try {
+            JSONObject req = new JSONObject(new String(body == null ? new byte[0] : body, StandardCharsets.UTF_8));
+            enable = req.optBoolean("enable", true);
+        } catch (Exception ignored) {
+            // пустое/кривое тело: трактуем как включение
+        }
+        // Оверлей на экране планшета; флаг меняется ТОЛЬКО тапом на экране.
+        activity.showCamConfirmOverlay(enable, new CamToggleConfirmLogger());
+        JSONObject resp = new JSONObject();
+        resp.put("status", "confirm_pending");
+        resp.put("enable", enable);
+        resp.put("enabled_now", cam.isEnabled());
+        sendResponse(out, 200, "OK", "application/json; charset=utf-8",
+                resp.toString().getBytes(StandardCharsets.UTF_8));
+    }
+
+    /** Логгер результата подтверждения тапом (именованное вложение). */
+    private static final class CamToggleConfirmLogger implements MainActivity.CamConfirmCallback {
+        @Override
+        public void onConfirmed(boolean allowed) {
+            Log.i(TAG, "cam toggle confirmed on device screen: " + allowed);
+        }
+    }
+
+    // ===== Pull-сигналинг WebRTC (сервер инициирует соединение, D4) =====
+
+    /** Бюджет ответа: ensureCapture (холодный старт ~1-2 с) + answer + сбор host-ICE.
+     *  Меньше таймаута сервера (18 с) - клиент успевает получить отказ внятным кодом. */
+    private static final long PULL_ANSWER_TIMEOUT_MS = 12000;
+    /** SDP с ICE-кандидатами помещается с запасом; большее - мусор, не SDP. */
+    private static final int PULL_MAX_SDP_CHARS = 200000;
+
+    /** Тот же токен-гейт, что у снапшота: cam.token из конфига планшета.
+     *  false = ответ уже отправлен (403 disabled/forbidden). */
+    private static boolean checkCamToken(CameraService cam, String token, OutputStream out) throws IOException {
+        int code = cam.checkPullToken(token);
+        if (code == CameraService.PULL_OK) {
+            return true;
+        }
+        if (code == CameraService.PULL_FORBIDDEN_DISABLED) {
+            sendResponse(out, 403, "Forbidden", "application/json; charset=utf-8",
+                    "{\"error\":\"disabled\"}".getBytes(StandardCharsets.UTF_8));
+        } else {
+            sendResponse(out, 403, "Forbidden", "application/json; charset=utf-8",
+                    "{\"error\":\"forbidden\"}".getBytes(StandardCharsets.UTF_8));
+        }
+        return false;
+    }
+
+    /** POST /api/cam/webrtc/offer?token=&viewer=&audio=: offer зрителя -> answer+ICE планшета. */
+    private void handleCamPullOffer(String query, byte[] body, OutputStream out) throws Exception {
+        Map<String, String> params = parseQuery(query);
+        String token = params.get("token");
+        String viewer = params.get("viewer");
+        boolean wantAudio = "1".equals(params.get("audio"));
+        CameraService cam = CameraService.getInstance();
+        if (cam == null) {
+            sendResponse(out, 403, "Forbidden", "application/json; charset=utf-8",
+                    "{\"error\":\"disabled\"}".getBytes(StandardCharsets.UTF_8));
+            return;
+        }
+        if (!checkCamToken(cam, token, out)) {
+            return;
+        }
+        if (viewer == null || viewer.isEmpty() || viewer.length() > 128) {
+            sendResponse(out, 400, "Bad Request", "application/json; charset=utf-8",
+                    "{\"error\":\"viewer required\"}".getBytes(StandardCharsets.UTF_8));
+            return;
+        }
+        JSONObject offer;
+        try {
+            offer = new JSONObject(new String(body == null ? new byte[0] : body, StandardCharsets.UTF_8));
+        } catch (Exception e) {
+            offer = null;
+        }
+        String sdp = offer == null ? "" : offer.optString("sdp", "");
+        if (offer == null || !"offer".equals(offer.optString("type", ""))
+                || sdp.isEmpty() || sdp.length() > PULL_MAX_SDP_CHARS) {
+            sendResponse(out, 400, "Bad Request", "application/json; charset=utf-8",
+                    "{\"error\":\"offer (type/sdp) required\"}".getBytes(StandardCharsets.UTF_8));
+            return;
+        }
+        JSONObject[] answerOut = new JSONObject[1];
+        int code = cam.startPullSession(viewer, token, offer, wantAudio,
+                PULL_ANSWER_TIMEOUT_MS, answerOut);
+        if (code == CameraService.PULL_OK) {
+            sendResponse(out, 200, "OK", "application/json; charset=utf-8",
+                    answerOut[0].toString().getBytes(StandardCharsets.UTF_8));
+        } else if (code == CameraService.PULL_FORBIDDEN_DISABLED) {
+            sendResponse(out, 403, "Forbidden", "application/json; charset=utf-8",
+                    "{\"error\":\"disabled\"}".getBytes(StandardCharsets.UTF_8));
+        } else if (code == CameraService.PULL_FORBIDDEN_TOKEN) {
+            sendResponse(out, 403, "Forbidden", "application/json; charset=utf-8",
+                    "{\"error\":\"forbidden\"}".getBytes(StandardCharsets.UTF_8));
+        } else if (code == CameraService.PULL_TIMEOUT) {
+            sendResponse(out, 504, "Gateway Timeout", "application/json; charset=utf-8",
+                    "{\"error\":\"answer timeout\"}".getBytes(StandardCharsets.UTF_8));
+        } else {
+            String detail = pullDetailJson(cam);
+            Log.w(TAG, "pull offer failed: viewer=" + viewer + " code=" + code
+                    + (detail.isEmpty() ? "" : " detail=" + detail));
+            sendResponse(out, 500, "Internal Server Error", "application/json; charset=utf-8",
+                    ("{\"error\":\"session failed\"" + detail + "}")
+                            .getBytes(StandardCharsets.UTF_8));
+        }
+    }
+
+    /** Причина последней неудачи pull-старта (без секретов) в виде JSON-фрагмента. */
+    private static String pullDetailJson(CameraService cam) {
+        String d = cam.lastPullError();
+        if (d == null || d.isEmpty()) {
+            return "";
+        }
+        d = d.replace("\\", "\\\\").replace("\"", "\\\"").replaceAll("[\\r\\n\\t]", " ");
+        return ",\"detail\":\"" + d + "\"";
+    }
+
+    /** POST /api/cam/webrtc/close?token=&viewer=: сервер сообщает, что зритель ушёл. */
+    private void handleCamPullClose(String query, OutputStream out) throws Exception {
+        Map<String, String> params = parseQuery(query);
+        String token = params.get("token");
+        String viewer = params.get("viewer");
+        CameraService cam = CameraService.getInstance();
+        if (cam == null) {
+            sendResponse(out, 403, "Forbidden", "application/json; charset=utf-8",
+                    "{\"error\":\"disabled\"}".getBytes(StandardCharsets.UTF_8));
+            return;
+        }
+        if (!checkCamToken(cam, token, out)) {
+            return;
+        }
+        if (viewer == null || viewer.isEmpty()) {
+            sendResponse(out, 400, "Bad Request", "application/json; charset=utf-8",
+                    "{\"error\":\"viewer required\"}".getBytes(StandardCharsets.UTF_8));
+            return;
+        }
+        cam.dropSession(viewer, "server close");
+        sendResponse(out, 200, "OK", "application/json; charset=utf-8",
+                "{\"status\":\"closed\"}".getBytes(StandardCharsets.UTF_8));
     }
 
     private static byte[] readFileBytes(File file) {

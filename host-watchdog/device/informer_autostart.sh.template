@@ -1,0 +1,85 @@
+#!/system/bin/sh
+# Единый boot-скрипт флота информеров (v4, 2026-11-21).
+# Путь на планшете: /data/adb/service.d/informer_autostart.sh
+# Механизм запуска: BOOT_COMPLETED -> ru.weather.informer BootReceiver -> su.
+# (service.d НЕ исполняется ни одним ROM: SuperSU 2.79/2.82 игнорирует каталог,
+#  Magisk 28.1 пишет "environment incomplete" - доказано логами 21.11.)
+# Делает one-shot: пин MAC (ROM рандомизирует MAC при загрузке) -> восстановление
+# adb-over-WiFi (persist-проп стирается при загрузке) -> подъём киоска.
+# Порядок пина подтверждён владельцем: сначала MAC, потом передёрнуть линк,
+# чтобы роутер увидел пиннутый MAC и выдал прежний IP (DNS-алиас комнаты).
+# Старый скрипт (while-loop по питанию + launch uk.nktnet.webviewkiosk) удалён:
+# он был частью мёртвого service.d и целился в снесённый legacy-киоск.
+MAC="@MAC@"
+# Лог: сначала пробуем adb_data (su-домен ограниченных ROM туда пишет), fallback shell_data.
+# Create в shell_data_file (/data/local/tmp) у confined su-доменов запрещён - лог бы пустел.
+LOG=/data/adb/service.d/boot.log
+touch "$LOG" 2>/dev/null || LOG=/data/local/tmp/informer_boot.log
+touch "$LOG" 2>/dev/null
+
+# manual = прогон проверки по живой adb-сессии: блок adbd пропускаем
+# (stop adbd убивает сессию-исполнителя, start не выполняется - доказано 21.11).
+# Полный блок исполняют только контексты вне adb-сессии: boot-hook (BootReceiver) и wake-эндпоинт.
+SKIP_ADB=0
+[ "${1:-}" = "manual" ] && SKIP_ADB=1
+
+{
+echo "=== $(date) start (caller: ${1:-manual})"
+
+# 0. Ждём окончания загрузки (до 100 c)
+i=0
+while [ "$(getprop sys.boot_completed)" != "1" ] && [ $i -lt 50 ]; do
+    sleep 2
+    i=$((i+1))
+done
+
+# 1. Пин MAC: ждём wlan0 и РЕТРАИМ смену адреса до совпадения (до ~3 мин).
+# Доказано 21.11 boot.log Oysters: ROM рандомизирует MAC в момент поднятия wifi,
+# ранняя попытка на неготовом драйвере = RTNETLINK "Operation not supported";
+# после готовности драйвера down/set/up проходит и wifi переассоциируется.
+i=0
+while [ ! -e /sys/class/net/wlan0/address ] && [ $i -lt 60 ]; do
+    sleep 2
+    i=$((i+1))
+done
+if [ "$MAC" = "skip" ]; then
+    echo "mac pin skipped (driver refuses change: RTNETLINK+ioctl denied в любом состоянии, доказано 21.11 Oysters)"
+else
+CUR=$(cat /sys/class/net/wlan0/address 2>/dev/null)
+echo "wlan0: $CUR target: $MAC"
+tries=0
+while [ "$CUR" != "$MAC" ] && [ $tries -lt 30 ]; do
+    tries=$((tries+1))
+    ip link set dev wlan0 down 2>/dev/null
+    ip link set dev wlan0 address "$MAC" 2>/dev/null
+    ip link set dev wlan0 up 2>/dev/null
+    sleep 6
+    CUR=$(cat /sys/class/net/wlan0/address 2>/dev/null)
+done
+if [ "$CUR" = "$MAC" ]; then
+    echo "mac pinned: $CUR (tries=$tries)"
+else
+    echo "mac PIN-FAIL: $CUR after $tries tries"
+fi
+fi
+
+# 2. adb-over-WiFi: выставляем пропы (persist стирается при загрузке) и перезапускаем adbd.
+# ВАЖНО: на boot-hook это исполняется из BootReceiver (процесс приложения). Прогон этого
+# блока через adb-сессию запрещён: stop adbd убивает сессию до start (см. deploy-скрипт).
+if [ "$SKIP_ADB" != "1" ]; then
+setprop persist.adb.tcp.port 5555
+setprop service.adb.tcp.port 5555
+stop adbd
+sleep 1
+start adbd
+sleep 1
+echo "adbd: svc=$(getprop init.svc.adbd) persist=$(getprop persist.adb.tcp.port) runtime=$(getprop service.adb.tcp.port)"
+else
+echo "adbd block skipped (manual over adb session)"
+fi
+
+# 3. Киоск (страховка к kioskautostart; приложение и так стартует по BOOT_COMPLETED)
+am start -n ru.weather.informer/.MainActivity 2>/dev/null || true
+
+echo "=== $(date) done"
+} >> "$LOG" 2>&1

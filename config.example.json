@@ -21,5 +21,30 @@
   "openweathermap_api_key": "ВАШ_КЛЮЧ_OPENWEATHERMAP",
   "enable_openweathermap_fallback": true,
   "update_interval_sec": 300,
-  "direct_update_interval_sec": 1800
+  "direct_update_interval_sec": 1800,
+  "cameras": {
+    "enabled": false,
+    "viewer_token": "СЛУЧАЙНЫЙ_ТОКЕН_ЗРИТЕЛЯ_32_HEX",
+    "dashboard_user": "user",
+    "dashboard_password": "СМЕНИТЕ_ПАРОЛЬ",
+    "rate_limit_cam_per_minute": 30,
+    "rooms": {
+      "gostinaya": {
+        "tablet": "192.168.4.x",
+        "tablet_token": "ТОКЕН_ПЛАНШЕТА_32_HEX"
+      },
+      "prihozhaya": {
+        "tablet": "192.168.4.x",
+        "tablet_token": "ТОКЕН_ПЛАНШЕТА_32_HEX"
+      },
+      "spalnya-okno": {
+        "tablet": "192.168.4.x",
+        "tablet_token": "ТОКЕН_ПЛАНШЕТА_32_HEX"
+      },
+      "spalnya-stol": {
+        "tablet": "192.168.4.x",
+        "tablet_token": "ТОКЕН_ПЛАНШЕТА_32_HEX"
+      }
+    }
+  }
 }
