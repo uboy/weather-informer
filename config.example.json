@@ -30,19 +30,19 @@
     "rate_limit_cam_per_minute": 30,
     "rooms": {
       "gostinaya": {
-        "tablet_url": "http://192.168.4.x:8080",
+        "tablet": "192.168.4.x",
         "tablet_token": "ТОКЕН_ПЛАНШЕТА_32_HEX"
       },
       "prihozhaya": {
-        "tablet_url": "http://192.168.4.x:8080",
+        "tablet": "192.168.4.x",
         "tablet_token": "ТОКЕН_ПЛАНШЕТА_32_HEX"
       },
       "spalnya-okno": {
-        "tablet_url": "http://192.168.4.x:8080",
+        "tablet": "192.168.4.x",
         "tablet_token": "ТОКЕН_ПЛАНШЕТА_32_HEX"
       },
       "spalnya-stol": {
-        "tablet_url": "http://192.168.4.x:8080",
+        "tablet": "192.168.4.x",
         "tablet_token": "ТОКЕН_ПЛАНШЕТА_32_HEX"
       }
     }

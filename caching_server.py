@@ -2854,38 +2854,44 @@ def cam_state_snapshot(room):
 CAM_STATE_POLL_INTERVAL_S = 30.0
 
 
+def poll_cam_states_once():
+    """Один проход опроса /api/cam/state по всем комнатам (петля и тесты)."""
+    rooms = cam_section().get("rooms")
+    if not isinstance(rooms, dict):
+        return
+    for room, rc in rooms.items():
+        if not isinstance(rc, dict):
+            continue
+        tablet = (rc.get("tablet") or rc.get("host") or "").strip()
+        if not tablet:
+            continue
+        port = rc.get("port", 8080)
+        url = "http://%s:%s/api/cam/state" % (tablet, port)
+        try:
+            req = urllib.request.Request(
+                url, headers={"User-Agent": "weather-informer-cam-poll"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                st = json.loads(resp.read().decode("utf-8"))
+            if isinstance(st, dict) and "enabled" in st:
+                st["source"] = "poll"
+                st["ts"] = int(time.time())
+                CAM_REGISTRY.set_cam_state(room, st)
+        except Exception:
+            pass  # планшет недоступен - кэш не трогаем
+
+
 def cam_state_poll_loop():
     """Interim (до pull-модели сигналинга): прямой опрос /api/cam/state планшетов.
 
     Зачем: транзитная схема кладёт cam_state в реестр только от подключённого
     паблишера, и summary показывает «выключена» там, где камера фактически
-    включена, но не подключена. Поллер сам ходит на планшет :8080 и освежает
-    кэш реестра; недоступный планшет оставляет прошлый кэш. Уходит вместе с
+    включена, но не подключена. Поллер сам ходит на планшет и освежает кэш
+    реестра; недоступный планшет оставляет прошлый кэш. Уходит вместе с
     транзитной схемой после разворота pull-модели (design.md 9.2-9.3).
     """
     while True:
         try:
-            rooms = cam_section().get("rooms")
-            if isinstance(rooms, dict):
-                for room, rc in rooms.items():
-                    if not isinstance(rc, dict):
-                        continue
-                    tablet = (rc.get("tablet") or rc.get("host") or "").strip()
-                    if not tablet:
-                        continue
-                    port = rc.get("port", 8080)
-                    url = "http://%s:%s/api/cam/state" % (tablet, port)
-                    try:
-                        req = urllib.request.Request(
-                            url, headers={"User-Agent": "weather-informer-cam-poll"})
-                        with urllib.request.urlopen(req, timeout=5) as resp:
-                            st = json.loads(resp.read().decode("utf-8"))
-                        if isinstance(st, dict) and "enabled" in st:
-                            st["source"] = "poll"
-                            st["ts"] = int(time.time())
-                            CAM_REGISTRY.set_cam_state(room, st)
-                    except Exception:
-                        pass  # планшет недоступен - кэш не трогаем
+            poll_cam_states_once()
         except Exception:
             pass
         time.sleep(CAM_STATE_POLL_INTERVAL_S)
@@ -2902,7 +2908,9 @@ def cam_dispatch_publisher(conn, msg):
         to = msg.get("to") or ""
         payload = msg.get("payload")
         viewer = CAM_REGISTRY.get_viewer(to)
-        if viewer is None:
+        # Кросс-комнатная маршрутизация запрещена: издатель комнаты A не может
+        # адресовать answer/ice зрителю комнаты B даже с валидным viewer id.
+        if viewer is None or viewer.room != conn.room:
             return
         routed = {"type": mtype, "payload": payload}
         viewer.send_text(json.dumps(routed, ensure_ascii=False))
@@ -3330,8 +3338,23 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
         if not check_cam_basic_auth(self):
             send_cam_401(self)
             return
+        # LAN-only, как /api/settings: эндпоинт правит config.json
+        client_ip = RATE_LIMITER.get_client_ip(self)
+        if not RATE_LIMITER.is_local(client_ip):
+            self._send_cam_json(403, {"error": "Forbidden: LAN access only"})
+            return
         try:
             length = int(self.headers.get("Content-Length", 0) or 0)
+        except (ValueError, TypeError):
+            self._send_cam_json(400, {"error": "bad Content-Length"})
+            return
+        if length < 0:
+            self._send_cam_json(400, {"error": "bad Content-Length"})
+            return
+        if length > self.MAX_BODY_SIZE:
+            self._send_cam_json(413, {"error": "payload too large (max 64KB)"})
+            return
+        try:
             raw = self.rfile.read(length) if length > 0 else b"{}"
             req = json.loads(raw.decode("utf-8"))
             if not isinstance(req, dict):
@@ -3403,7 +3426,8 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
         if not tablet or not token:
             self._send_cam_json(502, {"error": "room not configured"})
             return
-        url = "http://%s:8080/api/snapshot?token=%s" % (tablet, urllib.parse.quote(token, safe=""))
+        port = rc.get("port", 8080)  # как в poll-петле: порт планшета из конфига комнаты
+        url = "http://%s:%s/api/snapshot?token=%s" % (tablet, port, urllib.parse.quote(token, safe=""))
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "weather-informer-cam-proxy"})
             with urllib.request.urlopen(req, timeout=15) as resp:

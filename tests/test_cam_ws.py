@@ -184,6 +184,61 @@ class TestCamWs(unittest.TestCase):
             json.dump(cfg, f, ensure_ascii=False)
 
 
+
+    def test_cross_room_dispatch_ignored(self):
+        """Item 13: издатель комнаты A не может адресовать answer/ice зрителю комнаты B."""
+        pub1 = ws_connect(self.port)
+        view2 = ws_connect(self.port)
+        try:
+            ws_hello(pub1, {"role": "publisher", "room": ROOM, "token": TABLET_TOKEN})
+            self.assertEqual(ws_recv_json(pub1).get("type"), "hello_ok")
+            ws_hello(view2, {"role": "viewer", "room": "kabinet", "token": VIEWER_TOKEN})
+            ok2 = ws_recv_json(view2)
+            self.assertEqual(ok2.get("type"), "hello_ok")
+            view2_id = ok2.get("viewer")
+            self.assertTrue(view2_id, "hello_ok must carry viewer id")
+            ws_recv_json(view2)  # cam_state snapshot, идёт сразу после hello_ok
+            # издатель gostinaya пытается отправить в зрителя kabinet
+            for mtype in ("answer", "ice"):
+                pub1.sendall(ws_client_frame(
+                    0x1, json.dumps({"type": mtype, "to": view2_id,
+                                     "payload": {"evil": True}}).encode("utf-8")))
+            view2.settimeout(1.5)
+            got = None
+            try:
+                got = view2.recv(4096)
+            except socket.timeout:
+                pass
+            self.assertIsNone(got, "cross-room answer/ice must NOT reach viewer B, got %r" % (got,))
+        finally:
+            pub1.close()
+            view2.close()
+
+    def test_same_room_dispatch_allowed(self):
+        """Позитивный контроль к кросс-комнатному: внутри комнаты answer доходит."""
+        pub1 = ws_connect(self.port)
+        view1 = ws_connect(self.port)
+        try:
+            ws_hello(pub1, {"role": "publisher", "room": ROOM, "token": TABLET_TOKEN})
+            ws_recv_json(pub1)
+            ws_hello(view1, {"role": "viewer", "room": ROOM, "token": VIEWER_TOKEN})
+            ws_recv_json(view1)  # hello_ok
+            ws_recv_json(view1)  # cam_state snapshot
+            view1.sendall(ws_client_frame(
+                0x1, json.dumps({"type": "offer", "payload": {"sdp": "o"}}).encode("utf-8")))
+            routed = ws_recv_json(pub1)
+            self.assertEqual(routed.get("type"), "offer")
+            self.assertTrue(routed.get("from"), "offer must carry viewer id")
+            pub1.sendall(ws_client_frame(
+                0x1, json.dumps({"type": "answer", "to": routed.get("from"),
+                                 "payload": {"sdp": "a"}}).encode("utf-8")))
+            ans = ws_recv_json(view1)
+            self.assertEqual(ans.get("type"), "answer",
+                             "in-room answer must reach its viewer, got %r" % ans)
+        finally:
+            pub1.close()
+            view1.close()
+
     # ---- tolerant handshake (\r\r\n legacy build) ----
 
     def test_cr_cr_lf_handshake_publisher_hello_ok(self):
@@ -615,6 +670,222 @@ class TestLenientCRLFLineReader(unittest.TestCase):
         raw = _ChunkyRaw(b"x\r\n")
         caching_server._LenientCRLFLineReader(raw).close()
         self.assertTrue(raw.closed)
+
+
+
+
+# ---- fix-package: snapshot proxy, admin gate, cross-room dispatch, poll helper ----
+
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from contextlib import contextmanager
+
+
+class _FakeTabletHandler(BaseHTTPRequestHandler):
+    behavior = "200"
+
+    def _reply(self, code, ctype, body):
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        if self.path.startswith("/api/cam/state"):
+            self._reply(200, "application/json",
+                        json.dumps({"enabled": True, "state": "IDLE"}).encode())
+            return
+        if self.behavior == "200":
+            self._reply(200, "image/jpeg", b"JPEGFAKEDATA")
+        elif self.behavior == "403":
+            self._reply(403, "application/json", json.dumps({"error": "disabled"}).encode())
+        elif self.behavior == "503":
+            self._reply(503, "application/json", json.dumps({"error": "busy"}).encode())
+        else:
+            self._reply(500, "application/json", b"{}")
+
+    def log_message(self, *a):
+        pass
+
+
+class _FakeTablet:
+    def __init__(self, behavior="200"):
+        _FakeTabletHandler.behavior = behavior
+        self.srv = ThreadingHTTPServer(("127.0.0.1", 0), _FakeTabletHandler)
+        self.port = self.srv.server_address[1]
+        self.thread = threading.Thread(target=self.srv.serve_forever, daemon=True)
+        self.thread.start()
+
+    def stop(self):
+        self.srv.shutdown()
+        self.srv.server_close()
+
+
+def _proxy_get(port, path, auth=True):
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    hdrs = basic_header(DASH_USER, DASH_PASS) if auth else {}
+    conn.request("GET", path, headers=hdrs)
+    resp = conn.getresponse()
+    body = resp.read()
+    conn.close()
+    return resp.status, body
+
+
+class TestCamSnapshotProxy(unittest.TestCase):
+    """Item 12: snapshot pass-through матрица; room config с ключом `tablet` (item 14)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.test_dir = tempfile.mkdtemp()
+        cls.config_path = os.path.join(cls.test_dir, "config.json")
+        cls.orig_config_file = caching_server.CONFIG_FILE
+        caching_server.CONFIG_FILE = cls.config_path
+        cls.write_cam_config(True)
+        cls.server = caching_server.BoundedThreadingHTTPServer(
+            ("127.0.0.1", 0), caching_server.WeatherHTTPHandler
+        )
+        cls.port = cls.server.server_address[1]
+        t = threading.Thread(target=cls.server.serve_forever)
+        t.daemon = True
+        t.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        try:
+            cls.server.shutdown()
+            cls.server.server_close()
+        except Exception:
+            pass
+        caching_server.CONFIG_FILE = cls.orig_config_file
+        shutil.rmtree(cls.test_dir, ignore_errors=True)
+
+    def tearDown(self):
+        # CAM_REGISTRY - module-level singleton: не оставлять кэш cam_state
+        # и живые соединения классам, которые unittest запустит после нас.
+        caching_server.CAM_REGISTRY.cam_state.pop(ROOM, None)
+        caching_server.CAM_REGISTRY.cam_state.pop("kabinet", None)
+
+    @classmethod
+    def write_cam_config(cls, enabled):
+        cfg = {
+            "port": 0,
+            "city_name": "Тест",
+            "lat": 56.31,
+            "lon": 44.00,
+            "cameras": {
+                "enabled": enabled,
+                "dashboard_user": DASH_USER,
+                "dashboard_password": DASH_PASS,
+                "viewer_token": VIEWER_TOKEN,
+                "rooms": {
+                    ROOM: {"tablet": "127.0.0.1", "port": 9, "tablet_token": TABLET_TOKEN},
+                    "kabinet": {"tablet": "127.0.0.1", "port": 9, "tablet_token": "tt-kab"},
+                },
+            },
+        }
+        with open(cls.config_path, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False)
+
+    @classmethod
+    def _set_tablet_rooms(cls, tablet, port):
+        cfg = {
+            "port": 0,
+            "city_name": "Тест",
+            "lat": 56.31,
+            "lon": 44.00,
+            "cameras": {
+                "enabled": True,
+                "dashboard_user": DASH_USER,
+                "dashboard_password": DASH_PASS,
+                "viewer_token": VIEWER_TOKEN,
+                "rooms": {
+                    ROOM: {"tablet": tablet, "port": port, "tablet_token": TABLET_TOKEN},
+                    "kabinet": {"tablet": tablet, "port": port, "tablet_token": "tt-kab"},
+                },
+            },
+        }
+        with open(cls.config_path, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False)
+
+    @contextmanager
+    def _with_tablet(self, behavior):
+        tab = _FakeTablet(behavior)
+        try:
+            self._set_tablet_rooms("127.0.0.1", tab.port)
+            yield tab
+        finally:
+            tab.stop()
+            self.write_cam_config(True)
+
+    def test_no_auth_401(self):
+        with self._with_tablet("200") as tab:
+            status, _ = _proxy_get(self.port, "/api/cam/snapshot?room=%s" % ROOM, auth=False)
+            self.assertEqual(status, 401)
+
+    def test_unknown_room_400(self):
+        with self._with_tablet("200"):
+            status, body = _proxy_get(self.port, "/api/cam/snapshot?room=nope")
+            self.assertEqual(status, 400)
+
+    def test_200_passthrough_with_tablet_key(self):
+        with self._with_tablet("200") as tab:
+            status, body = _proxy_get(self.port, "/api/cam/snapshot?room=%s" % ROOM)
+            self.assertEqual(status, 200)
+            self.assertEqual(body, b"JPEGFAKEDATA")
+
+    def test_503_passthrough_busy(self):
+        with self._with_tablet("503") as tab:
+            status, body = _proxy_get(self.port, "/api/cam/snapshot?room=%s" % ROOM)
+            self.assertEqual(status, 503)
+            self.assertIn(b"busy", body)
+
+    def test_403_passthrough_disabled(self):
+        with self._with_tablet("403") as tab:
+            status, body = _proxy_get(self.port, "/api/cam/snapshot?room=%s" % ROOM)
+            self.assertEqual(status, 403)
+            self.assertIn(b"disabled", body)
+
+    def test_502_unreachable(self):
+        # закрытый порт -> сервер отвечает 502 tablet unreachable
+        with self._with_tablet("200"):
+            tab = _FakeTablet("200")
+            dead = tab.port
+            tab.stop()
+            self._set_tablet_rooms("127.0.0.1", dead)
+            try:
+                status, body = _proxy_get(self.port, "/api/cam/snapshot?room=%s" % ROOM)
+                self.assertEqual(status, 502)
+            finally:
+                self.write_cam_config(True)
+
+    def test_cam_rooms_admin_lan_only_403(self):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        hdrs = basic_header(DASH_USER, DASH_PASS)
+        hdrs["X-Forwarded-For"] = "203.0.113.5"
+        conn.request("POST", "/api/cam/rooms",
+                     body=json.dumps({"action": "add", "room": "x1", "tablet": "1.2.3.4"}),
+                     headers=hdrs)
+        resp = conn.getresponse()
+        body = resp.read()
+        conn.close()
+        self.assertEqual(resp.status, 403, "non-LAN admin must be 403, got %r" % body[:80])
+
+    def test_cam_rooms_admin_body_limit_413(self):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        hdrs = basic_header(DASH_USER, DASH_PASS)
+        conn.request("POST", "/api/cam/rooms", body=b"x" * (65 * 1024), headers=hdrs)
+        resp = conn.getresponse()
+        resp.read()
+        conn.close()
+        self.assertEqual(resp.status, 413, "oversized admin body must be 413")
+
+    def test_poll_cam_states_once_with_tablet_key(self):
+        with self._with_tablet("200") as tab:
+            caching_server.poll_cam_states_once()
+            st = caching_server.CAM_REGISTRY.cam_state.get(ROOM)
+            self.assertIsInstance(st, dict, "poll must cache cam_state")
+            self.assertEqual(st.get("source"), "poll")
+            self.assertEqual(st.get("state"), "IDLE")
 
 
 if __name__ == "__main__":
