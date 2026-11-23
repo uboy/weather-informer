@@ -362,5 +362,43 @@ class TestWeatherStats(unittest.TestCase):
         self.assertAlmostEqual(w2, 9.9)
 
 
+    def test_station_split_migration_clash(self):
+        # П7 негатив: легаси fact-строка, чей переименованный двойник уже
+        # существует, УДАЛЯЕТСЯ (значения строк идентичны) - без DELETE
+        # миграционный UPDATE ловит UNIQUE и роняет каждый вызов
+        # _history_conn; легаси-наблюдение без phys_station переименовывается
+        # по канонной карте OGIMET_PHYS.
+        conn = sqlite3.connect(cs.FORECAST_DB)
+        conn.execute("DELETE FROM observations")
+        conn.execute("DELETE FROM weather_fact_history")
+        conn.execute(
+            "INSERT INTO observations (ts, station, source, temperature, "
+            "humidity, pressure, precip_mm, phys_station) VALUES "
+            "('2026-11-22T10:00:00', 'Nizhny Novgorod/Strigino', 'foreca-obs', "
+            "5.0, 60.0, 1000.0, NULL, NULL)")
+        conn.execute(
+            "INSERT INTO weather_fact_history (ts, src, loc, temperature) "
+            "VALUES ('2026-11-22T10:00:00', 'foreca-obs:STRIGINO', "
+            "'Nizhny Novgorod/Strigino', 5.0)")
+        conn.execute(
+            "INSERT INTO weather_fact_history (ts, src, loc, temperature) "
+            "VALUES ('2026-11-22T10:00:00', 'foreca-obs', "
+            "'Nizhny Novgorod/Strigino', 5.0)")
+        conn.commit()
+        conn.close()
+        chk = cs._history_conn()
+        chk.close()
+        conn = sqlite3.connect(cs.FORECAST_DB)
+        obs_src, obs_phys = conn.execute(
+            "SELECT source, phys_station FROM observations").fetchone()
+        rows = conn.execute(
+            "SELECT src FROM weather_fact_history").fetchall()
+        conn.close()
+        self.assertEqual(obs_src, "foreca-obs:STRIGINO")
+        self.assertEqual(obs_phys, "STRIGINO")
+        # легаси-дубль удалён, двойник цел: ровно одна строка
+        self.assertEqual([r[0] for r in rows], ["foreca-obs:STRIGINO"])
+
+
 if __name__ == "__main__":
     unittest.main()

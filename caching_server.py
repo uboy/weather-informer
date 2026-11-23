@@ -652,6 +652,13 @@ def _history_conn():
     conn.execute("UPDATE observations SET source = 'foreca-obs:' || phys_station "
                  "WHERE source = 'foreca-obs' AND phys_station IS NOT NULL "
                  "AND phys_station <> ''")
+    # Легаси-наблюдения без phys_station (бэкфилл до фазы 5): phys из
+    # канонной карты OGIMET_PHYS - иначе бэкфилл фактов возвращает bare
+    # 'foreca-obs' и миграция фактов снова ловит UNIQUE (прецедент 23.11).
+    for _stn, _phys in OGIMET_PHYS.items():
+        conn.execute("UPDATE observations SET source = 'foreca-obs:' || ?, "
+                     "phys_station = ? WHERE source = 'foreca-obs' "
+                     "AND station = ?", (_phys, _phys, _stn))
     # История факта погоды (статистика, эпик weather-stats): одна строка на
     # успешный фетч цепочки. UNIQUE(ts, src, loc) делает бэкфилл idempotent.
     conn.execute("""CREATE TABLE IF NOT EXISTS weather_fact_history (
@@ -660,12 +667,28 @@ def _history_conn():
         UNIQUE(ts, src, loc))""")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_wfh_ts ON weather_fact_history(ts)")
     # П7: то же переименование в истории фактов (loc = имя станции Foreca,
-    # phys_station берём из observations). Идемпотентно.
+    # phys_station берём из observations). Легаси-дубль (ts, loc), чей
+    # переименованный двойник уже существует, удаляется: значения строк
+    # идентичны, а без DELETE миграционный UPDATE ловит UNIQUE и роняет
+    # каждый вызов _history_conn (прецедент прода 23.11). Идемпотентно.
+    conn.execute("DELETE FROM weather_fact_history WHERE src = 'foreca-obs' "
+                 "AND EXISTS (SELECT 1 FROM weather_fact_history f2 "
+                 " WHERE f2.ts = weather_fact_history.ts "
+                 " AND f2.loc = weather_fact_history.loc "
+                 " AND f2.src = 'foreca-obs:' || "
+                 "(SELECT phys_station FROM observations o "
+                 " WHERE o.station = weather_fact_history.loc "
+                 " AND o.phys_station IS NOT NULL AND o.phys_station <> '' "
+                 " LIMIT 1))")
     conn.execute("UPDATE weather_fact_history SET src = 'foreca-obs:' || "
                  "(SELECT phys_station FROM observations o "
                  " WHERE o.station = weather_fact_history.loc "
                  " AND o.phys_station IS NOT NULL AND o.phys_station <> '' "
-                 " LIMIT 1) WHERE src = 'foreca-obs'")
+                 " LIMIT 1) WHERE src = 'foreca-obs' "
+                 "AND (SELECT phys_station FROM observations o "
+                 " WHERE o.station = weather_fact_history.loc "
+                 " AND o.phys_station IS NOT NULL AND o.phys_station <> '' "
+                 " LIMIT 1) IS NOT NULL")
     # Python 3.12+: DDL после неявного BEGIN (миграционные UPDATE) не
     # автокоммитится - без commit() close() откатывает создание таблиц.
     conn.commit()
@@ -701,8 +724,8 @@ def record_fact_history(src, loc, fact):
 
 
 def backfill_fact_history():
-    """Разовый перенос наблюдений observations (METAR/SYNOP/foreca-obs -
-    честные измерения станций) в weather_fact_history при старте - чтобы
+    """Перенос наблюдений observations (METAR/SYNOP/foreca-obs - честные
+    измерения станций) в weather_fact_history при старте и obs-тике - чтобы
     графики были непустыми с первого дня. forecast_points не читается:
     прогнозные части суток пишутся с valid_at=created и фильтром «факт»
     не отличимы - давали выбросы на графике (фидбек владельца 23.11).
@@ -717,7 +740,8 @@ def backfill_fact_history():
                 "SELECT ts, source, station, temperature, humidity, "
                 "CASE WHEN source = 'metar-awc' THEN pressure "
                 "     ELSE pressure * 0.750062 END, "
-                "wind_ms FROM observations")
+                "wind_ms FROM observations "
+                "WHERE source <> 'foreca-obs'")
             conn.commit()
             if cur.rowcount > 0:
                 log.info("stats: backfilled %d observation rows",
