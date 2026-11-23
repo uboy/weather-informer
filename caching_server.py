@@ -680,20 +680,26 @@ def record_fact_history(src, loc, fact):
 
 
 def backfill_fact_history():
-    """Разовый перенос fact-строк forecast_points (valid_at = created) в
-    weather_fact_history при старте - чтобы графики были непустыми с первого
-    дня. INSERT OR IGNORE: повторный вызов не дублирует строки."""
+    """Разовый перенос наблюдений observations (METAR/SYNOP/foreca-obs -
+    честные измерения станций) в weather_fact_history при старте - чтобы
+    графики были непустыми с первого дня. forecast_points не читается:
+    прогнозные части суток пишутся с valid_at=created и фильтром «факт»
+    не отличимы - давали выбросы на графике (фидбек владельца 23.11).
+    Давление: metar-awc уже в мм рт.ст., foreca-obs/ogimet-synop в гПа
+    (x0.750062). INSERT OR IGNORE: повторный вызов не дублирует строки."""
     try:
         conn = _history_conn()
         try:
             cur = conn.execute(
                 "INSERT OR IGNORE INTO weather_fact_history "
                 "(ts, src, loc, temperature, humidity, pressure_mm, wind_ms) "
-                "SELECT created, provider, loc, temperature, humidity, pressure, NULL "
-                "FROM forecast_points WHERE valid_at = created")
+                "SELECT ts, source, station, temperature, humidity, "
+                "CASE WHEN source = 'metar-awc' THEN pressure "
+                "     ELSE pressure * 0.750062 END, "
+                "NULL FROM observations")
             conn.commit()
             if cur.rowcount > 0:
-                log.info("stats: backfilled %d fact rows from forecast_points",
+                log.info("stats: backfilled %d observation rows",
                          cur.rowcount)
         finally:
             conn.close()

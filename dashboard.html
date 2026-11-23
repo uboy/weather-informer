@@ -60,6 +60,14 @@ button.del:hover { background: #6d2d39; }
 #wx_events_list { display: flex; flex-direction: column; gap: 2px; max-height: 40vh; overflow-y: auto; }
 #wx_events_list .ev { display: flex; gap: 10px; font-size: 12px; padding: 2px 4px; border-bottom: 1px solid #1d2a38; }
 #wx_events_list .ev .t { color: #64809c; white-space: nowrap; }
+#wx_csv { background: #1d2f45; padding: 6px 12px; }
+#wx_table_box { max-height: 420px; overflow: auto; }
+#wx_table_box table { border-collapse: collapse; font-size: 12px; width: 100%; }
+#wx_table_box th { position: sticky; top: 0; background: #16222e; color: #8aa0b4;
+  text-align: left; padding: 4px 8px; border-bottom: 1px solid #243447; }
+#wx_table_box td { padding: 3px 8px; border-bottom: 1px solid #16222e;
+  color: #c7d2dc; white-space: nowrap; }
+#wx_table_box tr:hover td { background: #182532; }
 </style>
 </head>
 <body>
@@ -126,6 +134,14 @@ button.del:hover { background: #6d2d39; }
       <div class="head"><span class="name">Журнал источников</span><span class="meta" id="wx_days"></span></div>
       <div id="wx_events_list"></div>
     </div>
+  </div>
+  <div class="card" style="margin-top:14px;">
+    <div class="head"><span class="name">Сырые данные</span>
+      <span style="display:flex; gap:10px; align-items:center;">
+        <span class="meta" id="wx_rows_cnt"></span>
+        <button id="wx_csv">Экспорт CSV</button>
+      </span></div>
+    <div id="wx_table_box"></div>
   </div>
 </div>
 <div id="player">
@@ -649,6 +665,13 @@ function wxDrawChart(series) {
     svg.appendChild(svgEl("line", {x1: L, y1: gy, x2: W - R, y2: gy,
       stroke: "#1d2a38", "stroke-width": 1}));
   }
+  // вертикальная сетка времени: 5 внутренних делений по оси X (фидбек
+  // владельца 23.11: «пила» без сетки - непонятно, в какое время скачки)
+  for (g = 1; g <= 5; g++) {
+    var gx = L + (W - L - R) * g / 6;
+    svg.appendChild(svgEl("line", {x1: gx, y1: T, x2: gx, y2: H - B,
+      stroke: "#1d2a38", "stroke-width": 1}));
+  }
   Object.keys(wxMetrics).forEach(function (key) {
     if (!wxMetrics[key]) return;
     var vals = [];
@@ -666,12 +689,19 @@ function wxDrawChart(series) {
     svg.appendChild(svgEl("polyline", {points: pts.join(" "), fill: "none",
       stroke: WX_COLORS[key], "stroke-width": 2, "stroke-linejoin": "round"}));
   });
-  [0, Math.floor((n - 1) / 2), n - 1].forEach(function (i, idx) {
-    var x = L + (W - L - R) * i / (n - 1);
+  // подписи оси времени по делениям сетки: 7 позиций, компактный формат
+  // (часы для 1д/7д, даты для 30д/90д)
+  var multiDay = (wxData && (wxData.days || wxDays) > 1);
+  for (g = 0; g <= 6; g++) {
+    var i = Math.round((n - 1) * g / 6);
+    var x = L + (W - L - R) * g / 6;
+    var lab = multiDay ? String(series[i].t || "").slice(8, 10) + "." +
+      String(series[i].t || "").slice(5, 7)
+      : wxTimeLabel(series[i].t).slice(-5);
     svg.appendChild(svgEl("text", {x: x, y: H - 8,
-      "text-anchor": idx === 0 ? "start" : (idx === 2 ? "end" : "middle"),
-      fill: "#64809c", "font-size": "13"}, wxTimeLabel(series[i].t)));
-  });
+      "text-anchor": g === 0 ? "start" : (g === 6 ? "end" : "middle"),
+      fill: "#64809c", "font-size": "13"}, lab));
+  }
 }
 
 function wxRenderLegend(series) {
@@ -743,6 +773,91 @@ function wxRenderEvents(events) {
   });
 }
 
+// ===== Сырые данные: таблица + экспорт CSV (фидбек владельца 23.11) =====
+// hourly-строки несут src сервера; для 30д/90д - дневные агрегаты (те же,
+// что на графике; экспортируется ровно то, что показано в таблице).
+function wxRawTable() {
+  // давление округляем до 0.1 мм: бэкфилл конвертирует гПа (x0.750062) и
+  // без округления в ячейку прилетают float-артефакты вида 753.962324000001
+  function rndP(v) { return (v == null || isNaN(v)) ? v : Math.round(v * 10) / 10; }
+  var data = wxData || {};
+  if ((data.days || wxDays) <= 7) {
+    var rows = (data.hourly || []).map(function (h) {
+      return [h.ts, h.src || "", h.temp, rndP(h.pressure_mm), h.wind_ms, h.humidity];
+    });
+    return {head: ["Время", "Источник", "Темп °C", "Давл мм", "Ветер м/с", "Влажн %"],
+      rows: rows};
+  }
+  var drows = (data.daily || []).map(function (d) {
+    return [d.day, d.tmin, d.tavg, d.tmax, rndP(d.pressure_mm), d.wind_ms, d.humidity, d.n];
+  });
+  return {head: ["Дата", "Тмин °C", "Тср °C", "Тмакс °C", "Давл мм", "Ветер м/с", "Влажн %", "Точек"],
+    rows: drows};
+}
+
+function wxRenderTable() {
+  var t = wxRawTable();
+  var box = $("wx_table_box");
+  box.textContent = "";
+  $("wx_rows_cnt").textContent = "строк: " + t.rows.length;
+  if (!t.rows.length) {
+    var s = document.createElement("span");
+    s.className = "meta";
+    s.textContent = "нет данных за выбранный диапазон";
+    box.appendChild(s);
+    return;
+  }
+  var table = document.createElement("table");
+  var tr = document.createElement("tr");
+  t.head.forEach(function (h) {
+    var th = document.createElement("th");
+    th.textContent = h;
+    tr.appendChild(th);
+  });
+  var thead = document.createElement("thead");
+  thead.appendChild(tr);
+  table.appendChild(thead);
+  var tbody = document.createElement("tbody");
+  t.rows.forEach(function (r) {
+    var tr2 = document.createElement("tr");
+    r.forEach(function (v) {
+      var td = document.createElement("td");
+      td.textContent = v == null ? "-" : String(v);
+      tr2.appendChild(td);
+    });
+    tbody.appendChild(tr2);
+  });
+  table.appendChild(tbody);
+  box.appendChild(table);
+}
+
+function wxCsvField(v) {
+  if (v == null) return "";
+  var s = String(v);
+  if (s.indexOf(";") >= 0 || s.indexOf('"') >= 0 || s.indexOf("\n") >= 0)
+    s = '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+
+function wxExportCsv() {
+  var t = wxRawTable();
+  var lines = [t.head.map(wxCsvField).join(";")];
+  t.rows.forEach(function (r) { lines.push(r.map(wxCsvField).join(";")); });
+  // BOM: Excel без него открывает UTF-8 CSV кракозябрами
+  var blob = new Blob(["\uFEFF" + lines.join("\r\n")],
+    {type: "text/csv;charset=utf-8"});
+  var a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "weather-stats-" + ((wxData && (wxData.days || wxDays)) || wxDays) +
+    "d-" + new Date().toISOString().slice(0, 10) + ".csv";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
+}
+
+$("wx_csv").addEventListener("click", wxExportCsv);
+
 function wxRender() {
   var data = wxData || {};
   var series = wxSeries();
@@ -761,6 +876,7 @@ function wxRender() {
   wxRenderLegend(series);
   wxRenderSources(data.sources || {});
   wxRenderEvents(data.events || []);
+  wxRenderTable();
 }
 
 [1, 7, 30, 90].forEach(function (d) {
