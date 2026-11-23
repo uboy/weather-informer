@@ -2,6 +2,7 @@
 """Unit-тесты для GismeteoV2Provider."""
 
 import sys
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -69,12 +70,16 @@ class GismeteoV2Tests(unittest.TestCase):
             with self.assertRaises(GismeteoV2Error):
                 self.provider.find_city_id(10.0, 10.0)
 
-    def test_parse_forecast_aggregate_and_conversions(self):
+    def test_parse_forecast_hourly_and_conversions(self):
+        # F7 (23.11): провайдер запрашивает /weather/forecast/{cid}/?days=3 -
+        # почасовые пункты со скалярами; fact = пункт, ближайший к текущему времени.
         fake_cities = {"response": {"items": [{"id": 4355, "name": "НН"}]}}
+        now = int(time.time())
         fake_forecast = {
             "response": {
                 "items": [
                     {
+                        "date": {"unix": now - 600, "local": "2026-11-23 12:00:00"},
                         "temperature": {"air": {"C": 18.4}},
                         "pressure": {"mm_hg_atm": 754.7},
                         "wind": {"speed": {"m_s": 3.6}, "direction": {"scale_8": 2}},
@@ -83,6 +88,7 @@ class GismeteoV2Tests(unittest.TestCase):
                         "description": {"full": "Переменная облачность"}
                     },
                     {
+                        "date": {"unix": now + 3 * 3600, "local": "2026-11-23 15:00:00"},
                         "temperature": {"air": {"C": 15.1}},
                         "pressure": {"mm_hg_atm": 755.2},
                         "wind": {"speed": {"m_s": 2.1}, "direction": {"scale_8": 4}},
@@ -97,7 +103,7 @@ class GismeteoV2Tests(unittest.TestCase):
         def mock_http(url, *args, **kwargs):
             if "search/cities" in url:
                 return fake_cities
-            if "forecast/aggregate" in url:
+            if "/weather/forecast/" in url:
                 return fake_forecast
             raise ValueError(f"Unexpected url: {url}")
 
@@ -112,7 +118,76 @@ class GismeteoV2Tests(unittest.TestCase):
             self.assertEqual(fact["wind_angle"], 90)  # scale_8: 2 -> 90 градусов
             self.assertEqual(fact["humidity"], 68)
             self.assertEqual(fact["icon"], "bkn_d")
-            self.assertEqual(len(res["forecasts"][0]["hours"]), 2)
+            hours = res["forecasts"][0]["hours"]
+            self.assertEqual(len(hours), 2)
+            self.assertEqual(hours[0]["hour"], 12)  # час из date.local
+            self.assertEqual(hours[1]["hour"], 15)
+            self.assertEqual(hours[1]["temp"], 15)
+
+    def test_aggregate_shape_does_not_crash(self):
+        # F7 (23.11): реальная форма /weather/forecast/aggregate/ (суточные
+        # {min,max,avg}-агрегаты из fixture 23.11) раньше роняла парсер
+        # (TypeError: float() argument ... dict). Теперь извлечение должно
+        # пройти без исключения на дефолтах.
+        fake_cities = {"response": {"items": [{"id": 4355, "name": "НН"}]}}
+        now = int(time.time())
+        fake_forecast = {
+            "response": {
+                "items": [
+                    {
+                        "date": {"unix": now, "local": "2026-11-23 00:00:00"},
+                        "temperature": {
+                            "air": {
+                                "min": {"C": 0.0, "F": 32.1},
+                                "max": {"C": 1.9, "F": 35.5},
+                                "avg": {"C": 1.0, "F": 33.9}
+                            }
+                        },
+                        "pressure": {"mm_hg_atm": {"min": 747, "max": 749}},
+                        "humidity": {"percent": {"min": 74, "max": 86, "avg": 78}},
+                        "wind": {
+                            "speed": {"max": {"m_s": 1}, "min": {"m_s": 0}},
+                            "direction": {"avg": {"scale_8": 6}}
+                        },
+                        "icon": "c3_rs1"
+                    }
+                ]
+            }
+        }
+
+        def mock_http(url, *args, **kwargs):
+            if "search/cities" in url:
+                return fake_cities
+            if "/weather/forecast/" in url:
+                return fake_forecast
+            raise ValueError(f"Unexpected url: {url}")
+
+        with patch.object(self.provider, "_http_get", side_effect=mock_http):
+            res = self.provider.get_weather(56.32, 44.00)
+            fact = res["fact"]
+            self.assertEqual(fact["temp"], 1)      # avg из агрегата
+            self.assertEqual(fact["pressure_mm"], 747)  # min-фолбэк
+            self.assertEqual(fact["humidity"], 78)  # avg
+            self.assertEqual(fact["wind_speed"], 0.0)  # min m_s
+            self.assertEqual(fact["wind_angle"], 270)  # scale_8 avg=6 -> 270
+            self.assertEqual(fact["condition"], "Ясно")  # description отсутствует
+            hours = res["forecasts"][0]["hours"]
+            self.assertEqual(len(hours), 1)
+            for h in hours:
+                self.assertIsInstance(h["temp"], int)
+                self.assertIsInstance(h["pressure_mm"], int)
+                self.assertIsInstance(h["humidity"], int)
+                self.assertIsInstance(h["wind_speed"], float)
+
+    def test_num_helper_rejects_garbage(self):
+        # Хелперы F7: незнакомые формы дают None (а не исключение)
+        self.assertIsNone(self.provider._num("abc"))
+        self.assertIsNone(self.provider._num({"unknown": "x"}))
+        self.assertIsNone(self.provider._num(True))
+        self.assertIsNone(self.provider._num(None))
+        self.assertIsNone(self.provider._num_at("not-a-dict", "temperature"))
+        self.assertEqual(self.provider._num(18), 18.0)
+        self.assertEqual(self.provider._num({"avg": 1, "min": 0}), 1.0)
 
     def test_missing_api_key_raises_quota_error(self):
         empty_provider = GismeteoV2Provider(api_key="")
