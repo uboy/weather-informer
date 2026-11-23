@@ -218,6 +218,12 @@ function wxDrawChart(series) {
 	[0.25, 0.5, 0.75].forEach(function (f) {
 		svg.appendChild(svgEl("line", { x1: padL, x2: W - padR, y1: padT + f * (H - padT - padB), y2: padT + f * (H - padT - padB), stroke: "#1f2b3a", "stroke-width": "1" }));
 	});
+	// вертикальная сетка времени: 5 внутренних делений по оси X (фидбек
+	// владельца 23.11: без сетки непонятно, в какое время скачки)
+	for (var gi = 1; gi <= 5; gi++) {
+		var gx = padL + (W - padL - padR) * gi / 6;
+		svg.appendChild(svgEl("line", { x1: gx, y1: padT, x2: gx, y2: H - padB, stroke: "#1f2b3a", "stroke-width": "1" }));
+	}
 	var n = pts.length;
 	keys.forEach(function (k) {
 		var vals = pts.map(function (r) { return r[k]; }).filter(function (v) { return v != null; });
@@ -233,10 +239,16 @@ function wxDrawChart(series) {
 		});
 		if (d) svg.appendChild(svgEl("polyline", { points: d, fill: "none", stroke: WX_COLORS[k], "stroke-width": "2" }));
 	});
-	[[padL, pts[0]], [W / 2, pts[Math.floor(n / 2)]], [W - padR, pts[n - 1]]].forEach(function (p) {
-		svg.appendChild(svgEl("text", { x: p[0], y: H - 6, "text-anchor": p[0] < 50 ? "start" : (p[0] > W - 50 ? "end" : "middle"), fill: "#8aa0b4", "font-size": "13" },
-			wxTimeLabel(p[1].t)));
-	});
+	// подписи оси времени по делениям сетки: 7 позиций; часы для 1д/7д, даты для 30д/90д
+	var multiDay = (wxData && (wxData.days || wxDays) > 1);
+	for (var ti = 0; ti <= 6; ti++) {
+		var idx = Math.round((n - 1) * ti / 6);
+		var tx = padL + (W - padL - padR) * ti / 6;
+		var lab = multiDay ? String(pts[idx].t || "").slice(8, 10) + "." + String(pts[idx].t || "").slice(5, 7)
+			: wxTimeLabel(pts[idx].t).slice(-5);
+		svg.appendChild(svgEl("text", { x: tx, y: H - 6, "text-anchor": ti === 0 ? "start" : (ti === 6 ? "end" : "middle"), fill: "#8aa0b4", "font-size": "13" },
+			lab));
+	}
 }
 
 function wxRenderLegend(series) {
@@ -280,7 +292,10 @@ function wxRenderEvents(events) {
 	(events || []).slice(-10).forEach(function (ev) {
 		var row = document.createElement("div");
 		row.className = "ev";
-		var t = ev.ts ? new Date(String(ev.ts).replace(" ", "T")) : null;
+		// сервер кладёт в ev.ts epoch-секунды (как в dashboard.html: x1000);
+		// ISO-строка оставлена как запас на случай смены формата
+		var num = Number(ev.ts) || 0;
+		var t = num ? new Date(num > 1e12 ? num : num * 1000) : null;
 		var when = t && !isNaN(t.getTime()) ? t.toLocaleString() : String(ev.ts || "");
 		row.innerHTML = "<b>" + when + "</b> " + wxEvText(ev);
 		box.appendChild(row);

@@ -134,38 +134,47 @@ class TestWeatherStats(unittest.TestCase):
         conn.close()
         self.assertEqual(n, 1)
 
-    def test_backfill_idempotent(self):
-        # fact-строки (valid_at = created) переносятся, non-fact (valid_at !=
-        # created) - нет; повторный вызов не дублирует.
+    def test_backfill_from_observations(self):
+        # Источник бэкфилла - observations (честные измерения станций):
+        # давление конвертируется (metar-awc уже мм, foreca-obs - гПа),
+        # повторный вызов не дублирует; forecast_points не читается вовсе,
+        # прогнозная часть суток (valid_at=created) в историю не попадает
+        # (регрессия дефекта «пилы», найденного владельцем 23.11).
         conn = sqlite3.connect(cs.FORECAST_DB)
         conn.execute("DELETE FROM forecast_points")
         conn.execute("DELETE FROM weather_fact_history")
         now = "2026-11-23T12:00:00"
-        rows = [
-            # fact-строки: переносятся
-            (now, "Yandex", "56.3:44.0", now, 5.0, 60.0, 745.0, None, None),
-            (now, "Gismeteo", "56.3:44.0", now, 4.0, 61.0, 744.0, None, None),
-            # почасовой прогноз: НЕ переносится
-            (now, "Yandex", "56.3:44.0", "2026-11-23T13:00:00", 6.0, 62.0, 746.0, None, None),
+        obs_rows = [
+            (now, "Nizhny Novgorod/Strigino", "foreca-obs",
+             5.0, 60.0, 1000.0, None, "STRIGINO"),
+            ("2026-11-23T12:30:00", "UWGG", "metar-awc",
+             4.0, 61.0, 744.0, None, "UWGG"),
+        ]
+        conn.executemany(
+            "INSERT INTO observations (ts, station, source, temperature, "
+            "humidity, pressure, precip_mm, phys_station) "
+            "VALUES (?,?,?,?,?,?,?,?)", obs_rows)
+        fp_rows = [
+            (now, "Gismeteo", "56.3:44.0", now, 20.0, 65.0, 745.0, None, None),
         ]
         conn.executemany(
             "INSERT INTO forecast_points (created, provider, loc, valid_at, "
             "temperature, humidity, pressure, precip_prob, precip_mm) "
-            "VALUES (?,?,?,?,?,?,?,?,?)", rows)
+            "VALUES (?,?,?,?,?,?,?,?,?)", fp_rows)
         conn.commit()
         cs.backfill_fact_history()
         cs.backfill_fact_history()  # второй прогон: 0 новых строк
         n = conn.execute(
             "SELECT COUNT(*) FROM weather_fact_history").fetchone()[0]
-        temps = sorted(r[0] for r in conn.execute(
-            "SELECT temperature FROM weather_fact_history").fetchall())
-        winds = conn.execute(
-            "SELECT COUNT(*) FROM weather_fact_history "
-            "WHERE wind_ms IS NOT NULL").fetchone()[0]
+        rows = conn.execute(
+            "SELECT src, pressure_mm, temperature FROM weather_fact_history "
+            "ORDER BY ts").fetchall()
         conn.close()
-        self.assertEqual(n, 2)          # только fact-строки
-        self.assertEqual(temps, [4.0, 5.0])
-        self.assertEqual(winds, 0)      # wind в forecast_points нет -> NULL
+        self.assertEqual(n, 2)      # observations; forecast_points игнор
+        self.assertEqual([r[0] for r in rows], ["foreca-obs", "metar-awc"])
+        self.assertAlmostEqual(rows[0][1], 750.062, places=2)  # гПа -> мм
+        self.assertAlmostEqual(rows[1][1], 744.0, places=3)    # уже мм
+        self.assertEqual(rows[0][2], 5.0)
 
     def test_daily_aggregates_on_fixture(self):
         # Три факта за сегодня с разными ts (в одну секунду UNIQUE(ts,src,loc)
