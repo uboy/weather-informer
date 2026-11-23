@@ -145,6 +145,11 @@ function fmtV(v) {
 	return (v > 0 && (v % 1)) ? "+" + v.toFixed(1) : String(Math.round(v * 10) / 10);
 }
 
+function fmtP(v) {
+	if (v == null || isNaN(v)) return "-";
+	return String(Math.round(v * 10) / 10);
+}
+
 // адрес сервера кэширования: из локального /api/settings планшета
 function loadServerBase(cb) {
 	fetch("/api/settings", { cache: "no-store" }).then(function (r) {
@@ -299,7 +304,7 @@ function wxRenderLegend(series) {
 		var vals = series.map(function (r) { return r[k]; }).filter(function (v) { return v != null; });
 		if (!vals.length) return;
 		var mn = Math.min.apply(null, vals), mx = Math.max.apply(null, vals);
-		parts.push('<span style="color:' + WX_COLORS[k] + '">&#9632;</span> ' + WX_LABELS[k] + ": " + fmtV(mn) + " .. " + fmtV(mx));
+		parts.push('<span style="color:' + WX_COLORS[k] + '">&#9632;</span> ' + WX_LABELS[k] + ": " + fmtP(mn) + " .. " + fmtP(mx));
 	});
 	$("wx_legend").innerHTML = parts.join(" &nbsp; ");
 }
