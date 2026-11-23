@@ -205,10 +205,28 @@ class TestWeatherStats(unittest.TestCase):
         st, raw = self.get("/api/weather/stats?days=1")
         self.assertEqual(st, 200)
         j = json.loads(raw)
-        self.assertEqual(j["sources"].get("Yandex", {}).get("ok"), 1)
+        # журнал добавляет счётчик ok_journal источнику
+        self.assertEqual(j["sources"].get("Yandex", {}).get("ok_journal"), 1)
         kinds = [e["kind"] for e in j["events"]]
         self.assertIn("src_switch", kinds)
         self.assertIn("chain_fail", kinds)
+
+    def test_sources_base_from_history_rows(self):
+        # Источники панели строятся из истории фактов даже при пустом журнале
+        # (переживает рестарт и кольцо 4000).
+        conn = sqlite3.connect(cs.FORECAST_DB)
+        conn.execute("DELETE FROM weather_fact_history")
+        conn.commit()
+        conn.close()
+        cs._WEATHER_JOURNAL.clear()
+        cs.record_fact_history("HistSrc", "loc1", {"temp": 5.0})
+        st, raw = self.get("/api/weather/stats?days=7")
+        self.assertEqual(st, 200)
+        j = json.loads(raw)
+        hs = j["sources"].get("HistSrc")
+        self.assertIsNotNone(hs, "источник из истории не найден: %r" % j["sources"])
+        self.assertEqual(hs["points"], 1)
+        self.assertIsNotNone(hs["last_ts"])
 
     def test_no_secrets_in_response(self):
         cs.cached_data = {"src": "Yandex", "city_name": "НН",

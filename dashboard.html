@@ -366,6 +366,9 @@ try {
 // ?tab=wx с корневой ссылки «Статистика погоды» (settings.html)
 var tabParam = (location.search || "").match(/[?&]tab=(wx|mon|cam)\b/);
 if (tabParam) activeTab = tabParam[1];
+// вкладку применяем сразу: не ждём /api/cam/viewer-token (при сбое auth
+// остаёмся на «Камерах», а статистика погоды auth и не требует)
+setTab(activeTab);
 
 function setTab(t) {
   activeTab = t;
@@ -707,8 +710,9 @@ function wxRenderSources(sources) {
   names.forEach(function (name) {
     var st = sources[name] || {};
     var row = document.createElement("div");
-    row.textContent = name + ": ок " + (st.ok || 0) +
-      (st.last_ok_ts ? ", последний " + new Date(st.last_ok_ts * 1000).toLocaleTimeString() : "");
+    row.textContent = name + ": точек " + (st.points || 0) +
+      (st.last_ts ? ", последняя " + wxTimeLabel(st.last_ts) : "") +
+      (st.ok_journal ? " (журнал: ок " + st.ok_journal + ")" : "");
     box.appendChild(row);
   });
 }
@@ -1214,7 +1218,6 @@ api("/api/cam/viewer-token", function (tok) {
   buildGrid();
   buildMonGrid();
   renderAdminRooms();
-  setTab(activeTab);
   pollTimer = setInterval(pollLoop, 5000);
   setInterval(monPoll, 30000);
 });

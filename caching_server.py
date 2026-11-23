@@ -3610,11 +3610,12 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
 
         hourly = []
         daily = []
+        hourly_rows = []
         conn = None
         try:
             conn = _history_conn()
             cutoff = "datetime('now', '-%d days')" % days
-            hourly = conn.execute(
+            hourly_rows = conn.execute(
                 "SELECT ts, src, temperature, humidity, pressure_mm, wind_ms "
                 "FROM weather_fact_history WHERE ts >= " + cutoff +
                 " ORDER BY ts LIMIT 20000").fetchall()
@@ -3637,7 +3638,7 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
         hourly = [
             {"ts": r[0], "src": r[1], "temp": r[2], "humidity": r[3],
              "pressure_mm": r[4], "wind_ms": r[5]}
-            for r in hourly
+            for r in hourly_rows
         ]
         daily = [
             {"day": r[0], "tmin": r[1], "tavg": r[2], "tmax": r[3],
@@ -3645,15 +3646,20 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
             for r in daily
         ]
 
-        # Панель источников: агрегат по fetch_ok из журнала в окне days.
+        # Панель источников: база - строки истории фактов (переживает рестарт
+        # и кольцо журнала на 4000 событий), журнал добавляет счётчик ok.
         sources = {}
+        for r in hourly_rows:
+            st = sources.setdefault(str(r[1]), {"points": 0, "last_ts": None,
+                                                "ok_journal": 0})
+            st["points"] += 1
+            st["last_ts"] = r[0]
         for rec in weather_journal_query(hours=days * 24):
-            s = rec.get("source")
-            if not s:
-                continue
-            st = sources.setdefault(s, {"ok": 0, "last_ok_ts": None})
-            if rec.get("kind") == "fetch_ok":
-                st["ok"] += 1
+            if rec.get("kind") == "fetch_ok" and rec.get("source"):
+                st = sources.setdefault(str(rec["source"]),
+                                        {"points": 0, "last_ts": None,
+                                         "ok_journal": 0})
+                st["ok_journal"] += 1
                 st["last_ok_ts"] = rec.get("ts")
         events = weather_journal_query(hours=days * 24)[-500:]
 
@@ -4485,6 +4491,10 @@ code {{ color: #81D4FA; }}
                 "update_interval_sec": cfg.get("update_interval_sec", 300),
                 "direct_update_interval_sec": cfg.get("direct_update_interval_sec", 1800),
                 "port": cfg.get("port", 8085),
+                # роль узла: isServer-гейт settings.html опирается и на неё,
+                # чтобы серверный UI показывался и за туннелем/проксированием
+                # (когда видимый порт не 8085)
+                "role": cfg.get("role", ""),
                 "nearest_airport": find_nearest_icao(cur_lat, cur_lon),
                 # адреса планшетов камерных комнат (подсказка в settings UI);
                 # tablet_token сознательно не отдаём - только room и tablet
