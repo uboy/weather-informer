@@ -235,10 +235,138 @@ function wxSeries() {
 	});
 }
 
+var wxPlot = null;
+function wxTipEl() {
+	var tip = document.getElementById("wx_tip");
+	if (!tip) {
+		tip = document.createElement("div");
+		tip.id = "wx_tip";
+		tip.style.cssText = "position:fixed;display:none;z-index:99;" +
+			"background:#101a26;border:1px solid #2a3b4f;border-radius:6px;" +
+			"padding:6px 9px;font:13px/1.45 sans-serif;color:#dbe6f0;" +
+			"pointer-events:none;max-width:340px;box-shadow:0 2px 8px rgba(0,0,0,.5)";
+		document.body.appendChild(tip);
+	}
+	return tip;
+}
+function wxHoverLongT(ms) {
+	var d = new Date(ms);
+	return (d.getDate() < 10 ? "0" : "") + d.getDate() + "." +
+		(d.getMonth() + 1 < 10 ? "0" : "") + (d.getMonth() + 1) + " " +
+		(d.getHours() < 10 ? "0" : "") + d.getHours() + ":" +
+		(d.getMinutes() < 10 ? "0" : "") + d.getMinutes();
+}
+function wxHoverShortT(ms) {
+	var d = new Date(ms);
+	if (wxPlot && wxPlot.days > 7) {
+		return (d.getDate() < 10 ? "0" : "") + d.getDate() + "." +
+			(d.getMonth() + 1 < 10 ? "0" : "") + (d.getMonth() + 1);
+	}
+	return (d.getHours() < 10 ? "0" : "") + d.getHours() + ":" +
+		(d.getMinutes() < 10 ? "0" : "") + d.getMinutes();
+}
+function wxHoverColor(s, k) {
+	if (wxPlot && wxPlot.hourly && wxPlot.srcs && wxPlot.srcs.length > 1 && wxPlot.srcs.indexOf(s) >= 0) {
+		return wxSrcColor(wxPlot.srcs, s);
+	}
+	return WX_COLORS[k];
+}
+function wxHoverHide() {
+	var tip = document.getElementById("wx_tip");
+	if (tip) tip.style.display = "none";
+	var svg = $("wx_chart");
+	if (!svg) return;
+	var ch = svg.querySelector("#wx_xhair");
+	if (ch) ch.setAttribute("visibility", "hidden");
+	var dg = svg.querySelector("#wx_hoverdots");
+	if (dg && dg.parentNode) dg.parentNode.removeChild(dg);
+}
+function wxHoverMove(cx, cy) {
+	var P = wxPlot;
+	var svg = $("wx_chart");
+	var tip = wxTipEl();
+	if (!P || !P.timed || !svg || !P.panels.length) { wxHoverHide(); return; }
+	var rect = svg.getBoundingClientRect();
+	if (!rect.width) { wxHoverHide(); return; }
+	var vx = (cx - rect.left) * P.W / rect.width;
+	if (vx < P.padL - 4 || vx > P.W - P.padR + 4) { wxHoverHide(); return; }
+	var t = P.t0 + (vx - P.padL) / (P.W - P.padL - P.padR) * (P.tN - P.t0);
+	var ch = svg.querySelector("#wx_xhair");
+	if (!ch) {
+		ch = svgEl("line", { id: "wx_xhair", stroke: "#3d5166", "stroke-width": "1", "stroke-dasharray": "4,4", visibility: "hidden" });
+		svg.appendChild(ch);
+	}
+	ch.setAttribute("x1", vx.toFixed(1));
+	ch.setAttribute("x2", vx.toFixed(1));
+	ch.setAttribute("y1", P.padT);
+	ch.setAttribute("y2", P.H - P.padB);
+	ch.setAttribute("visibility", "visible");
+	var tol = P.days <= 1 ? 2 * 3600000 : (P.days <= 7 ? 4 * 3600000 : 36 * 3600000);
+	var html = "<b>" + wxHoverLongT(t) + "</b>";
+	var dots = [];
+	P.panels.forEach(function (p) {
+		var unit = (WX_LABELS[p.k].split(",")[1] || "").trim();
+		var best = {};
+		P.pts.forEach(function (r) {
+			if (r[p.k] == null) return;
+			var rt = P.tmsF(r.t);
+			if (rt == null) return;
+			var dd = Math.abs(rt - t);
+			if (dd > tol) return;
+			var key = r.src || "";
+			if (!best[key] || dd < best[key].dd) best[key] = { dd: dd, t: rt, v: r[p.k] };
+		});
+		var names = Object.keys(best).sort();
+		if (!names.length) return;
+		html += "<div style=\"margin-top:4px;color:" + WX_COLORS[p.k] + "\">" + WX_LABELS[p.k] + "</div>";
+		names.forEach(function (s) {
+			var b = best[s];
+			html += "<div><span style=\"color:" + wxHoverColor(s, p.k) + "\">&#9632;</span> " +
+				(s ? s + " " : "") +
+				"<span style=\"color:#8aa0b4\">" + wxHoverShortT(b.t) + "</span> <b>" +
+				fmtP(b.v) + "</b> " + unit + "</div>";
+			var hx = P.padL + (P.W - P.padL - P.padR) * (b.t - P.t0) / (P.tN - P.t0);
+			var hy = p.top + (1 - (b.v - p.mn) / (p.mx - p.mn)) * P.panelH;
+			dots.push([hx, hy, wxHoverColor(s, p.k)]);
+		});
+	});
+	var dg = svg.querySelector("#wx_hoverdots");
+	if (dg && dg.parentNode) dg.parentNode.removeChild(dg);
+	if (dots.length) {
+		dg = svgEl("g", { id: "wx_hoverdots" });
+		dots.forEach(function (d3) {
+			dg.appendChild(svgEl("circle", { cx: d3[0].toFixed(1), cy: d3[1].toFixed(1), r: "4", fill: d3[2], stroke: "#0d1420", "stroke-width": "1.5" }));
+		});
+		svg.appendChild(dg);
+	}
+	tip.innerHTML = html;
+	tip.style.display = "block";
+	var tw = tip.offsetWidth || 300, th = tip.offsetHeight || 120;
+	var lx = cx + 14, ly = cy + 12;
+	if (lx + tw > window.innerWidth - 8) lx = cx - tw - 14;
+	if (ly + th > window.innerHeight - 8) ly = cy - th - 12;
+	if (lx < 8) lx = 8;
+	if (ly < 8) ly = 8;
+	tip.style.left = lx + "px";
+	tip.style.top = ly + "px";
+}
+function wxHoverBind(svg) {
+	if (svg.__wxBound) return;
+	svg.__wxBound = true;
+	svg.addEventListener("mousemove", function (e) { wxHoverMove(e.clientX, e.clientY); });
+	svg.addEventListener("mouseleave", function () { wxHoverHide(); });
+	svg.addEventListener("touchstart", function (e) {
+		if (e.touches && e.touches.length) wxHoverMove(e.touches[0].clientX, e.touches[0].clientY);
+	}, { passive: true });
+	svg.addEventListener("touchmove", function (e) {
+		if (e.touches && e.touches.length) wxHoverMove(e.touches[0].clientX, e.touches[0].clientY);
+	}, { passive: true });
+	svg.addEventListener("touchend", function () { wxHoverHide(); });
+}
 function wxDrawChart(series) {
 	var svg = $("wx_chart");
 	while (svg.firstChild) svg.removeChild(svg.firstChild);
-	var W = 1000, panelH = 150, gap = 10, padT = 20, padB = 30, padL = 58, padR = 12;
+	var W = 1000, panelH = 150, gap = 10, padT = 20, padB = 30, padL = 58, padR = 46;
 	var keys = [];
 	Object.keys(wxMetrics).forEach(function (k) { if (wxMetrics[k]) keys.push(k); });
 	var pts = series.filter(function (r) {
@@ -249,10 +377,11 @@ function wxDrawChart(series) {
 		var t = svgEl("text", { x: W / 2, y: 170, "text-anchor": "middle", fill: "#8aa0b4", "font-size": "20" },
 			"нет данных за выбранный диапазон (история копится с включения фичи)");
 		svg.appendChild(t);
+		wxHoverHide();
 		return;
 	}
 	// П9: одна метрика = одна панель со СВОЕЙ осью Y: числа, единицы
-	// (WX_LABELS), горизонтальная сетка на значениях делений; ось X общая.
+	// (WX_LABELS), горизонтальная сетка; ось X общая.
 	var H = padT + keys.length * panelH + (keys.length - 1) * gap + padB;
 	svg.setAttribute("viewBox", "0 0 1000 " + H);
 	function tms(v) { var t = new Date(String(v).replace(" ", "T")).getTime(); return isFinite(t) ? t : null; }
@@ -267,33 +396,63 @@ function wxDrawChart(series) {
 	// сшивка разных станций одной линией давала ложные прыжки (фидбек П9:
 	// metar-awc аэропорт 3.1 vs ogimet-synop городская станция 1.0 в 00:00).
 	var hourly = (wxData && (wxData.days || wxDays) <= 7) && wxSrcSel() === "";
+	var daysG = (wxData && (wxData.days || wxDays)) || 1;
 	var srcs = [];
 	if (hourly) {
 		var seen = {};
 		pts.forEach(function (r) { if (r.src && !seen[r.src]) { seen[r.src] = 1; srcs.push(r.src); } });
 		srcs.sort();
 	}
+	// П10: геометрия для hover-тултипа (наполняется в цикле панелей ниже)
+	wxPlot = {
+		pts: pts, keys: keys, timed: timed, t0: t0, tN: tN,
+		W: W, H: H, padL: padL, padR: padR, panelH: panelH,
+		days: daysG, hourly: hourly, srcs: srcs, tmsF: tms, panels: []
+	};
 	keys.forEach(function (k, ki) {
 		var top = padT + ki * (panelH + gap);
 		var vals = pts.map(function (r) { return r[k]; }).filter(function (v) { return v != null; });
 		if (vals.length < 2) return;
 		var ticks = wxNiceTicks(Math.min.apply(null, vals), Math.max.apply(null, vals));
 		var mn = ticks[0], mx = ticks[ticks.length - 1];
+		wxPlot.panels.push({ k: k, top: top, mn: mn, mx: mx });
 		var dec = (ticks.length > 1 && (ticks[1] - ticks[0]) < 1) ? 1 : 0;
 		function yOf(v) { return top + (1 - (v - mn) / (mx - mn)) * panelH; }
-		svg.appendChild(svgEl("text", { x: padL, y: top - 6, fill: WX_COLORS[k], "font-size": "13" }, WX_LABELS[k]));
+		// П10: заголовок панели крупнее (читаемость с планшета)
+		svg.appendChild(svgEl("text", { x: padL, y: top - 6, fill: WX_COLORS[k], "font-size": "16" }, WX_LABELS[k]));
 		ticks.forEach(function (tv) {
 			var y = yOf(tv);
 			svg.appendChild(svgEl("line", { x1: padL, x2: W - padR, y1: y.toFixed(1), y2: y.toFixed(1), stroke: "#1f2b3a", "stroke-width": "1" }));
-			svg.appendChild(svgEl("text", { x: padL - 6, y: (y + 4).toFixed(1), "text-anchor": "end", fill: "#8aa0b4", "font-size": "12" }, tv.toFixed(dec)));
+			// П10: подписи делений крупнее/ярче и С ДВУХ СТОРОН (фидбек:
+			// «подписи по сторонам должны быть»)
+			svg.appendChild(svgEl("text", { x: padL - 6, y: (y + 5).toFixed(1), "text-anchor": "end", fill: "#c2d1e0", "font-size": "15" }, tv.toFixed(dec)));
+			svg.appendChild(svgEl("text", { x: W - padR + 6, y: (y + 5).toFixed(1), "text-anchor": "start", fill: "#c2d1e0", "font-size": "15" }, tv.toFixed(dec)));
 		});
 		function addLine(rows, color) {
-			var d = "";
+			// П10: линия рвётся на дырах >3.5ч (часовой диапазон) - редкие
+			// источники не мостят через график ложными соединителями;
+			// одиночная точка = маркер-кружок.
+			var HOUR = 3600000;
+			var gapTol = daysG <= 7 ? 3.5 * HOUR : 36 * HOUR;
+			var segs = [], cur = [], prevT = null;
 			rows.forEach(function (r) {
-				var x = xOf(r), y = yOf(r[k]);
-				d += (d ? " " : "") + x.toFixed(1) + "," + y.toFixed(1);
+				var tt = timed ? tms(r.t) : null;
+				if (timed && prevT != null && tt - prevT > gapTol) { segs.push(cur); cur = []; }
+				cur.push(r);
+				prevT = tt;
 			});
-			if (d) svg.appendChild(svgEl("polyline", { points: d, fill: "none", stroke: color, "stroke-width": "2" }));
+			if (cur.length) segs.push(cur);
+			segs.forEach(function (seg) {
+				if (seg.length >= 2) {
+					var d = "";
+					seg.forEach(function (r) {
+						d += (d ? " " : "") + xOf(r).toFixed(1) + "," + yOf(r[k]).toFixed(1);
+					});
+					svg.appendChild(svgEl("polyline", { points: d, fill: "none", stroke: color, "stroke-width": "2" }));
+				} else if (seg.length === 1) {
+					svg.appendChild(svgEl("circle", { cx: xOf(seg[0]).toFixed(1), cy: yOf(seg[0][k]).toFixed(1), r: "3.5", fill: color }));
+				}
+			});
 		}
 		if (hourly && srcs.length > 1) {
 			srcs.forEach(function (s) {
@@ -305,17 +464,16 @@ function wxDrawChart(series) {
 		}
 	});
 	if (timed) {
-		var days = (wxData && (wxData.days || wxDays)) || 1;
 		var HOUR = 3600000, DAY = 86400000;
-		var tickMs = days <= 1 ? HOUR : (days <= 7 ? 6 * HOUR : (days <= 30 ? 5 * DAY : 15 * DAY));
-		var labMs = days <= 1 ? 3 * HOUR : (days <= 7 ? 12 * HOUR : tickMs);
+		var tickMs = daysG <= 1 ? HOUR : (daysG <= 7 ? 6 * HOUR : (daysG <= 30 ? 5 * DAY : 15 * DAY));
+		var labMs = daysG <= 1 ? 3 * HOUR : (daysG <= 7 ? 12 * HOUR : tickMs);
 		var ticks = [];
-		if (days <= 7) {
+		if (daysG <= 7) {
 			var tt = Math.ceil(t0 / tickMs) * tickMs;
 			for (; tt <= tN; tt += tickMs) {
 				var dt = new Date(tt), hh = dt.getHours(), lab = "";
 				if (tt % labMs === 0) {
-					lab = days <= 1 ? (hh < 10 ? "0" : "") + hh
+					lab = daysG <= 1 ? (hh < 10 ? "0" : "") + hh
 						: (dt.getDate() < 10 ? "0" : "") + dt.getDate() + "." +
 							(dt.getMonth() + 1 < 10 ? "0" : "") + (dt.getMonth() + 1) +
 							(hh ? " " + (hh < 10 ? "0" : "") + hh : "");
@@ -338,6 +496,7 @@ function wxDrawChart(series) {
 			if (tk.lab) svg.appendChild(svgEl("text", { x: gx.toFixed(1), y: H - 6, "text-anchor": "middle", fill: "#8aa0b4", "font-size": "13" }, tk.lab));
 		});
 	}
+	wxHoverBind(svg);
 }
 
 function wxRenderLegend(series) {
