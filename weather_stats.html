@@ -116,7 +116,25 @@ svg { width: 100%; height: auto; display: block; }
 // с планшета (files/web), данные берёт с сервера кэширования через
 // /api/weather/stats (без auth, CORS открыт). ES5, без внешних CDN.
 var WX_COLORS = { temp: "#ffb457", pressure_mm: "#6fd394", wind_ms: "#57b4ff", humidity: "#c792ea" };
-var WX_LABELS = { temp: "Темп, °C", pressure_mm: "Давл, мм", wind_ms: "Ветер, м/с", humidity: "Влажн, %" };
+var WX_LABELS = { temp: "Темп, °C", pressure_mm: "Давление, мм рт.ст.", wind_ms: "Ветер, м/с", humidity: "Влажность, %" };
+// П9: цвета линий источников (панель «Все станции» рисует
+// каждый источник отдельной линией, без сшивки между станциями)
+var WX_SRC_PALETTE = ["#57b4ff", "#6fd394", "#ffb454", "#c792ea", "#ff6b6b", "#4dd0c4", "#ffd54f", "#9fa8da", "#f48fb1", "#a3e635"];
+function wxSrcColor(srcs, s) { return WX_SRC_PALETTE[srcs.indexOf(s) % WX_SRC_PALETTE.length]; }
+// П9: шкалы по 4-5 целым/полушаговым делениям (1/2/5 от порядка)
+function wxNiceTicks(mn, mx) {
+	var span = mx - mn;
+	if (!(span > 0)) { mn -= 1; mx += 1; span = 2; }
+	var raw = span / 4;
+	var p = Math.pow(10, Math.floor(Math.log(raw) / Math.LN10));
+	var s = raw / p;
+	var step = (s >= 5 ? 5 : (s >= 2 ? 2 : 1)) * p;
+	var lo = Math.floor(mn / step) * step;
+	var hi = Math.ceil(mx / step) * step;
+	var out = [], v;
+	for (v = lo; v <= hi + step / 2; v += step) out.push(v);
+	return out;
+}
 var wxDays = 7;
 var wxMetrics = { temp: true, pressure_mm: true, wind_ms: false, humidity: true };
 var wxData = null;
@@ -220,46 +238,71 @@ function wxSeries() {
 function wxDrawChart(series) {
 	var svg = $("wx_chart");
 	while (svg.firstChild) svg.removeChild(svg.firstChild);
-	var W = 1000, H = 340, padL = 10, padR = 10, padT = 14, padB = 26;
+	var W = 1000, panelH = 150, gap = 10, padT = 20, padB = 30, padL = 58, padR = 12;
 	var keys = [];
 	Object.keys(wxMetrics).forEach(function (k) { if (wxMetrics[k]) keys.push(k); });
 	var pts = series.filter(function (r) {
 		return keys.some(function (k) { return r[k] != null; });
 	});
-	if (pts.length < 2) {
-		var t = svgEl("text", { x: W / 2, y: H / 2, "text-anchor": "middle", fill: "#8aa0b4", "font-size": "20" },
+	if (!keys.length || pts.length < 2) {
+		svg.setAttribute("viewBox", "0 0 1000 340");
+		var t = svgEl("text", { x: W / 2, y: 170, "text-anchor": "middle", fill: "#8aa0b4", "font-size": "20" },
 			"нет данных за выбранный диапазон (история копится с включения фичи)");
 		svg.appendChild(t);
 		return;
 	}
-	[0.25, 0.5, 0.75].forEach(function (f) {
-		svg.appendChild(svgEl("line", { x1: padL, x2: W - padR, y1: padT + f * (H - padT - padB), y2: padT + f * (H - padT - padB), stroke: "#1f2b3a", "stroke-width": "1" }));
-	});
-	// ось X по времени точек; деления по календарю с шагом от диапазона
-	// (фидбек П6 23.11: «деление не по часам, а по 7 часов» - была разметка
-	// 7 равных позиций; теперь 1д = деление каждый час + подпись каждые 3ч,
-	// 7д = деление каждые 6ч + подпись каждые 12ч, 30д/90д = каждые 5/15 дней)
+	// П9: одна метрика = одна панель со СВОЕЙ осью Y: числа, единицы
+	// (WX_LABELS), горизонтальная сетка на значениях делений; ось X общая.
+	var H = padT + keys.length * panelH + (keys.length - 1) * gap + padB;
+	svg.setAttribute("viewBox", "0 0 1000 " + H);
 	function tms(v) { var t = new Date(String(v).replace(" ", "T")).getTime(); return isFinite(t) ? t : null; }
 	var n = pts.length;
 	var t0 = tms(pts[0].t), tN = tms(pts[n - 1].t);
 	var timed = t0 != null && tN != null && tN > t0;
-	function xOf(pt, i) {
-		if (!timed) return padL + (n > 1 ? i / (n - 1) : 0) * (W - padL - padR);
+	function xOf(pt) {
+		if (!timed) return padL + (n > 1 ? pts.indexOf(pt) / (n - 1) : 0) * (W - padL - padR);
 		return padL + (W - padL - padR) * (tms(pt.t) - t0) / (tN - t0);
 	}
-	keys.forEach(function (k) {
+	// «Все станции» (почасовые данные) = отдельная линия на источник:
+	// сшивка разных станций одной линией давала ложные прыжки (фидбек П9:
+	// metar-awc аэропорт 3.1 vs ogimet-synop городская станция 1.0 в 00:00).
+	var hourly = (wxData && (wxData.days || wxDays) <= 7) && wxSrcSel() === "";
+	var srcs = [];
+	if (hourly) {
+		var seen = {};
+		pts.forEach(function (r) { if (r.src && !seen[r.src]) { seen[r.src] = 1; srcs.push(r.src); } });
+		srcs.sort();
+	}
+	keys.forEach(function (k, ki) {
+		var top = padT + ki * (panelH + gap);
 		var vals = pts.map(function (r) { return r[k]; }).filter(function (v) { return v != null; });
 		if (vals.length < 2) return;
-		var mn = Math.min.apply(null, vals), mx = Math.max.apply(null, vals);
-		if (mx - mn < 1e-9) { mn -= 0.5; mx += 0.5; }
-		var d = "";
-		pts.forEach(function (r, i) {
-			if (r[k] == null) return;
-			var x = xOf(r, i);
-			var y = padT + (1 - (r[k] - mn) / (mx - mn)) * (H - padT - padB);
-			d += (d ? " " : "") + x.toFixed(1) + "," + y.toFixed(1);
+		var ticks = wxNiceTicks(Math.min.apply(null, vals), Math.max.apply(null, vals));
+		var mn = ticks[0], mx = ticks[ticks.length - 1];
+		var dec = (ticks.length > 1 && (ticks[1] - ticks[0]) < 1) ? 1 : 0;
+		function yOf(v) { return top + (1 - (v - mn) / (mx - mn)) * panelH; }
+		svg.appendChild(svgEl("text", { x: padL, y: top - 6, fill: WX_COLORS[k], "font-size": "13" }, WX_LABELS[k]));
+		ticks.forEach(function (tv) {
+			var y = yOf(tv);
+			svg.appendChild(svgEl("line", { x1: padL, x2: W - padR, y1: y.toFixed(1), y2: y.toFixed(1), stroke: "#1f2b3a", "stroke-width": "1" }));
+			svg.appendChild(svgEl("text", { x: padL - 6, y: (y + 4).toFixed(1), "text-anchor": "end", fill: "#8aa0b4", "font-size": "12" }, tv.toFixed(dec)));
 		});
-		if (d) svg.appendChild(svgEl("polyline", { points: d, fill: "none", stroke: WX_COLORS[k], "stroke-width": "2" }));
+		function addLine(rows, color) {
+			var d = "";
+			rows.forEach(function (r) {
+				var x = xOf(r), y = yOf(r[k]);
+				d += (d ? " " : "") + x.toFixed(1) + "," + y.toFixed(1);
+			});
+			if (d) svg.appendChild(svgEl("polyline", { points: d, fill: "none", stroke: color, "stroke-width": "2" }));
+		}
+		if (hourly && srcs.length > 1) {
+			srcs.forEach(function (s) {
+				var rows = pts.filter(function (r) { return r.src === s && r[k] != null; });
+				if (rows.length > 1) addLine(rows, wxSrcColor(srcs, s));
+			});
+		} else {
+			addLine(pts.filter(function (r) { return r[k] != null; }), WX_COLORS[k]);
+		}
 	});
 	if (timed) {
 		var days = (wxData && (wxData.days || wxDays)) || 1;
@@ -291,21 +334,32 @@ function wxDrawChart(series) {
 		}
 		ticks.forEach(function (tk) {
 			var gx = padL + (W - padL - padR) * (tk.t - t0) / (tN - t0);
-			svg.appendChild(svgEl("line", { x1: gx, y1: padT, x2: gx, y2: H - padB, stroke: "#1f2b3a", "stroke-width": "1" }));
-			if (tk.lab) svg.appendChild(svgEl("text", { x: gx, y: H - 6, "text-anchor": "middle", fill: "#8aa0b4", "font-size": "13" }, tk.lab));
+			svg.appendChild(svgEl("line", { x1: gx.toFixed(1), y1: padT, x2: gx.toFixed(1), y2: H - padB, stroke: "#1f2b3a", "stroke-width": "1" }));
+			if (tk.lab) svg.appendChild(svgEl("text", { x: gx.toFixed(1), y: H - 6, "text-anchor": "middle", fill: "#8aa0b4", "font-size": "13" }, tk.lab));
 		});
 	}
 }
 
 function wxRenderLegend(series) {
 	var parts = [];
-	Object.keys(wxMetrics).forEach(function (k) {
-		if (!wxMetrics[k]) return;
-		var vals = series.map(function (r) { return r[k]; }).filter(function (v) { return v != null; });
-		if (!vals.length) return;
-		var mn = Math.min.apply(null, vals), mx = Math.max.apply(null, vals);
-		parts.push('<span style="color:' + WX_COLORS[k] + '">&#9632;</span> ' + WX_LABELS[k] + ": " + fmtP(mn) + " .. " + fmtP(mx));
-	});
+	var hourly = (wxData && (wxData.days || wxDays) <= 7) && wxSrcSel() === "";
+	if (hourly) {
+		// П9: в режиме «Все станции» легенда = цвета линий источников
+		var seen = {};
+		series.forEach(function (r) { if (r.src) seen[r.src] = 1; });
+		var srcs = Object.keys(seen).sort();
+		srcs.forEach(function (s) {
+			parts.push('<span style="color:' + wxSrcColor(srcs, s) + '">&#9632;</span> ' + s);
+		});
+	} else {
+		Object.keys(wxMetrics).forEach(function (k) {
+			if (!wxMetrics[k]) return;
+			var vals = series.map(function (r) { return r[k]; }).filter(function (v) { return v != null; });
+			if (!vals.length) return;
+			var mn = Math.min.apply(null, vals), mx = Math.max.apply(null, vals);
+			parts.push('<span style="color:' + WX_COLORS[k] + '">&#9632;</span> ' + WX_LABELS[k] + ": " + fmtP(mn) + " .. " + fmtP(mx));
+		});
+	}
 	$("wx_legend").innerHTML = parts.join(" &nbsp; ");
 }
 

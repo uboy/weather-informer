@@ -19,6 +19,7 @@ import time
 import unittest
 import urllib.request
 import urllib.error
+from datetime import datetime, timedelta
 from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -93,6 +94,30 @@ class TestWeatherStats(unittest.TestCase):
         self.assertEqual(json.loads(raw)["days"], 1)                # кламп снизу
         st, raw = self.get("/api/weather/stats?days=abc")
         self.assertEqual(json.loads(raw)["days"], 7)                # мусор -> дефолт
+
+    def test_stats_cutoff_cuts_by_isoformat_ts(self):
+        # П9-регресс: cutoff резал по datetime('now','-N days') (UTC, пробел)
+        # против локальных "T"-строк: строково "T" > " ", «24ч» показывала
+        # ~45ч (две полуночи). Точка 25ч назад не проходит, 23ч - проходит.
+        conn = sqlite3.connect(cs.FORECAST_DB)
+        try:
+            conn.execute("DELETE FROM weather_fact_history")
+            now = datetime.now()
+            old_ts = (now - timedelta(hours=25)).isoformat(timespec="seconds")
+            new_ts = (now - timedelta(hours=23)).isoformat(timespec="seconds")
+            for ts in (old_ts, new_ts):
+                conn.execute(
+                    "INSERT INTO weather_fact_history "
+                    "(ts, src, loc, temperature, humidity, pressure_mm, "
+                    "wind_ms) VALUES (?,?,?,?,?,?,?)",
+                    (ts, "CutSrc", "X", 1.0, None, None, None))
+            conn.commit()
+        finally:
+            conn.close()
+        st, raw = self.get("/api/weather/stats?days=1")
+        self.assertEqual(st, 200)
+        rows = [h for h in json.loads(raw)["hourly"] if h["src"] == "CutSrc"]
+        self.assertEqual([h["ts"] for h in rows], [new_ts])
 
     def test_journal_load_skips_garbage(self):
         # Негативный кейс: битая строка пропускается молча, хорошая - грузится.

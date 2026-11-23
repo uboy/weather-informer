@@ -3873,18 +3873,26 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
         conn = None
         try:
             conn = _history_conn()
-            cutoff = "datetime('now', '-%d days')" % days
+            # П9: ts в базе - локальный isoformat с "T" (record_fact_history),
+            # а datetime('now','-N days') даёт UTC с пробелом: строково
+            # "T" > " ", фильтр не резал ничего внутри календарного дня, и
+            # кнопка «24ч» показывала ~45ч с двумя полуночами (фидбек
+            # владельца 23.11). Cutoff считаем в Python тем же форматом,
+            # что хранится; daily группирует по date(ts) - ts уже локальный,
+            # 'localtime' сдвигал вечерние строки в следующие сутки.
+            cutoff = (datetime.now() - timedelta(days=days)).isoformat(
+                timespec="seconds")
             hourly_rows = conn.execute(
                 "SELECT ts, src, temperature, humidity, pressure_mm, wind_ms "
-                "FROM weather_fact_history WHERE ts >= " + cutoff +
-                " ORDER BY ts LIMIT 20000").fetchall()
+                "FROM weather_fact_history WHERE ts >= ? "
+                "ORDER BY ts LIMIT 20000", (cutoff,)).fetchall()
             daily = conn.execute(
-                "SELECT date(ts, 'localtime') AS d, "
+                "SELECT date(ts) AS d, "
                 "MIN(temperature), ROUND(AVG(temperature), 1), MAX(temperature), "
                 "ROUND(AVG(humidity), 0), ROUND(AVG(pressure_mm), 1), "
                 "ROUND(AVG(wind_ms), 1), COUNT(*) "
-                "FROM weather_fact_history WHERE ts >= " + cutoff +
-                " GROUP BY d ORDER BY d").fetchall()
+                "FROM weather_fact_history WHERE ts >= ? "
+                "GROUP BY d ORDER BY d", (cutoff,)).fetchall()
         except Exception as e:
             log.warning("stats: history query failed: %s", e)
         finally:
