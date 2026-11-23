@@ -48,6 +48,18 @@ button.del:hover { background: #6d2d39; }
 #mon_events_list { display: flex; flex-direction: column; gap: 2px; max-height: 40vh; overflow-y: auto; }
 #mon_events_list .ev { display: flex; gap: 10px; font-size: 12px; padding: 2px 4px; border-bottom: 1px solid #1d2a38; }
 #mon_events_list .ev .t { color: #64809c; white-space: nowrap; }
+#wxview { padding: 0 20px 24px; }
+#wx_controls { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 12px 0; }
+#wx_controls button { background: #1d2f45; padding: 6px 12px; }
+#wx_controls button.on { background: #24425c; outline: 1px solid #34527a; }
+#wx_chart_box { background: #0b1218; border: 1px solid #243447; border-radius: 10px; padding: 10px; }
+#wx_chart { width: 100%; height: auto; display: block; }
+#wx_legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 8px; font-size: 12px; color: #8aa0b4; }
+#wx_legend .chip { display: inline-block; width: 18px; height: 4px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+#wx_sources { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+#wx_events_list { display: flex; flex-direction: column; gap: 2px; max-height: 40vh; overflow-y: auto; }
+#wx_events_list .ev { display: flex; gap: 10px; font-size: 12px; padding: 2px 4px; border-bottom: 1px solid #1d2a38; }
+#wx_events_list .ev .t { color: #64809c; white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -56,6 +68,7 @@ button.del:hover { background: #6d2d39; }
   <nav id="tabs">
     <button id="tab-cam" class="active">Камеры</button>
     <button id="tab-mon">Мониторинг</button>
+    <button id="tab-wx">Погода</button>
   </nav>
   <span class="hint" id="hint">загрузка...</span>
 </header>
@@ -82,6 +95,37 @@ button.del:hover { background: #6d2d39; }
   <div class="card" style="margin: 0 20px 24px;">
     <div class="head"><span class="name">Журнал событий</span><span class="meta" id="mon_hours"></span></div>
     <div id="mon_events_list"></div>
+  </div>
+</div>
+<div id="wxview" class="hidden">
+  <div id="wx_controls">
+    <span class="meta">Диапазон:</span>
+    <button id="wxd-1">24ч</button>
+    <button id="wxd-7" class="on">7д</button>
+    <button id="wxd-30">30д</button>
+    <button id="wxd-90">90д</button>
+    <span class="meta" style="margin-left:16px;">Метрики:</span>
+    <button id="wxm-temp" class="on">Темп</button>
+    <button id="wxm-pressure_mm" class="on">Давл</button>
+    <button id="wxm-wind_ms" class="on">Ветер</button>
+    <button id="wxm-humidity" class="on">Влажн</button>
+  </div>
+  <div class="card" style="margin-bottom:14px;">
+    <div class="head"><span class="name">Как менялась погода</span><span class="meta" id="wx_cur"></span></div>
+    <div id="wx_chart_box">
+      <svg id="wx_chart" viewBox="0 0 1000 340" preserveAspectRatio="xMidYMid meet"></svg>
+    </div>
+    <div id="wx_legend"></div>
+  </div>
+  <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap:14px;">
+    <div class="card">
+      <div class="head"><span class="name">Источники (за диапазон)</span></div>
+      <div id="wx_sources" class="meta"></div>
+    </div>
+    <div class="card">
+      <div class="head"><span class="name">Журнал источников</span><span class="meta" id="wx_days"></span></div>
+      <div id="wx_events_list"></div>
+    </div>
   </div>
 </div>
 <div id="player">
@@ -315,19 +359,29 @@ var mon403 = {};       // room -> true: планшет ответил 403 на �
 var monBlobUrls = {};  // room -> последний objectURL (revoke перед заменой)
 var lastMonRooms = {};
 
-try { if (localStorage.getItem("camtab") === "mon") activeTab = "mon"; } catch (e) {}
+try {
+  var savedTab = localStorage.getItem("camtab");
+  if (savedTab === "mon" || savedTab === "wx") activeTab = savedTab;
+} catch (e) {}
+// ?tab=wx с корневой ссылки «Статистика погоды» (settings.html)
+var tabParam = (location.search || "").match(/[?&]tab=(wx|mon|cam)\b/);
+if (tabParam) activeTab = tabParam[1];
 
 function setTab(t) {
   activeTab = t;
   try { localStorage.setItem("camtab", t); } catch (e) {}
+  if (t !== "wx" && wxTimer) { clearTimeout(wxTimer); wxTimer = null; }
   $("camview").classList.toggle("hidden", t !== "cam");
   $("monview").classList.toggle("hidden", t !== "mon");
+  $("wxview").classList.toggle("hidden", t !== "wx");
   $("tab-cam").classList.toggle("active", t === "cam");
   $("tab-mon").classList.toggle("active", t === "mon");
-  if (t === "mon") monPoll(); else pollLoop();
+  $("tab-wx").classList.toggle("active", t === "wx");
+  if (t === "mon") monPoll(); else if (t === "wx") wxPoll(); else pollLoop();
 }
 $("tab-cam").addEventListener("click", function () { setTab("cam"); });
 $("tab-mon").addEventListener("click", function () { setTab("mon"); });
+$("tab-wx").addEventListener("click", function () { setTab("wx"); });
 
 var EV_KINDS = {
   view_open: "просмотр открыт",
@@ -505,6 +559,223 @@ function monStartSnaps() {
     if (!monDisabled[room] && !mon403[room] && !(cs && cs.enabled === false)) monSchedule(room, 500);
   });
 }
+
+// ===== Вкладка «Погода» (эпик weather-stats: статистика + источники + графики) =====
+// Completion-driven опрос (следующий запрос только после завершения предыдущего),
+// только пока вкладка активна и страница видима. SVG строится при обновлении
+// данных, без анимаций (CPU-бюджет софтверного рендера). Каждая метрика
+// нормируется на свой min/max диапазона (масштабы несопоставимы), реальные
+// значения - в легенде и строке «Сейчас».
+var wxTimer = null;
+var wxBusy = false;
+var wxDays = 7;
+var wxData = null;
+var wxMetrics = {temp: true, pressure_mm: true, wind_ms: true, humidity: true};
+var WX_COLORS = {temp: "#ffb457", pressure_mm: "#6fd394", wind_ms: "#57b4ff", humidity: "#c792ea"};
+var WX_LABELS = {temp: "Темп, °C", pressure_mm: "Давл, мм", wind_ms: "Ветер, м/с", humidity: "Влажн, %"};
+var WX_KINDS = {
+  fetch_ok: "источник ответил",
+  src_switch: "смена источника",
+  chain_fail: "цепочка не дала данных",
+  cache_restored: "кэш восстановлен при старте"
+};
+
+function svgEl(tag, attrs, text) {
+  var n = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (var k in attrs) n.setAttribute(k, attrs[k]);
+  if (text != null) n.textContent = text;
+  return n;
+}
+
+function wxSchedule(delay) {
+  if (wxTimer) clearTimeout(wxTimer);
+  wxTimer = setTimeout(function () { wxTimer = null; wxPoll(); }, delay || 60000);
+}
+
+function wxPoll() {
+  if (activeTab !== "wx" || document.hidden || wxBusy) return;
+  wxBusy = true;
+  api("/api/weather/stats?days=" + wxDays, function (j) {
+    wxBusy = false;
+    wxData = j;
+    wxRender();
+    wxSchedule(60000);
+  }, function () { wxBusy = false; wxSchedule(120000); });
+}
+
+function wxTimeLabel(t) {
+  var s = String(t || "");
+  return s.length >= 16 ? s.slice(8, 10) + "." + s.slice(5, 7) + " " + s.slice(11, 16) : s;
+}
+
+function fmtV(key, v) {
+  if (v == null || v === "") return "-";
+  if (key === "temp") return (v > 0 ? "+" : "") + (Math.round(v * 10) / 10);
+  return String(Math.round(v * 10) / 10);
+}
+
+// Ряд для графика: до 7д - почасовые точки истории, дальше - дневные агрегаты.
+function wxSeries() {
+  if (!wxData) return [];
+  if ((wxData.days || wxDays) <= 7) {
+    return (wxData.hourly || []).map(function (h) {
+      return {t: h.ts, temp: h.temp, pressure_mm: h.pressure_mm,
+              wind_ms: h.wind_ms, humidity: h.humidity};
+    });
+  }
+  return (wxData.daily || []).map(function (d) {
+    return {t: d.day, temp: d.tavg, pressure_mm: d.pressure_mm,
+            wind_ms: d.wind_ms, humidity: d.humidity};
+  });
+}
+
+function wxDrawChart(series) {
+  var svg = $("wx_chart");
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
+  var W = 1000, H = 340, L = 10, R = 10, T = 16, B = 28;
+  var n = series.length;
+  if (n < 2) {
+    svg.appendChild(svgEl("text", {x: W / 2, y: H / 2, "text-anchor": "middle",
+      fill: "#4d6377", "font-size": "20"},
+      "нет данных за выбранный диапазон (история копится с включения фичи)"));
+    return;
+  }
+  var g;
+  for (g = 1; g <= 3; g++) {
+    var gy = T + (H - T - B) * g / 4;
+    svg.appendChild(svgEl("line", {x1: L, y1: gy, x2: W - R, y2: gy,
+      stroke: "#1d2a38", "stroke-width": 1}));
+  }
+  Object.keys(wxMetrics).forEach(function (key) {
+    if (!wxMetrics[key]) return;
+    var vals = [];
+    series.forEach(function (p) { if (p[key] != null) vals.push(p[key]); });
+    if (vals.length < 2) return;
+    var mn = Math.min.apply(null, vals), mx = Math.max.apply(null, vals);
+    if (mx - mn < 1e-9) { mn -= 1; mx += 1; }
+    var pts = [];
+    series.forEach(function (p, i) {
+      if (p[key] == null) return;
+      var x = L + (W - L - R) * i / (n - 1);
+      var y = T + (1 - (p[key] - mn) / (mx - mn)) * (H - T - B);
+      pts.push(x.toFixed(1) + "," + y.toFixed(1));
+    });
+    svg.appendChild(svgEl("polyline", {points: pts.join(" "), fill: "none",
+      stroke: WX_COLORS[key], "stroke-width": 2, "stroke-linejoin": "round"}));
+  });
+  [0, Math.floor((n - 1) / 2), n - 1].forEach(function (i, idx) {
+    var x = L + (W - L - R) * i / (n - 1);
+    svg.appendChild(svgEl("text", {x: x, y: H - 8,
+      "text-anchor": idx === 0 ? "start" : (idx === 2 ? "end" : "middle"),
+      fill: "#64809c", "font-size": "13"}, wxTimeLabel(series[i].t)));
+  });
+}
+
+function wxRenderLegend(series) {
+  var box = $("wx_legend");
+  box.textContent = "";
+  Object.keys(wxMetrics).forEach(function (key) {
+    if (!wxMetrics[key]) return;
+    var vals = [];
+    series.forEach(function (p) { if (p[key] != null) vals.push(p[key]); });
+    if (!vals.length) return;
+    var chip = document.createElement("span");
+    chip.className = "chip";
+    chip.style.background = WX_COLORS[key];
+    var label = document.createElement("span");
+    label.textContent = WX_LABELS[key] + ": " + fmtV(key, Math.min.apply(null, vals)) +
+      " .. " + fmtV(key, Math.max.apply(null, vals));
+    var wrap = document.createElement("span");
+    wrap.appendChild(chip);
+    wrap.appendChild(label);
+    box.appendChild(wrap);
+  });
+  if (!box.firstChild) box.textContent = "метрики выключены";
+}
+
+function wxRenderSources(sources) {
+  var box = $("wx_sources");
+  box.textContent = "";
+  var names = Object.keys(sources);
+  if (!names.length) {
+    var s = document.createElement("span");
+    s.textContent = "журнал пуст: события появятся по мере работы источников";
+    box.appendChild(s);
+    return;
+  }
+  names.sort();
+  names.forEach(function (name) {
+    var st = sources[name] || {};
+    var row = document.createElement("div");
+    row.textContent = name + ": ок " + (st.ok || 0) +
+      (st.last_ok_ts ? ", последний " + new Date(st.last_ok_ts * 1000).toLocaleTimeString() : "");
+    box.appendChild(row);
+  });
+}
+
+function wxEvText(ev) {
+  var bits = [WX_KINDS[ev.kind] || ev.kind];
+  if (ev.kind === "src_switch") bits.push((ev.prev_source || "?") + " -> " + (ev.source || "?"));
+  if (ev.kind === "chain_fail" && ev.error) bits.push(ev.error);
+  if (ev.source && ev.kind !== "src_switch") bits.push(ev.source);
+  return bits.filter(Boolean).join(" - ");
+}
+
+function wxRenderEvents(events) {
+  var box = $("wx_events_list");
+  box.textContent = "";
+  events.slice(-200).forEach(function (ev) {
+    var row = document.createElement("div");
+    row.className = "ev";
+    var d = new Date((ev.ts || 0) * 1000);
+    var t = document.createElement("span");
+    t.className = "t";
+    t.textContent = (wxData && (wxData.days || 0) > 1) ? d.toLocaleString() : d.toLocaleTimeString();
+    var body = document.createElement("span");
+    body.textContent = wxEvText(ev);
+    row.appendChild(t);
+    row.appendChild(body);
+    box.appendChild(row);
+  });
+}
+
+function wxRender() {
+  var data = wxData || {};
+  var series = wxSeries();
+  var cur = data.current || {};
+  var bits = [];
+  if (cur.temp != null) bits.push(fmtV("temp", cur.temp) + " °C");
+  if (cur.pressure_mm != null) bits.push(cur.pressure_mm + " мм");
+  if (cur.wind_speed != null) bits.push(cur.wind_speed + " м/с");
+  if (cur.humidity != null) bits.push(cur.humidity + "%");
+  $("wx_cur").textContent =
+    (bits.length ? "Сейчас: " + bits.join(", ") : "") +
+    (cur.src ? " - " + cur.src : "") +
+    (cur.age_min != null ? " (обновлено " + cur.age_min + " мин назад)" : "");
+  $("wx_days").textContent = "диапазон: " + (data.days || wxDays) + " дн";
+  wxDrawChart(series);
+  wxRenderLegend(series);
+  wxRenderSources(data.sources || {});
+  wxRenderEvents(data.events || []);
+}
+
+[1, 7, 30, 90].forEach(function (d) {
+  $("wxd-" + d).addEventListener("click", function () {
+    wxDays = d;
+    [1, 7, 30, 90].forEach(function (dd) {
+      $("wxd-" + dd).classList.toggle("on", dd === d);
+    });
+    wxPoll();
+  });
+});
+
+Object.keys(wxMetrics).forEach(function (key) {
+  $("wxm-" + key).addEventListener("click", function () {
+    wxMetrics[key] = !wxMetrics[key];
+    $("wxm-" + key).classList.toggle("on", wxMetrics[key]);
+    wxRender(); // перерисовка из уже полученных данных, без запроса
+  });
+});
 
 // ===== Зритель: pull-WebRTC (сервер сам подключается к планшету, D4) =====
 // Порядок попыток: 1) pull-сигналинг POST /api/cam/webrtc/offer (новая сборка
@@ -868,6 +1139,7 @@ document.addEventListener("visibilitychange", function () {
     if (viewer) closeViewer();
     Object.keys(snapTimers).forEach(function (k) { clearInterval(snapTimers[k]); delete snapTimers[k]; });
     monStopSnaps();
+    if (wxTimer) { clearTimeout(wxTimer); wxTimer = null; } // фоном не опрашиваем
   } else {
     pollLoop();
     Object.keys(lastRooms).forEach(function (room) {
@@ -875,6 +1147,7 @@ document.addEventListener("visibilitychange", function () {
       if (cs && cs.enabled !== false) refreshSnap(room);
     });
     if (activeTab === "mon") { monPoll(); monStartSnaps(); }
+    if (activeTab === "wx") wxPoll();
   }
 });
 
