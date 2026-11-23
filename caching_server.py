@@ -641,6 +641,17 @@ def _history_conn():
         conn.execute("ALTER TABLE observations ADD COLUMN phys_station TEXT")
     except Exception:
         pass
+    try:
+        conn.execute("ALTER TABLE observations ADD COLUMN wind_ms REAL")
+    except Exception:
+        pass
+    # П7 (фидбек «давай фильтры»): источник foreca-obs разделяется по
+    # физической станции - 6 станций в одном source давали 3-часовые бурсты
+    # разных станций на одной линии (пила влажности/давления). UPDATE
+    # идемпотентен: после первого прохода строк source='foreca-obs' нет.
+    conn.execute("UPDATE observations SET source = 'foreca-obs:' || phys_station "
+                 "WHERE source = 'foreca-obs' AND phys_station IS NOT NULL "
+                 "AND phys_station <> ''")
     # История факта погоды (статистика, эпик weather-stats): одна строка на
     # успешный фетч цепочки. UNIQUE(ts, src, loc) делает бэкфилл idempotent.
     conn.execute("""CREATE TABLE IF NOT EXISTS weather_fact_history (
@@ -648,6 +659,16 @@ def _history_conn():
         temperature REAL, humidity REAL, pressure_mm REAL, wind_ms REAL,
         UNIQUE(ts, src, loc))""")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_wfh_ts ON weather_fact_history(ts)")
+    # П7: то же переименование в истории фактов (loc = имя станции Foreca,
+    # phys_station берём из observations). Идемпотентно.
+    conn.execute("UPDATE weather_fact_history SET src = 'foreca-obs:' || "
+                 "(SELECT phys_station FROM observations o "
+                 " WHERE o.station = weather_fact_history.loc "
+                 " AND o.phys_station IS NOT NULL AND o.phys_station <> '' "
+                 " LIMIT 1) WHERE src = 'foreca-obs'")
+    # Python 3.12+: DDL после неявного BEGIN (миграционные UPDATE) не
+    # автокоммитится - без commit() close() откатывает создание таблиц.
+    conn.commit()
     return conn
 
 
@@ -696,7 +717,7 @@ def backfill_fact_history():
                 "SELECT ts, source, station, temperature, humidity, "
                 "CASE WHEN source = 'metar-awc' THEN pressure "
                 "     ELSE pressure * 0.750062 END, "
-                "NULL FROM observations")
+                "wind_ms FROM observations")
             conn.commit()
             if cur.rowcount > 0:
                 log.info("stats: backfilled %d observation rows",
@@ -705,6 +726,97 @@ def backfill_fact_history():
             conn.close()
     except Exception as e:
         log.warning("stats: fact history backfill failed: %s", e)
+
+
+def backfill_wind_from_synop():
+    """Разовый бэкфилл ветра observations из synop_raw: сырьё хранится с
+    23.09 (62 дня), ветер раньше не декодировался. Заполняет только
+    NULL-строки ogimet-synop - повторный вызов ничего не меняет."""
+    try:
+        conn = _history_conn()
+        try:
+            rows = conn.execute("SELECT ts_utc, raw FROM synop_raw").fetchall()
+            n = 0
+            for ts_utc_iso, raw in rows:
+                if not raw:
+                    continue
+                dec = _decode_synop(raw)
+                if dec.get("wind_ms") is None:
+                    continue
+                try:
+                    from zoneinfo import ZoneInfo
+                    from datetime import timezone as _dt_utc
+                    ts_local = (datetime.fromisoformat(
+                                    ts_utc_iso.replace("Z", "+00:00"))
+                                .astimezone(ZoneInfo("Europe/Moscow"))
+                                .replace(tzinfo=None)
+                                .isoformat(timespec="seconds"))
+                except Exception:
+                    continue
+                cur = conn.execute(
+                    "UPDATE observations SET wind_ms = ? "
+                    "WHERE source = 'ogimet-synop' AND ts = ? "
+                    "AND wind_ms IS NULL",
+                    (dec["wind_ms"], ts_local))
+                n += cur.rowcount
+            conn.commit()
+            if n:
+                log.info("observations: бэкфилл ветра SYNOP - %d строк", n)
+        finally:
+            conn.close()
+    except Exception as e:
+        log.warning("observations: wind backfill (synop) failed: %s", e)
+
+
+def backfill_wind_from_metar(hours=96):
+    """Разовый бэкфилл ветра metar-awc из истории AWC API (ОДИН вызов при
+    старте stats_loop, не периодический): коллектор раньше ветер не
+    сохранял. Заполняет только NULL-строки - идемпотентен."""
+    try:
+        from zoneinfo import ZoneInfo
+        cfg = load_config()
+        target_icao = cfg.get("metar_icao")
+        if not target_icao and cfg.get("lat") is not None:
+            ap = find_nearest_icao(cfg.get("lat"), cfg.get("lon"))
+            target_icao = ap["icao"] if ap else None
+        if not target_icao:
+            return
+        url = ("https://aviationweather.gov/api/data/metar?ids="
+               + str(target_icao).strip().upper()
+               + "&hours=%d&format=json" % hours)
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "WeatherInformerLocal/1.0"})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            items = json.loads(resp.read().decode("utf-8"))
+        conn = _history_conn()
+        n = 0
+        try:
+            for item in items:
+                w = _metar_wind_ms(item.get("wspd"))
+                if w is None:
+                    continue
+                try:
+                    ts_local = (datetime.fromisoformat(
+                                    (item.get("reportTime") or "").replace(
+                                        "Z", "+00:00"))
+                                .astimezone(ZoneInfo("Europe/Moscow"))
+                                .replace(tzinfo=None)
+                                .isoformat(timespec="seconds"))
+                except Exception:
+                    continue
+                cur = conn.execute(
+                    "UPDATE observations SET wind_ms = ? "
+                    "WHERE source = 'metar-awc' AND ts = ? "
+                    "AND wind_ms IS NULL",
+                    (w, ts_local))
+                n += cur.rowcount
+            conn.commit()
+            if n:
+                log.info("observations: бэкфилл ветра METAR - %d строк", n)
+        finally:
+            conn.close()
+    except Exception as e:
+        log.warning("observations: wind backfill (metar) failed: %s", e)
 
 
 def record_forecast(provider, loc, data):
@@ -829,12 +941,15 @@ def collect_foreca_observations():
                 ts = o.get("time", "")
                 if "T" in ts:
                     ts = ts[:19]  # нормализация naive локального времени
+                phys = OGIMET_PHYS.get(o.get("station", ""), o.get("station", ""))
                 conn.execute(
-                    "INSERT OR REPLACE INTO observations VALUES (?,?,?,?,?,?,?,?)",
-                    (ts, o.get("station", ""), "foreca-obs",
+                    "INSERT OR REPLACE INTO observations "
+                    "(ts, station, source, temperature, humidity, pressure, "
+                    " precip_mm, phys_station, wind_ms) VALUES (?,?,?,?,?,?,?,?,?)",
+                    (ts, o.get("station", ""), "foreca-obs:" + phys,
                      o.get("temperature"), o.get("relHumidity"),
-                     o.get("pressure"), o.get("precip_mm"),
-                     OGIMET_PHYS.get(o.get("station", ""), o.get("station", ""))))
+                     o.get("pressure"), o.get("precip_mm"), phys,
+                     o.get("wind_speed")))
                 n += 1
             conn.commit()
         finally:
@@ -859,11 +974,34 @@ SYNOP_GROUPS = {  # индикатор группы -> (поле, множите
 
 def _decode_synop(msg):
     """Минимальный FM-12 SYNOP декодер: температура (1sTTT), давление на станции
-    (3P0P0P0), на уровне моря (4PPPP), осадки (6RRRtR). Давление кодируется
-    без ведущих сотен: val<500 -> +1000 hPa, иначе +900 hPa (WMO)."""
-    out = {"temperature": None, "pressure": None, "pressure_sl": None, "precip_mm": None}
+    (3P0P0P0), на уровне моря (4PPPP), осадки (6RRRtR), ветер (Nddff). Давление
+    кодируется без ведущих сотен: val<500 -> +1000 hPa, иначе +900 hPa (WMO)."""
+    out = {"temperature": None, "pressure": None, "pressure_sl": None,
+           "precip_mm": None, "wind_ms": None}
+    toks = msg.split()
+    # Ветер Nddff - группа непосредственно перед 1snTTT (FM-12 секция 0:
+    # AAXX YYGGiw IIiii [iRixhVV] Nddff 1snTTT ...). Позиция отличает её от
+    # тенденции 5apPP (та идёт после 4PPPP); гейты dd<=36 (до 360 град) и
+    # ff<=36 м/с отсекают iRixhVV ('41570' -> ff=70); 'N0hVVh' (ветра нет,
+    # видимость) даёт dd=00 при ff>0 -> NULL; спокойный ветер - '00000'.
+    temp_idx = None
+    head_idx = None
+    for _i, _t in enumerate(toks):
+        if len(_t) == 5 and _t[0] == "1" and _t[1] in "01" and _t[2:].isdigit():
+            temp_idx = _i
+            break
+    for _i, _t in enumerate(toks):
+        if _t in ("AAXX", "BBXX"):
+            head_idx = _i
+            break
+    if head_idx is not None and temp_idx is not None and temp_idx > head_idx + 3:
+        _t = toks[temp_idx - 1]
+        if len(_t) == 5 and _t.isdigit():
+            dd, ff = int(_t[1:3]), int(_t[3:5])
+            if dd <= 36 and ff <= 36:
+                out["wind_ms"] = None if (dd == 0 and ff > 0) else float(ff)
     sec3 = False
-    for tok in msg.split():
+    for tok in toks:
         if tok == "333":
             sec3 = True
             continue
@@ -933,10 +1071,12 @@ def collect_ogimet_synop(hours_back=30):
             conn.execute("INSERT OR REPLACE INTO synop_raw VALUES (?,?)",
                          (ts_utc_iso, raw_msg))
             conn.execute(
-                "INSERT OR REPLACE INTO observations VALUES (?,?,?,?,?,?,?,?)",
+                "INSERT OR REPLACE INTO observations "
+                "(ts, station, source, temperature, humidity, pressure, "
+                " precip_mm, phys_station, wind_ms) VALUES (?,?,?,?,?,?,?,?,?)",
                 (ts_local, "Nizhny Novgorod WMO27459", "ogimet-synop",
                  decoded["temperature"], None, decoded["pressure"],
-                 decoded["precip_mm"], "27459"))
+                 decoded["precip_mm"], "27459", decoded["wind_ms"]))
             n += 1
         conn.commit()
     finally:
@@ -1013,6 +1153,15 @@ def find_nearest_icao(lat, lon):
     return best
 
 
+def _metar_wind_ms(wspd):
+    """wspd у AWC API - УЗЛЫ: JSON нормализует rawOb (17001MPS = 1 м/с ->
+    wspd 2 kt). Перевод в м/с для observations; ключ wind_speed (kt)
+    не меняется - другие потребители читают его как раньше."""
+    if isinstance(wspd, (int, float)):
+        return round(wspd * 0.514444, 1)
+    return None
+
+
 def fetch_noaa_metar(icao_code, timeout=10):
     """Запрашивает свежий METAR аэродрома через официальный JSON API NOAA AWC."""
     if not icao_code:
@@ -1062,6 +1211,7 @@ def fetch_noaa_metar(icao_code, timeout=10):
                     "pressure_mm": pressure_qfe,
                     "wind_speed": item.get("wspd"),
                     "wind_angle": item.get("wdir"),
+                    "wind_ms": _metar_wind_ms(item.get("wspd")),
                     "raw": item.get("rawOb")
                 }
     except Exception as e:
@@ -1100,10 +1250,12 @@ def collect_noaa_metar():
             ts_local = datetime.now().isoformat(timespec="seconds")
         station_title = f"{metar.get('name')} ({target_icao})"
         conn.execute(
-            "INSERT OR REPLACE INTO observations VALUES (?,?,?,?,?,?,?,?)",
+            "INSERT OR REPLACE INTO observations "
+            "(ts, station, source, temperature, humidity, pressure, "
+            " precip_mm, phys_station, wind_ms) VALUES (?,?,?,?,?,?,?,?,?)",
             (ts_local, station_title, "metar-awc",
              metar.get("temp"), metar.get("humidity"), metar.get("pressure_mm"),
-             None, target_icao)
+             None, target_icao, metar.get("wind_ms"))
         )
         conn.commit()
         log.info("observations: NOAA METAR %s — T=%s°C, Hum=%s%%, P=%s mmHg",
@@ -1334,6 +1486,11 @@ def stats_loop():
     rotate_stats_if_needed()
     prune_history()
     collect_foreca_observations()
+    backfill_wind_from_synop()
+    try:
+        backfill_wind_from_metar()
+    except Exception as e:
+        log.warning("observations: metar wind backfill failed: %s", e)
     while True:
         interval = 3600
         try:
@@ -1354,6 +1511,10 @@ def stats_loop():
             collect_noaa_metar()
         except Exception as e:
             log.warning("observations: metar tick failed: %s", e)
+        try:
+            backfill_fact_history()  # новые наблюдения -> история без рестарта
+        except Exception as e:
+            log.warning("observations: fact backfill tick failed: %s", e)
         time.sleep(interval)
 
 

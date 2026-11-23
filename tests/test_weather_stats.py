@@ -146,14 +146,14 @@ class TestWeatherStats(unittest.TestCase):
         now = "2026-11-23T12:00:00"
         obs_rows = [
             (now, "Nizhny Novgorod/Strigino", "foreca-obs",
-             5.0, 60.0, 1000.0, None, "STRIGINO"),
+             5.0, 60.0, 1000.0, None, "STRIGINO", 4.0),
             ("2026-11-23T12:30:00", "UWGG", "metar-awc",
-             4.0, 61.0, 744.0, None, "UWGG"),
+             4.0, 61.0, 744.0, None, "UWGG", 5.1),
         ]
         conn.executemany(
             "INSERT INTO observations (ts, station, source, temperature, "
-            "humidity, pressure, precip_mm, phys_station) "
-            "VALUES (?,?,?,?,?,?,?,?)", obs_rows)
+            "humidity, pressure, precip_mm, phys_station, wind_ms) "
+            "VALUES (?,?,?,?,?,?,?,?,?)", obs_rows)
         fp_rows = [
             (now, "Gismeteo", "56.3:44.0", now, 20.0, 65.0, 745.0, None, None),
         ]
@@ -167,14 +167,18 @@ class TestWeatherStats(unittest.TestCase):
         n = conn.execute(
             "SELECT COUNT(*) FROM weather_fact_history").fetchone()[0]
         rows = conn.execute(
-            "SELECT src, pressure_mm, temperature FROM weather_fact_history "
-            "ORDER BY ts").fetchall()
+            "SELECT src, pressure_mm, temperature, wind_ms "
+            "FROM weather_fact_history ORDER BY ts").fetchall()
         conn.close()
         self.assertEqual(n, 2)      # observations; forecast_points игнор
-        self.assertEqual([r[0] for r in rows], ["foreca-obs", "metar-awc"])
+        # П7: foreca-obs разделяется по станции (phys_station STRIGINO)
+        self.assertEqual([r[0] for r in rows],
+                         ["foreca-obs:STRIGINO", "metar-awc"])
         self.assertAlmostEqual(rows[0][1], 750.062, places=2)  # гПа -> мм
         self.assertAlmostEqual(rows[1][1], 744.0, places=3)    # уже мм
         self.assertEqual(rows[0][2], 5.0)
+        self.assertAlmostEqual(rows[0][3], 4.0)  # П7: ветер из observations
+        self.assertAlmostEqual(rows[1][3], 5.1)
 
     def test_daily_aggregates_on_fixture(self):
         # Три факта за сегодня с разными ts (в одну секунду UNIQUE(ts,src,loc)
@@ -256,6 +260,106 @@ class TestWeatherStats(unittest.TestCase):
         finally:
             cs.cached_data = None
             cs.last_fetch_time = None
+
+
+    def test_synop_wind_decode(self):
+        # П7: ветер Nddff из живых сообщений станции 27459 (synop_raw 23.11):
+        # '81701'/'81801' непосредственно перед 1snTTT -> 1 м/с.
+        dec = cs._decode_synop(
+            "AAXX 23151 27459 21457 81701 11001 21023 39892 40088 52006 "
+            "77172 887// 333 10010 69902 91003 90730 91104==")
+        self.assertAlmostEqual(dec["wind_ms"], 1.0)
+        self.assertAlmostEqual(dec["temperature"], -0.1)
+        self.assertAlmostEqual(dec["pressure"], 989.2)
+        dec2 = cs._decode_synop(
+            "AAXX 23061 27459 42570 81801 11004 21028 39879 40075 52005 "
+            "885// 333 91004 90760 91104==")
+        self.assertAlmostEqual(dec2["wind_ms"], 1.0)
+
+    def test_synop_wind_edge_cases(self):
+        # N0hVVh ('50007' - видимость, ветра нет) -> NULL; спокойный '00000'
+        # -> 0.0; только iRixhVV перед температурой ('41570', ff=70>36) -> NULL.
+        dec = cs._decode_synop(
+            "AAXX 23121 27459 41570 50007 10005 21032 39886 40081 52001 "
+            "70272 86500 333 91003 90760 91104==")
+        self.assertIsNone(dec["wind_ms"])
+        dec2 = cs._decode_synop(
+            "AAXX 23121 27459 41570 00000 10005 21032 39886 40081 52001 "
+            "70272 86500 333 91003 90760 91104==")
+        self.assertEqual(dec2["wind_ms"], 0.0)
+        dec3 = cs._decode_synop(
+            "AAXX 23121 27459 41570 10005 21032 39886 40081 52001 "
+            "70272 86500 333 91003 90760 91104==")
+        self.assertIsNone(dec3["wind_ms"])
+
+    def test_metar_wind_units(self):
+        # wspd у AWC API - узлы (17001MPS = 1 м/с -> wspd 2 kt): 2 kt -> 1.0.
+        self.assertAlmostEqual(cs._metar_wind_ms(2), 1.0)
+        self.assertAlmostEqual(cs._metar_wind_ms(8), 4.1)
+        self.assertIsNone(cs._metar_wind_ms(None))
+        self.assertIsNone(cs._metar_wind_ms("5"))  # не число -> NULL
+
+    def test_station_split_migration(self):
+        # П7: legacy foreca-obs переименовывается в foreca-obs:<phys_station>
+        # при следующем подключении (миграция в _history_conn); идемпотентно.
+        conn = sqlite3.connect(cs.FORECAST_DB)
+        conn.execute("DELETE FROM observations")
+        conn.execute("DELETE FROM weather_fact_history")
+        conn.execute(
+            "INSERT INTO observations (ts, station, source, temperature, "
+            "humidity, pressure, precip_mm, phys_station) VALUES "
+            "('2026-11-22T10:00:00', 'Nizhny Novgorod/Strigino', 'foreca-obs', "
+            "5.0, 60.0, 1000.0, NULL, 'STRIGINO')")
+        conn.execute(
+            "INSERT INTO weather_fact_history (ts, src, loc, temperature) "
+            "VALUES ('2026-11-22T10:00:00', 'foreca-obs', "
+            "'Nizhny Novgorod/Strigino', 5.0)")
+        conn.commit()
+        conn.close()
+        chk = cs._history_conn()
+        chk.close()
+        conn = sqlite3.connect(cs.FORECAST_DB)
+        src = conn.execute("SELECT source FROM observations").fetchone()[0]
+        fsrc = conn.execute("SELECT src FROM weather_fact_history").fetchone()[0]
+        n_legacy = conn.execute(
+            "SELECT COUNT(*) FROM observations WHERE source = 'foreca-obs'"
+        ).fetchone()[0]
+        conn.close()
+        self.assertEqual(src, "foreca-obs:STRIGINO")
+        self.assertEqual(fsrc, "foreca-obs:STRIGINO")
+        self.assertEqual(n_legacy, 0)
+
+    def test_backfill_wind_synop_idempotent(self):
+        # П7: ветер из synop_raw -> observations (только NULL-строки:
+        # непустой wind_ms не перетирается; ts_local = UTC+3).
+        conn = sqlite3.connect(cs.FORECAST_DB)
+        conn.execute("CREATE TABLE IF NOT EXISTS synop_raw "
+                     "(ts_utc TEXT UNIQUE, raw TEXT)")
+        conn.execute("DELETE FROM synop_raw")
+        conn.execute("DELETE FROM observations")
+        conn.execute(
+            "INSERT INTO synop_raw VALUES ('2026-11-23T15:00:00Z', "
+            "'AAXX 23151 27459 21457 81701 11001 21023 39892 40088 52006 "
+            "77172 887// 333 10010 69902 91003 90730 91104==')")
+        conn.execute(
+            "INSERT INTO observations (ts, station, source, temperature, "
+            "humidity, pressure, precip_mm, phys_station) VALUES "
+            "('2026-11-23T18:00:00', 'Nizhny Novgorod WMO27459', "
+            "'ogimet-synop', -0.1, NULL, 989.2, NULL, '27459')")
+        conn.commit()
+        conn.close()
+        cs.backfill_wind_from_synop()
+        conn = sqlite3.connect(cs.FORECAST_DB)
+        w = conn.execute("SELECT wind_ms FROM observations").fetchone()[0]
+        self.assertAlmostEqual(w, 1.0)
+        conn.execute("UPDATE observations SET wind_ms = 9.9")
+        conn.commit()
+        conn.close()
+        cs.backfill_wind_from_synop()
+        conn = sqlite3.connect(cs.FORECAST_DB)
+        w2 = conn.execute("SELECT wind_ms FROM observations").fetchone()[0]
+        conn.close()
+        self.assertAlmostEqual(w2, 9.9)
 
 
 if __name__ == "__main__":

@@ -145,6 +145,7 @@ class ForecaProvider:
                 "relHumidity": obs.get("relHumidity"),
                 "pressure": obs.get("pressure"),
                 "precip_mm": precip_mm,
+                "wind_speed": obs.get("windSpeed"),
                 "distance": obs.get("distance", ""),
             })
         return out

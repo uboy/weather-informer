@@ -47,9 +47,11 @@ class AccuracyTests(unittest.TestCase):
                       (now + timedelta(hours=valid_off_h)).isoformat(timespec="seconds"),
                       temp_f, None, None, None, None))
         if obs_at is not None:
-            conn.execute("INSERT INTO observations VALUES (?,?,?,?,?,?,?,?)",
+            conn.execute("INSERT INTO observations (ts, station, source, "
+                         "temperature, humidity, pressure, precip_mm, "
+                         "phys_station, wind_ms) VALUES (?,?,?,?,?,?,?,?,?)",
                          ((now + timedelta(hours=obs_at)).isoformat(timespec="seconds"),
-                          "S1", "test-obs", obs_temp, None, None, None, phys))
+                          "S1", "test-obs", obs_temp, None, None, None, phys, None))
         conn.commit()
         conn.close()
 
@@ -74,9 +76,11 @@ class AccuracyTests(unittest.TestCase):
         conn.execute("INSERT INTO forecast_points VALUES (?,?,?,?,?,?,?,?,?)",
                      (now.isoformat(timespec="seconds"), "Test", "k",
                       (now + timedelta(hours=1)).isoformat(timespec="seconds"), 20.0, None, None, None, None))
-        conn.execute("INSERT INTO observations VALUES (?,?,?,?,?,?,?,?)",
+        conn.execute("INSERT INTO observations (ts, station, source, "
+                     "temperature, humidity, pressure, precip_mm, "
+                     "phys_station, wind_ms) VALUES (?,?,?,?,?,?,?,?,?)",
                      ((now + timedelta(hours=1, minutes=30)).isoformat(timespec="seconds"),
-                      "S2", "metar", 19.0, None, None, None, "27459"))
+                      "S2", "metar", 19.0, None, None, None, "27459", None))
         conn.commit()
         conn.close()
         mae, n = accuracy_query("Test", lead=1, days=1, phys="27459", window=1.5)
