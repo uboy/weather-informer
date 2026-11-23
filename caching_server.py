@@ -659,6 +659,10 @@ def _history_conn():
         conn.execute("UPDATE observations SET source = 'foreca-obs:' || ?, "
                      "phys_station = ? WHERE source = 'foreca-obs' "
                      "AND station = ?", (_phys, _phys, _stn))
+    # Станции вне карты: phys = имя станции (те же семантики, что у
+    # коллектора Foreca) - bare 'foreca-obs' не должен доживать в фильтре.
+    conn.execute("UPDATE observations SET source = 'foreca-obs:' || station, "
+                 "phys_station = station WHERE source = 'foreca-obs'")
     # История факта погоды (статистика, эпик weather-stats): одна строка на
     # успешный фетч цепочки. UNIQUE(ts, src, loc) делает бэкфилл idempotent.
     conn.execute("""CREATE TABLE IF NOT EXISTS weather_fact_history (

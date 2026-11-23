@@ -377,6 +377,11 @@ class TestWeatherStats(unittest.TestCase):
             "('2026-11-22T10:00:00', 'Nizhny Novgorod/Strigino', 'foreca-obs', "
             "5.0, 60.0, 1000.0, NULL, NULL)")
         conn.execute(
+            "INSERT INTO observations (ts, station, source, temperature, "
+            "humidity, pressure, precip_mm, phys_station) VALUES "
+            "('2026-11-22T10:00:00', 'Zavolzhe st', 'foreca-obs', "
+            "4.0, 61.0, 1000.0, NULL, NULL)")
+        conn.execute(
             "INSERT INTO weather_fact_history (ts, src, loc, temperature) "
             "VALUES ('2026-11-22T10:00:00', 'foreca-obs:STRIGINO', "
             "'Nizhny Novgorod/Strigino', 5.0)")
@@ -389,13 +394,15 @@ class TestWeatherStats(unittest.TestCase):
         chk = cs._history_conn()
         chk.close()
         conn = sqlite3.connect(cs.FORECAST_DB)
-        obs_src, obs_phys = conn.execute(
-            "SELECT source, phys_station FROM observations").fetchone()
+        obs_rows = conn.execute(
+            "SELECT source, phys_station FROM observations "
+            "ORDER BY station").fetchall()
         rows = conn.execute(
             "SELECT src FROM weather_fact_history").fetchall()
         conn.close()
-        self.assertEqual(obs_src, "foreca-obs:STRIGINO")
-        self.assertEqual(obs_phys, "STRIGINO")
+        self.assertEqual(obs_rows[0], ("foreca-obs:STRIGINO", "STRIGINO"))
+        # станция вне OGIMET_PHYS: phys = имя станции (семантика коллектора)
+        self.assertEqual(obs_rows[1], ("foreca-obs:Zavolzhe st", "Zavolzhe st"))
         # легаси-дубль удалён, двойник цел: ровно одна строка
         self.assertEqual([r[0] for r in rows], ["foreca-obs:STRIGINO"])
 
