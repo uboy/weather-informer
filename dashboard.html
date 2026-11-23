@@ -245,7 +245,7 @@ function updateSummary(sum) {
     b.textContent = cls[1];
     var bits = [];
     if (info.publisher_connected) { bits.push("издатель на связи"); live += 1; }
-    else if (cs && cs.enabled !== false) { bits.push("сигналинг недоступен (переходная схема)"); }
+    else if (cs && cs.enabled !== false) { bits.push("готова к просмотру"); } // F5: pull-комнате издатель не нужен
     else { bits.push("издатель не подключен"); }
     bits.push("зрителей: " + (info.viewers || 0));
     if (cs && cs.enabled === false) bits.push("выключена на планшете");
@@ -266,7 +266,8 @@ function updateSummary(sum) {
     }
   });
   lastPollOk = new Date().toLocaleTimeString();
-  $("hint").textContent = "комнат: " + ROOMS.length + ", издателей на связи: " + live +
+  // F5: «издателей на связи: 0» на pull-схеме выглядело как авария; пишем только когда они есть
+  $("hint").textContent = "комнат: " + ROOMS.length + (live ? ", издателей на связи: " + live : "") +
     " (обновлено " + lastPollOk + ")";
 }
 
