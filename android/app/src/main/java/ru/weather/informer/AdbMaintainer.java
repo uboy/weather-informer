@@ -20,6 +20,23 @@ public final class AdbMaintainer {
     private static final long SU_TIMEOUT_MS = 10000;
     private static final String ADB_PORT = "5555";
 
+    /**
+     * F4 (23.11): определение PID adbd. Наивный «pidof adbd» ненадёжен на флоте:
+     * ROM Digma (Android 6) игнорирует аргумент pidof и возвращает PID ВСЕХ процессов
+     * (~150 чисел в одной строке), у IRBIS «ps -A» пуст, у AT200 su-вывод может нести
+     * мусор superuser-обвязки. Пробуем по цепочке с проверкой «только цифры»:
+     * pidof (первое поле) -> ps -A -> legacy ps (колонка 2 = PID). mksh-safe, без awk.
+     */
+    private static final String ADB_PID_PROBE =
+        "n=$(pidof adbd 2>/dev/null); n=${n%% *}; "
+        + "case \"$n\" in ''|*[!0-9]*) n=\"\";; esac; "
+        + "[ -n \"$n\" ] || { set -- $(ps -A 2>/dev/null | grep -w adbd | grep -v grep); "
+        + "[ $# -ge 2 ] && n=$2; }; "
+        + "[ -n \"$n\" ] || { set -- $(ps 2>/dev/null | grep -w adbd | grep -v grep); "
+        + "[ $# -ge 2 ] && n=$2; }; "
+        + "case \"$n\" in ''|*[!0-9]*) n=\"\";; esac; "
+        + "echo \"$n\"";
+
     private AdbMaintainer() {
     }
 
@@ -27,10 +44,13 @@ public final class AdbMaintainer {
     public static String statusJson() {
         String persist = firstLine(su("getprop persist.adb.tcp.port"));
         String runtime = firstLine(su("getprop service.adb.tcp.port"));
-        String pid = firstLine(su("pidof adbd"));
+        String pid = firstLine(su(ADB_PID_PROBE));
+        if (!pid.matches("\\d+")) {
+            pid = "";
+        }
         String uid = firstLine(su("id -u"));
         boolean root = "0".equals(uid);
-        boolean running = !pid.isEmpty() && !pid.startsWith("ERR");
+        boolean running = !pid.isEmpty();
         Log.i(TAG, "status: persist=" + persist + " runtime=" + runtime
                 + " adbdPid=" + pid + " root=" + root);
         return "{\"persistPort\":\"" + esc(persist) + "\",\"runtimePort\":\"" + esc(runtime)

@@ -2855,6 +2855,61 @@ def cam_state_snapshot(room):
 CAM_STATE_POLL_INTERVAL_S = 30.0
 
 
+# ===== Мониторинг камер (фаза 2: вкладка на /dashboard, решение владельца
+# 23.11 «именно на странице сервера, а не отдельным сервисом») =====
+# Журнал событий: сессии просмотра (кто/когда/сколько), вкл/выкл камеры,
+# переходы доступности комнат. Кольцевой буфер в памяти + хвост JSONL на
+# диске (переживает рестарт). Секреты не пишутся: комнаты, коды, IP.
+CAM_JOURNAL_FILE = os.path.join(SCRIPT_DIR, "cam_journal.jsonl")
+CAM_JOURNAL_MAX = 2000
+_CAM_JOURNAL = []
+_CAM_JOURNAL_LOCK = threading.Lock()
+_CAM_ROOM_POLL_STATE = {}  # room -> "ok"|"error"; в журнал пишутся только переходы
+
+
+def cam_journal_record(kind, room=None, **fields):
+    rec = {"ts": int(time.time()), "kind": kind}
+    if room:
+        rec["room"] = room
+    rec.update(fields)
+    with _CAM_JOURNAL_LOCK:
+        _CAM_JOURNAL.append(rec)
+        if len(_CAM_JOURNAL) > CAM_JOURNAL_MAX:
+            del _CAM_JOURNAL[: len(_CAM_JOURNAL) - CAM_JOURNAL_MAX]
+    try:
+        with open(CAM_JOURNAL_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:
+        pass  # журнал не должен ронять основной поток
+
+
+def cam_journal_load():
+    """При старте: дозагрузка хвоста JSONL, чтобы история переживала рестарт."""
+    try:
+        with open(CAM_JOURNAL_FILE, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except Exception:
+        return
+    recs = []
+    for line in lines[-CAM_JOURNAL_MAX:]:
+        try:
+            r = json.loads(line)
+            if isinstance(r, dict) and isinstance(r.get("ts"), int):
+                recs.append(r)
+        except Exception:
+            continue
+    with _CAM_JOURNAL_LOCK:
+        _CAM_JOURNAL.extend(recs)
+    log.info("cam journal loaded %d records from %s", len(recs), CAM_JOURNAL_FILE)
+
+
+def cam_journal_query(hours=24):
+    cutoff = int(time.time()) - hours * 3600
+    with _CAM_JOURNAL_LOCK:
+        recs = list(_CAM_JOURNAL)
+    return [r for r in recs if r.get("ts", 0) >= cutoff]
+
+
 def poll_cam_states_once():
     """Один проход опроса /api/cam/state по всем комнатам (петля и тесты)."""
     rooms = cam_section().get("rooms")
@@ -2874,11 +2929,23 @@ def poll_cam_states_once():
             with urllib.request.urlopen(req, timeout=5) as resp:
                 st = json.loads(resp.read().decode("utf-8"))
             if isinstance(st, dict) and "enabled" in st:
+                prev = CAM_REGISTRY.cam_state.get(room)
+                if isinstance(prev, dict) and prev.get("enabled") != st.get("enabled"):
+                    # вкл/выкл камеры - событие для вкладки мониторинга
+                    cam_journal_record("cam_toggle", room,
+                                       enabled=bool(st.get("enabled")))
                 st["source"] = "poll"
                 st["ts"] = int(time.time())
                 CAM_REGISTRY.set_cam_state(room, st)
-        except Exception:
-            pass  # планшет недоступен - кэш не трогаем
+                if _CAM_ROOM_POLL_STATE.get(room) != "ok":
+                    cam_journal_record("room_ok", room)  # опрос восстановился
+                _CAM_ROOM_POLL_STATE[room] = "ok"
+        except Exception as e:
+            # планшет недоступен - кэш не трогаем; в журнал - только переход
+            if _CAM_ROOM_POLL_STATE.get(room) != "error":
+                cam_journal_record("room_error", room, error="%s: %s" % (
+                    type(e).__name__, sanitize_secrets(str(e))[:120]))
+            _CAM_ROOM_POLL_STATE[room] = "error"
 
 
 def cam_state_poll_loop():
@@ -2986,9 +3053,13 @@ def ws_cam_session(handler):
         if role == "publisher":
             if not CAM_REGISTRY.add_publisher(room, conn):
                 raise CamWsClosed(4003, "publisher busy")
+            conn.opened_ts = time.time()
+            cam_journal_record("pub_open", room,
+                               ip=conn.addr[0] if conn.addr else "?")
         else:
             conn.viewer_id = CAM_REGISTRY.next_viewer_id()
             CAM_REGISTRY.add_viewer(room, conn)
+            conn.opened_ts = time.time()
 
         conn.send_text(json.dumps({
             "type": "hello_ok", "role": role, "room": room,
@@ -2996,6 +3067,9 @@ def ws_cam_session(handler):
         }))
         if role == "viewer":
             conn.send_text(json.dumps(cam_state_snapshot(room), ensure_ascii=False))
+            cam_journal_record("view_open", room, viewer=conn.viewer_id,
+                               ip=conn.addr[0] if conn.addr else "?",
+                               transport="ws")
         log.info("cam ws %s %s room=%s viewer=%s from %s",
                  "hello_ok" if role == "publisher" else "hello_ok", role, room, conn.viewer_id,
                  conn.addr[0] if conn.addr else "?")
@@ -3089,12 +3163,16 @@ def ws_cam_session(handler):
             role, room = CAM_REGISTRY.remove(conn)
             conn.alive = False
             if role == "publisher":
+                cam_journal_record("pub_close", room, dur=int(
+                    time.time() - getattr(conn, "opened_ts", time.time())))
                 offline = {"type": "cam_state", "state": "OFFLINE",
                            "viewers": 0, "last_error": "publisher offline",
                            "ts": int(time.time())}
                 for viewer in CAM_REGISTRY.viewers_of(room):
                     viewer.send_text(json.dumps(offline, ensure_ascii=False))
             else:
+                cam_journal_record("view_close", room, viewer=conn.viewer_id,
+                                   dur=int(time.time() - getattr(conn, "opened_ts", time.time())))
                 pub = CAM_REGISTRY.get_publisher(room)
                 if pub is not None:
                     pub.send_text(json.dumps({"type": "viewer_leave", "viewer": conn.viewer_id}))
@@ -3329,6 +3407,45 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
+    def serve_cam_monitor(self):
+        """GET /api/cam/monitor?hours=24: комнаты + журнал событий (вкладка мониторинга)."""
+        if not check_cam_basic_auth(self):
+            send_cam_401(self)
+            return
+        qs = parse_qs(urlparse(self.path).query)
+        try:
+            hours = int(qs.get("hours", ["24"])[0])
+        except (ValueError, TypeError):
+            hours = 24
+        hours = max(1, min(hours, 168))
+        configured = sorted((cam_section().get("rooms") or {}).keys())
+        live = CAM_REGISTRY.summary()
+        rooms = {}
+        for room in configured:
+            entry = dict(live.get(room) or {})
+            entry["configured"] = True
+            entry.setdefault("publisher_connected", False)
+            entry.setdefault("viewers", 0)
+            entry.setdefault("cam_state", cam_state_snapshot(room))
+            rooms[room] = entry
+        events = cam_journal_query(hours=hours)
+        body = json.dumps({
+            "rooms": rooms,
+            "events": events,
+            "hours": hours,
+            "ts": int(time.time()),
+        }, ensure_ascii=False).encode("utf-8")
+        try:
+            self.send_response(200)
+            self.send_cors_headers()
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
     def serve_cam_rooms_admin(self):
         """POST /api/cam/rooms: добавить/убрать камерную комнату (правит config.json).
 
@@ -3520,6 +3637,9 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
             self._send_cam_json(502, {"error": "tablet returned non-answer"})
             return
         data["viewer"] = viewer
+        cam_journal_record("view_open", room, viewer=viewer,
+                           ip=RATE_LIMITER.get_client_ip(self), transport="pull",
+                           audio=bool(offer.get("audio")))
         self._send_cam_json(200, data)
 
     def serve_cam_webrtc_close(self):
@@ -3563,6 +3683,7 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
             urllib.request.urlopen(req, timeout=5).read()
         except Exception:
             pass  # best-effort: PC FAILED/CLOSED на планшете зачистит сессию сам
+        cam_journal_record("view_close", room, viewer=viewer, transport="pull")
         self._send_cam_json(200, {"status": "closed"})
 
     def _send_cam_raw(self, status, ctype, data):
@@ -3801,6 +3922,9 @@ doSave();
             return
         if path == "/api/cam/viewer-token":
             self.serve_cam_viewer_token()
+            return
+        if path == "/api/cam/monitor":
+            self.serve_cam_monitor()
             return
 
         if path == "/sync_time":
@@ -4418,6 +4542,7 @@ def background_refresher():
 
 def main():
     load_disk_cache()
+    cam_journal_load()
     cfg = load_config()
     port = int(cfg.get("port", 8085))
 

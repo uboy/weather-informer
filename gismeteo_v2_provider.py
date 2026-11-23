@@ -214,43 +214,144 @@ class GismeteoV2Provider:
         self._save_city_cache()
         return city_id
 
+    # ===== F7: crash-proof извлечение значений из ответа v2 =====
+    # Значение может прийти скаляром или {min,max,avg}-агрегатом (формы
+    # /weather/forecast/ и /weather/forecast/aggregate/); число достаём
+    # рекурсивно, незнакомая форма -> None и дефолт, а не traceback.
+
+    @classmethod
+    def _num(cls, val):
+        if val is None or isinstance(val, bool):
+            return None
+        if isinstance(val, (int, float)):
+            return float(val)
+        if isinstance(val, dict):
+            for k in ("avg", "C", "min", "max"):
+                if k in val:
+                    n = cls._num(val[k])
+                    if n is not None:
+                        return n
+        return None
+
+    @classmethod
+    def _num_at(cls, obj, *path):
+        cur = obj
+        for p in path:
+            if not isinstance(cur, dict):
+                return None
+            cur = cur.get(p)
+        return cls._num(cur)
+
+    @classmethod
+    def _speed_ms(cls, speed):
+        """m/s из wind.speed: скаляр, {"m_s": x} или агрегат {avg/min/max:{m_s}}."""
+        if isinstance(speed, dict):
+            n = cls._num(speed.get("m_s"))
+            if n is not None:
+                return n
+            agg = {}
+            for k in ("avg", "min", "max"):
+                sub = speed.get(k)
+                if isinstance(sub, dict):
+                    v = sub.get("m_s")
+                    if isinstance(v, (int, float)) and not isinstance(v, bool):
+                        agg[k] = float(v)
+            if agg:
+                return agg.get("avg", agg.get("min", agg.get("max")))
+            return None
+        return cls._num(speed)
+
+    @classmethod
+    def _scale8(cls, direction):
+        """scale_8 из wind.direction: скаляр, {"scale_8": x} или агрегат."""
+        if isinstance(direction, dict):
+            v = direction.get("scale_8")
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                return v
+            for k in ("avg", "min", "max"):
+                sub = direction.get(k)
+                if isinstance(sub, dict):
+                    sv = sub.get("scale_8")
+                    if isinstance(sv, (int, float)) and not isinstance(sv, bool):
+                        return sv
+            return None
+        if isinstance(direction, (int, float)) and not isinstance(direction, bool):
+            return direction
+        return None
+
+    @staticmethod
+    def _icon_str(val, fallback=""):
+        if isinstance(val, str) and val:
+            return val
+        if isinstance(val, dict):
+            inner = val.get("icon")
+            if isinstance(inner, str) and inner:
+                return inner
+        return fallback
+
+    @staticmethod
+    def _descr_str(val, fallback="Ясно"):
+        if isinstance(val, dict):
+            inner = val.get("full")
+            if isinstance(inner, str) and inner:
+                return inner
+            return fallback
+        if isinstance(val, str) and val:
+            return val
+        return fallback
+
     def get_weather(self, lat, lon, city_name=None):
         city_id = self.find_city_id(lat, lon)
         
-        # Запрашиваем агрегированный прогноз на 3 дня и текущие
-        forecast_url = f"{self.BASE_URL}/weather/forecast/aggregate/{city_id}/?days=3"
+        # F7 (23.11): парсер рассчитан на ПОЧАСОВУЮ форму /weather/forecast/
+        # (скаляры temperature.air.C, pressure.mm_hg_atm, wind.speed.m_s).
+        # Старый URL /weather/forecast/aggregate/ возвращает суточные агрегаты
+        # с {min,max,avg}-словарями: первый же float(dict) ронял провайдер
+        # ("float() argument ... not 'dict'", прецедент 23.11 02:44, лог прода).
+        forecast_url = f"{self.BASE_URL}/weather/forecast/{city_id}/?days=3"
         fc_data = self._http_get(forecast_url)
         
         resp = fc_data.get("response", fc_data)
         items = resp.get("items", []) if isinstance(resp, dict) else (resp if isinstance(resp, list) else [])
         
-        if not items:
+        if not items or not isinstance(items[0], dict):
             raise GismeteoV2Error(f"GismeteoV2: пустой ответ прогноза для города {city_id}")
 
-        cur = items[0]
-        # Извлекаем fact
-        temp_val = cur.get("temperature", {}).get("air", {}).get("C")
-        if temp_val is None:
-            temp_val = cur.get("temperature", {}).get("comfort", {}).get("C", 0)
-        temp_int = int(round(float(temp_val))) if temp_val is not None else 0
+        # fact = пункт почасового прогноза, ближайший к текущему моменту
+        now_ts = time.time()
 
-        # Давление
-        pressure_val = cur.get("pressure", {}).get("mm_hg_atm")
+        def item_ts(it):
+            ts = (it.get("date") or {}).get("unix")
+            return ts if isinstance(ts, (int, float)) else 0
+
+        cur = min(items, key=lambda it: abs(item_ts(it) - now_ts))
+
+        # Извлечение чисел только через crash-proof хелперы (F7): ответ может
+        # нести и скаляр, и {min,max,avg}-агрегат; незнакомая форма даёт None
+        # и дефолт, а не traceback.
+        t_air = self._num_at(cur, "temperature", "air", "C")
+        if t_air is None:
+            # агрегатная форма: air = {min:{C},max:{C},avg:{C}}
+            t_air = self._num_at(cur, "temperature", "air")
+        if t_air is None:
+            t_air = self._num_at(cur, "temperature", "comfort", "C")
+        temp_int = int(round(t_air)) if t_air is not None else 0
+
+        pressure_val = self._num_at(cur, "pressure", "mm_hg_atm")
         if pressure_val is None:
-            pressure_val = cur.get("pressure", {}).get("h_pa", 1013) * HPA_TO_MMHG
-        pressure_int = int(round(float(pressure_val)))
+            pressure_val = (self._num_at(cur, "pressure", "h_pa") or 1013.0) * HPA_TO_MMHG
+        pressure_int = int(round(pressure_val))
 
-        # Ветер
-        wind_speed = float(cur.get("wind", {}).get("speed", {}).get("m_s", 0.0))
-        wind_scale8 = cur.get("wind", {}).get("direction", {}).get("scale_8", 0)
-        wind_deg = self._wind_deg(wind_scale8)
+        wind_speed = self._speed_ms((cur.get("wind") or {}).get("speed"))
+        if wind_speed is None:
+            wind_speed = 0.0
+        wind_deg = self._wind_deg(self._scale8((cur.get("wind") or {}).get("direction")))
 
-        # Влажность
-        humidity = int(cur.get("humidity", {}).get("percent", 0))
+        humidity = int(self._num_at(cur, "humidity", "percent") or 0)
 
-        # Иконка и описание
-        icon_code = cur.get("icon", "")
-        descr = cur.get("description", {}).get("full", "Ясно")
+        # Иконка и описание (могут прийти строкой или {"icon":...}/{"full":...})
+        icon_code = self._icon_str(cur.get("icon"))
+        descr = self._descr_str(cur.get("description"))
         icon_mapped = self._map_icon(icon_code, is_day=True)
 
         fact = {
@@ -272,22 +373,38 @@ class GismeteoV2Provider:
             "evening": {"temp_avg": temp_int, "icon": self._map_icon(icon_code, False), "condition": descr, "wind_speed": wind_speed, "pressure_mm": pressure_int, "humidity": humidity},
         }
 
-        for idx, item in enumerate(items[:24]):
-            t_air = item.get("temperature", {}).get("air", {}).get("C", temp_int)
-            p_val = item.get("pressure", {}).get("mm_hg_atm", pressure_int)
-            w_spd = item.get("wind", {}).get("speed", {}).get("m_s", wind_speed)
-            w_dir = self._wind_deg(item.get("wind", {}).get("direction", {}).get("scale_8", 0))
-            hum = item.get("humidity", {}).get("percent", humidity)
-            ic = self._map_icon(item.get("icon", icon_code), is_day=(6 <= idx % 24 < 22))
-            cond = item.get("description", {}).get("full", descr)
+        for item in items[:24]:
+            d = item.get("date") or {}
+            hr_m = re.search(r" (\d{1,2}):", d.get("local") or "")
+            if hr_m:
+                hr = int(hr_m.group(1)) % 24
+            else:
+                hr = int(((d.get("unix") or 0) % 86400) // 3600)
+            t = self._num_at(item, "temperature", "air", "C")
+            if t is None:
+                t = self._num_at(item, "temperature", "air")
+            if t is None:
+                t = temp_int
+            p = self._num_at(item, "pressure", "mm_hg_atm")
+            if p is None:
+                p = pressure_int
+            w = self._speed_ms((item.get("wind") or {}).get("speed"))
+            if w is None:
+                w = wind_speed
+            w_dir = self._wind_deg(self._scale8((item.get("wind") or {}).get("direction")))
+            hum = self._num_at(item, "humidity", "percent")
+            if hum is None:
+                hum = humidity
+            ic = self._map_icon(self._icon_str(item.get("icon"), icon_code), is_day=(6 <= hr < 22))
+            cond = self._descr_str(item.get("description"), descr)
             hours.append({
-                "hour": idx % 24,
-                "temp": int(round(float(t_air))),
+                "hour": hr,
+                "temp": int(round(t)),
                 "icon": ic,
                 "condition": cond,
-                "wind_speed": float(w_spd),
+                "wind_speed": float(w),
                 "wind_angle": w_dir,
-                "pressure_mm": int(round(float(p_val))),
+                "pressure_mm": int(round(p)),
                 "humidity": int(hum),
             })
 

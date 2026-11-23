@@ -16,3 +16,4 @@ android/build/
 android/debug.keystore
 *.idsig
 android/webrtc/*.aar
+cam_journal.jsonl

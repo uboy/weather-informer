@@ -1303,7 +1303,24 @@ var idleEvents = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'touchmove'
 for (var iei = 0; iei < idleEvents.length; iei++) {
     window.addEventListener(idleEvents[iei], resetIdleTimer, true);
 }
-startIdleTimer();
+// F3: автовозврат на "/" имеет смысл только на планшете, где "/" = информер.
+// На сервере-прокси "/" = сама эта страница, и «автовозврат» перезагружал её каждые 60 с.
+(function () {
+    var hideBadge = function () {
+        var b = document.getElementById("idle_badge");
+        if (b) b.style.display = "none";
+    };
+    try {
+        fetch("/health", {cache: "no-store"})
+            .then(function (r) { return r.json(); })
+            .then(function (h) {
+                if (h && h.app === "WeatherInformerKiosk") { startIdleTimer(); } else { hideBadge(); }
+            })
+            .catch(function () { startIdleTimer(); }); // file:// или недоступный /health: как раньше
+    } catch (e) {
+        startIdleTimer();
+    }
+})();
 
 camWire();
 loadSettings();
