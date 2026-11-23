@@ -407,5 +407,32 @@ class TestWeatherStats(unittest.TestCase):
         self.assertEqual([r[0] for r in rows], ["foreca-obs:STRIGINO"])
 
 
+    def test_fact_wind_refresh(self):
+        # П7: fact-строки, созданные ДО появления wind_ms в observations,
+        # получают ветер подтяжкой UPDATE...FROM; NULL-ветер наблюдения
+        # в факт не пишет.
+        conn = sqlite3.connect(cs.FORECAST_DB)
+        conn.execute("DELETE FROM observations")
+        conn.execute("DELETE FROM weather_fact_history")
+        conn.execute(
+            "INSERT INTO observations (ts, station, source, temperature, "
+            "humidity, pressure, precip_mm, phys_station, wind_ms) VALUES "
+            "('2026-11-22T12:00:00', 'Nizhny Novgorod WMO27459', "
+            "'ogimet-synop', -1.0, NULL, 990.0, NULL, '27459', 3.3)")
+        conn.execute(
+            "INSERT INTO weather_fact_history (ts, src, loc, wind_ms) "
+            "VALUES ('2026-11-22T12:00:00', 'ogimet-synop', "
+            "'Nizhny Novgorod WMO27459', NULL)")
+        conn.commit()
+        conn.close()
+        cs.backfill_fact_history()
+        conn = sqlite3.connect(cs.FORECAST_DB)
+        w = conn.execute(
+            "SELECT wind_ms FROM weather_fact_history WHERE src = "
+            "'ogimet-synop'").fetchone()[0]
+        conn.close()
+        self.assertAlmostEqual(w, 3.3)
+
+
 if __name__ == "__main__":
     unittest.main()

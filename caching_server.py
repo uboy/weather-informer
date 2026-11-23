@@ -746,6 +746,15 @@ def backfill_fact_history():
                 "     ELSE pressure * 0.750062 END, "
                 "wind_ms FROM observations "
                 "WHERE source <> 'foreca-obs'")
+            # П7: ветер в строки факта, созданные ДО появления wind_ms
+            # (INSERT OR IGNORE их не обновляет). Идемпотентно: только NULL.
+            conn.execute(
+                "UPDATE weather_fact_history SET wind_ms = o.wind_ms "
+                "FROM observations o "
+                "WHERE o.ts = weather_fact_history.ts "
+                " AND o.source = weather_fact_history.src "
+                " AND o.wind_ms IS NOT NULL "
+                " AND weather_fact_history.wind_ms IS NULL")
             conn.commit()
             if cur.rowcount > 0:
                 log.info("stats: backfilled %d observation rows",
@@ -1519,6 +1528,10 @@ def stats_loop():
         backfill_wind_from_metar()
     except Exception as e:
         log.warning("observations: metar wind backfill failed: %s", e)
+    try:
+        backfill_fact_history()  # ветер в уже существующие строки факта
+    except Exception as e:
+        log.warning("observations: fact wind refresh failed: %s", e)
     while True:
         interval = 3600
         try:
