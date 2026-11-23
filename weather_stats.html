@@ -387,6 +387,19 @@ function wxDrawChart(series) {
 	function tms(v) { var t = new Date(String(v).replace(" ", "T")).getTime(); return isFinite(t) ? t : null; }
 	var n = pts.length;
 	var t0 = tms(pts[0].t), tN = tms(pts[n - 1].t);
+	// П12: ось X по ПОЛНОМУ окну hourly, а не только по выбранным точкам -
+	// иначе редкий источник (Yandex: 5 точек за сутки) сжимал ось до пары
+	// часов и тики с подписями исчезали (фидбек: «данные есть, подписей нет»)
+	if (wxData && (wxData.days || wxDays) <= 7 && wxData.hourly && wxData.hourly.length) {
+		var a0 = null, aN = null, ai, at;
+		for (ai = 0; ai < wxData.hourly.length; ai++) {
+			at = tms(wxData.hourly[ai].ts);
+			if (at == null) continue;
+			if (a0 == null || at < a0) a0 = at;
+			if (aN == null || at > aN) aN = at;
+		}
+		if (a0 != null && aN != null && aN > a0 && (aN - a0) > (tN - t0)) { t0 = a0; tN = aN; }
+	}
 	var timed = t0 != null && tN != null && tN > t0;
 	function xOf(pt) {
 		if (!timed) return padL + (n > 1 ? pts.indexOf(pt) / (n - 1) : 0) * (W - padL - padR);
