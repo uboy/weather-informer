@@ -733,7 +733,7 @@ def backfill_fact_history():
     графики были непустыми с первого дня. forecast_points не читается:
     прогнозные части суток пишутся с valid_at=created и фильтром «факт»
     не отличимы - давали выбросы на графике (фидбек владельца 23.11).
-    Давление: metar-awc уже в мм рт.ст., foreca-obs/ogimet-synop в гПа
+    Давление: metar-awc/gismeteo уже в мм рт.ст., foreca-obs/ogimet-synop в гПа
     (x0.750062). INSERT OR IGNORE: повторный вызов не дублирует строки."""
     try:
         conn = _history_conn()
@@ -742,7 +742,7 @@ def backfill_fact_history():
                 "INSERT OR IGNORE INTO weather_fact_history "
                 "(ts, src, loc, temperature, humidity, pressure_mm, wind_ms) "
                 "SELECT ts, source, station, temperature, humidity, "
-                "CASE WHEN source = 'metar-awc' THEN pressure "
+                "CASE WHEN source IN ('metar-awc', 'gismeteo') THEN pressure "
                 "     ELSE pressure * 0.750062 END, "
                 "wind_ms FROM observations "
                 "WHERE source <> 'foreca-obs'")
@@ -995,6 +995,52 @@ def collect_foreca_observations():
         return n
     except Exception as e:
         log.warning("observations: Foreca недоступен: %s", e)
+        return 0
+
+
+def collect_gismeteo_observations():
+    """Наблюдение Gismeteo v2 -> observations: независимый от чейна сбор
+    (фидбек владельца 23.11 "все источники надо загружать сразу" - до П8
+    Gismeteo стоял вторым хопом чейна и вызывался только при падении
+    Яндекса, т.е. ни разу). Давление пишется в мм рт.ст. как отдаёт API -
+    backfill_fact_history знает ветку gismeteo."""
+    global gismeteo_v2_quota_blocked_until
+    cfg = load_config()
+    key = cfg.get("gismeteo_api_key", "").strip()
+    if not key:
+        return 0
+    if time.time() <= gismeteo_v2_quota_blocked_until:
+        log.debug("observations: Gismeteo v2 quota currently blocked")
+        return 0
+    try:
+        lat = cfg.get("lat", 56.317722)
+        lon = cfg.get("lon", 43.999303)
+        GISMETEO_V2.api_key = key
+        g = GISMETEO_V2.get_weather(lat, lon)
+        f = g.get("fact", {})
+        ts = datetime.now().isoformat(timespec="seconds")
+        conn = _history_conn()
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO observations "
+                "(ts, station, source, temperature, humidity, pressure, "
+                " precip_mm, phys_station, wind_ms) VALUES (?,?,?,?,?,?,?,?,?)",
+                (ts, g.get("city_name") or "Gismeteo", "gismeteo",
+                 f.get("temp"), f.get("humidity"), f.get("pressure_mm"),
+                 None, None, f.get("wind_speed")))
+            conn.commit()
+        finally:
+            conn.close()
+        log.info("observations: записано наблюдение Gismeteo (%s°, %s м/с)",
+                 f.get("temp"), f.get("wind_speed"))
+        return 1
+    except GismeteoV2QuotaError as e:
+        gismeteo_v2_quota_blocked_until = _next_midnight_utc()
+        log.warning("observations: Gismeteo v2 quota blocked until %s: %s",
+                    gismeteo_v2_quota_blocked_until, sanitize_secrets(e))
+        return 0
+    except Exception as e:
+        log.warning("observations: Gismeteo недоступен: %s", sanitize_secrets(e))
         return 0
 
 
@@ -1523,6 +1569,7 @@ def stats_loop():
     rotate_stats_if_needed()
     prune_history()
     collect_foreca_observations()
+    collect_gismeteo_observations()
     backfill_wind_from_synop()
     try:
         backfill_wind_from_metar()
@@ -1544,6 +1591,10 @@ def stats_loop():
         rotate_stats_if_needed()
         prune_history()
         collect_foreca_observations()  # почасовой ground truth для /accuracy
+        try:
+            collect_gismeteo_observations()  # независимый сбор, не хоп чейна
+        except Exception as e:
+            log.warning("observations: gismeteo tick failed: %s", e)
         try:
             collect_ogimet_synop(hours_back=30)
         except Exception as e:

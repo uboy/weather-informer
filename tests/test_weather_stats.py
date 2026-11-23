@@ -19,6 +19,7 @@ import time
 import unittest
 import urllib.request
 import urllib.error
+from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import caching_server as cs
@@ -432,6 +433,76 @@ class TestWeatherStats(unittest.TestCase):
             "'ogimet-synop'").fetchone()[0]
         conn.close()
         self.assertAlmostEqual(w, 3.3)
+
+    def test_gismeteo_obs_collect_and_fact(self):
+        """П8: независимый сбор Gismeteo -> observations + факт с давлением
+        в мм (ветка gismeteo CASE, без x0.750062)."""
+        cs.gismeteo_v2_quota_blocked_until = 0.0
+        g = {"city_name": "Test City",
+             "fact": {"temp": -1, "humidity": 95, "pressure_mm": 749,
+                      "wind_speed": 0.0}}
+        with mock.patch.object(cs, "load_config",
+                               return_value={"gismeteo_api_key": "k",
+                                             "lat": 56.3, "lon": 44.0}), \
+             mock.patch.object(cs.GISMETEO_V2, "get_weather",
+                               return_value=g) as m:
+            n = cs.collect_gismeteo_observations()
+        self.assertEqual(n, 1)
+        self.assertTrue(m.called)
+        conn = cs._history_conn()
+        try:
+            row = conn.execute(
+                "SELECT station, temperature, humidity, pressure, wind_ms "
+                "FROM observations WHERE source = 'gismeteo'").fetchone()
+            self.assertEqual(row, ("Test City", -1.0, 95.0, 749.0, 0.0))
+        finally:
+            conn.close()
+        cs.backfill_fact_history()
+        conn = cs._history_conn()
+        try:
+            row = conn.execute(
+                "SELECT temperature, humidity, pressure_mm, wind_ms "
+                "FROM weather_fact_history WHERE src = 'gismeteo'").fetchone()
+            self.assertEqual(row, (-1.0, 95.0, 749.0, 0.0))
+        finally:
+            conn.close()
+
+    def test_gismeteo_no_key_skips(self):
+        """П8 негатив: без ключа сбор не ходит в сеть."""
+        cs.gismeteo_v2_quota_blocked_until = 0.0
+        with mock.patch.object(cs, "load_config",
+                               return_value={"gismeteo_api_key": ""}), \
+             mock.patch.object(cs.GISMETEO_V2, "get_weather") as m:
+            n = cs.collect_gismeteo_observations()
+        self.assertEqual(n, 0)
+        self.assertFalse(m.called)
+
+    def test_gismeteo_quota_error_blocked(self):
+        """П8 негатив: QuotaError -> строка не пишется, блок до полуночи UTC."""
+        cs.gismeteo_v2_quota_blocked_until = 0.0
+        conn = cs._history_conn()
+        try:
+            conn.execute("DELETE FROM observations WHERE source = 'gismeteo'")
+            conn.commit()
+        finally:
+            conn.close()
+        with mock.patch.object(cs, "load_config",
+                               return_value={"gismeteo_api_key": "k",
+                                             "lat": 56.3, "lon": 44.0}), \
+             mock.patch.object(cs.GISMETEO_V2, "get_weather",
+                               side_effect=cs.GismeteoV2QuotaError("q")):
+            n = cs.collect_gismeteo_observations()
+        self.assertEqual(n, 0)
+        self.assertGreater(cs.gismeteo_v2_quota_blocked_until, time.time())
+        conn = cs._history_conn()
+        try:
+            cnt = conn.execute("SELECT COUNT(*) FROM observations "
+                               "WHERE source = 'gismeteo'").fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(cnt, 0)
+        cs.gismeteo_v2_quota_blocked_until = 0.0
+
 
 
 if __name__ == "__main__":
