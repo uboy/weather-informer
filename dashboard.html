@@ -41,13 +41,25 @@ button.del:hover { background: #6d2d39; }
 #pstatus { color: #8aa0b4; }
 .hidden { display: none !important; }
 .err { color: #ff7a8a; }
+#tabs { display: flex; gap: 6px; }
+#tabs button { background: #1d2f45; padding: 6px 14px; }
+#tabs button.active { background: #24425c; outline: 1px solid #34527a; }
+#mon_grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; padding: 12px 20px 16px; }
+#mon_events_list { display: flex; flex-direction: column; gap: 2px; max-height: 40vh; overflow-y: auto; }
+#mon_events_list .ev { display: flex; gap: 10px; font-size: 12px; padding: 2px 4px; border-bottom: 1px solid #1d2a38; }
+#mon_events_list .ev .t { color: #64809c; white-space: nowrap; }
 </style>
 </head>
 <body>
 <header>
   <h1>Камеры дома</h1>
+  <nav id="tabs">
+    <button id="tab-cam" class="active">Камеры</button>
+    <button id="tab-mon">Мониторинг</button>
+  </nav>
   <span class="hint" id="hint">загрузка...</span>
 </header>
+<div id="camview">
 <div id="grid"></div>
 <div id="admin" class="card" style="margin: 0 20px 24px;">
   <div class="head"><span class="name">Комнаты (админ)</span></div>
@@ -63,6 +75,14 @@ button.del:hover { background: #6d2d39; }
     <button id="adm_add">Добавить комнату</button>
   </div>
   <div id="adm_msg" class="meta" style="margin-top:6px;"></div>
+</div>
+</div>
+<div id="monview" class="hidden">
+  <div id="mon_grid"></div>
+  <div class="card" style="margin: 0 20px 24px;">
+    <div class="head"><span class="name">Журнал событий</span><span class="meta" id="mon_hours"></span></div>
+    <div id="mon_events_list"></div>
+  </div>
 </div>
 <div id="player">
   <div class="head" style="width:92vw; display:flex; justify-content:space-between; align-items:center;">
@@ -274,10 +294,203 @@ function updateSummary(sum) {
 var pollBusy = false; // F2: новый опрос не стартует, пока предыдущий не завершился
 
 function pollLoop() {
-  if (document.hidden || pollBusy) return;
+  if (document.hidden || pollBusy || activeTab !== "cam") return;
   pollBusy = true;
   api("/api/cam/summary", function (j) { pollBusy = false; updateSummary(j); },
       function () { pollBusy = false; });
+}
+
+// ===== Вкладка «Мониторинг» (фаза 2: вкладка на странице сервера, решение
+// владельца 23.11 «именно на странице сервера, а не отдельным сервисом») =====
+// Опросы живут только пока вкладка активна и страница видима (Page Visibility);
+// кадры комнат - completion-driven раз в 60 с через fetch->blob: 403 планшета
+// (камера выключена) останавливает опрос комнаты - негативный кейс плана
+// (отказ по 403 устройства, а не по сетевой причине).
+var activeTab = "cam";
+var monBusy = false;
+var monSnapTimers = {};
+var monDisabled = {};  // room -> true: планшет ответил 403 / cam_state.enabled=false
+var monBlobUrls = {};  // room -> последний objectURL (revoke перед заменой)
+var lastMonRooms = {};
+
+try { if (localStorage.getItem("camtab") === "mon") activeTab = "mon"; } catch (e) {}
+
+function setTab(t) {
+  activeTab = t;
+  try { localStorage.setItem("camtab", t); } catch (e) {}
+  $("camview").classList.toggle("hidden", t !== "cam");
+  $("monview").classList.toggle("hidden", t !== "mon");
+  $("tab-cam").classList.toggle("active", t === "cam");
+  $("tab-mon").classList.toggle("active", t === "mon");
+  if (t === "mon") monPoll(); else pollLoop();
+}
+$("tab-cam").addEventListener("click", function () { setTab("cam"); });
+$("tab-mon").addEventListener("click", function () { setTab("mon"); });
+
+var EV_KINDS = {
+  view_open: "просмотр открыт",
+  view_close: "просмотр закрыт",
+  pub_open: "планшет подключился (камера онлайн)",
+  pub_close: "планшет отключился",
+  cam_toggle: "камера",
+  room_ok: "опрос комнаты восстановился",
+  room_error: "ошибка комнаты"
+};
+
+function evText(ev) {
+  var bits = [EV_KINDS[ev.kind] || ev.kind];
+  if (ev.kind === "view_open") {
+    bits.push("зритель #" + (ev.viewer != null ? ev.viewer : "?") + ", ip " + (ev.ip || "?") +
+      (ev.transport === "pull" ? ", pull-видео" + (ev.audio ? " со звуком" : "") : ", WS"));
+  }
+  if (ev.kind === "view_close") {
+    bits.push("зритель #" + (ev.viewer != null ? ev.viewer : "?") +
+      (ev.dur != null ? ", длительность " + ev.dur + " с" : ""));
+  }
+  if (ev.kind === "pub_open") bits.push("ip " + (ev.ip || "?"));
+  if (ev.kind === "pub_close" && ev.dur != null) bits.push("был онлайн " + ev.dur + " с");
+  if (ev.kind === "cam_toggle") bits.push(ev.enabled ? "включена" : "выключена");
+  if (ev.kind === "room_error") bits.push(ev.error || "");
+  return bits.filter(Boolean).join(" - ");
+}
+
+function buildMonGrid() {
+  var g = $("mon_grid");
+  g.textContent = "";
+  ROOMS.forEach(function (room) {
+    function el(tag, cls, text, id) {
+      var n = document.createElement(tag);
+      if (cls) n.className = cls;
+      if (id) n.id = id;
+      if (text != null) n.textContent = text;
+      return n;
+    }
+    var card = el("div", "card");
+    var head = el("div", "head");
+    head.appendChild(el("span", "name", room));
+    head.appendChild(el("span", "badge off", "нет данных", "mb-" + room));
+    card.appendChild(head);
+    card.appendChild(el("div", "meta", "нет данных", "mm-" + room));
+    var snap = el("div", "snapbox", null, "ms-" + room);
+    snap.appendChild(el("span", "empty", "кадр раз в 60 с"));
+    card.appendChild(snap);
+    g.appendChild(card);
+  });
+}
+
+function monSchedule(room, delay) {
+  if (monSnapTimers[room]) clearTimeout(monSnapTimers[room]);
+  monSnapTimers[room] = setTimeout(function () { monSnap(room); }, delay || 60000);
+}
+
+function monSnap(room) {
+  if (activeTab !== "mon" || document.hidden) return; // фоном не опрашиваем
+  if (monDisabled[room]) return; // выключенную камеру не опрашиваем
+  var box = $("ms-" + room);
+  if (!box) return;
+  fetch("/api/cam/snapshot?room=" + encodeURIComponent(room) + "&t=" + Date.now(),
+        {cache: "no-store"})
+    .then(function (r) {
+      if (r.status === 403) {
+        // планшет сам отказал (disabled/forbidden) - останавливаем опрос комнаты
+        monDisabled[room] = true;
+        box.innerHTML = '<span class="empty">камера выключена на планшете - опрос остановлен</span>';
+        return null;
+      }
+      if (r.status === 503) { return null; } // занято (стрим/снапшот) - позже
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.blob();
+    })
+    .then(function (b) {
+      if (b && box) {
+        if (monBlobUrls[room]) { try { URL.revokeObjectURL(monBlobUrls[room]); } catch (e) {} }
+        var url = URL.createObjectURL(b);
+        monBlobUrls[room] = url;
+        box.textContent = "";
+        var img = document.createElement("img");
+        img.alt = room;
+        img.src = url;
+        box.appendChild(img);
+        img.classList.add("srot");
+        img.style.transform = orientTransform(room);
+      }
+    })
+    .catch(function () {})
+    .then(function () { monSchedule(room, 60000); }); // completion-driven
+}
+
+function monPoll() {
+  if (document.hidden || activeTab !== "mon" || monBusy) return;
+  monBusy = true;
+  api("/api/cam/monitor?hours=24", function (j) {
+    monBusy = false;
+    var rooms = j.rooms || {};
+    lastMonRooms = rooms;
+    $("mon_hours").textContent =
+      "события за " + (j.hours || 24) + " ч: " + ((j.events || []).length);
+    ROOMS.forEach(function (room) {
+      var info = rooms[room] || {};
+      var cs = info.cam_state;
+      var b = $("mb-" + room), m = $("mm-" + room);
+      if (!b || !m) return;
+      var cls = badgeFor(cs);
+      b.className = "badge " + cls[0];
+      b.textContent = cls[1];
+      var bits = [];
+      if (info.publisher_connected) bits.push("издатель на связи");
+      bits.push("зрителей: " + (info.viewers || 0));
+      if (cs && cs.enabled === false) bits.push("выключена на планшете");
+      if (cs && cs.last_error) bits.push("ошибка: " + cs.last_error);
+      if (monDisabled[room]) bits.push("опрос кадров остановлен (403)");
+      m.textContent = bits.join(", ") || "нет данных";
+      var wasDisabled = !!monDisabled[room];
+      if (cs && cs.enabled === false) {
+        // выключенная комната: таймер кадров снимаем, пока не включат
+        monDisabled[room] = true;
+        if (monSnapTimers[room]) { clearTimeout(monSnapTimers[room]); delete monSnapTimers[room]; }
+        var box = $("ms-" + room);
+        if (box && !box.querySelector(".empty")) {
+          box.innerHTML = '<span class="empty">камера выключена - опрос остановлен</span>';
+        }
+      } else {
+        delete monDisabled[room]; // включилась заново - возобновляем
+        monSchedule(room, wasDisabled ? 1000 : 60000);
+      }
+    });
+    renderEvents(j.events || []);
+  }, function () { monBusy = false; });
+}
+
+function renderEvents(events) {
+  var box = $("mon_events_list");
+  box.textContent = "";
+  events.slice(-200).forEach(function (ev) {
+    function el(tag, cls, text) {
+      var n = document.createElement(tag);
+      if (cls) n.className = cls;
+      if (text != null) n.textContent = text;
+      return n;
+    }
+    var row = el("div", "ev");
+    var d = new Date((ev.ts || 0) * 1000);
+    row.appendChild(el("span", "t", d.toLocaleTimeString()));
+    row.appendChild(el("span", null, (ev.room ? ev.room + " - " : "") + evText(ev)));
+    box.appendChild(row);
+  });
+}
+
+function monStopSnaps() {
+  Object.keys(monSnapTimers).forEach(function (k) {
+    clearTimeout(monSnapTimers[k]);
+    delete monSnapTimers[k];
+  });
+}
+
+function monStartSnaps() {
+  ROOMS.forEach(function (room) {
+    var cs = (lastMonRooms[room] || {}).cam_state;
+    if (!monDisabled[room] && !(cs && cs.enabled === false)) monSchedule(room, 500);
+  });
 }
 
 // ===== Зритель: pull-WebRTC (сервер сам подключается к планшету, D4) =====
@@ -641,12 +854,14 @@ document.addEventListener("visibilitychange", function () {
     // свобода камеры важнее фона: закрываем зрителя при уходе со вкладки
     if (viewer) closeViewer();
     Object.keys(snapTimers).forEach(function (k) { clearInterval(snapTimers[k]); delete snapTimers[k]; });
+    monStopSnaps();
   } else {
     pollLoop();
     Object.keys(lastRooms).forEach(function (room) {
       var cs = (lastRooms[room] || {}).cam_state;
       if (cs && cs.enabled !== false) refreshSnap(room);
     });
+    if (activeTab === "mon") { monPoll(); monStartSnaps(); }
   }
 });
 
@@ -711,9 +926,11 @@ api("/api/cam/viewer-token", function (tok) {
   TOKEN = tok.viewer_token;
   ROOMS = tok.rooms || [];
   buildGrid();
+  buildMonGrid();
   renderAdminRooms();
-  pollLoop();
+  setTab(activeTab);
   pollTimer = setInterval(pollLoop, 5000);
+  setInterval(monPoll, 30000);
 });
 </script>
 </body>
