@@ -609,6 +609,9 @@ def load_disk_cache():
                     log.info("Restored cache from disk (%s), age: %.1f min (src=%s, ttl=%.1f min)",
                              CACHE_FILE, (time.time() - last_fetch_time) / 60,
                              cached_data.get("src"), disk_ttl / 60)
+                    weather_journal_record("cache_restored",
+                                           source=str(cached_data.get("src")),
+                                           age_min=round((time.time() - last_fetch_time) / 60, 1))
         except Exception as e:
             log.warning("Could not read disk cache: %s", e)
 
@@ -638,7 +641,64 @@ def _history_conn():
         conn.execute("ALTER TABLE observations ADD COLUMN phys_station TEXT")
     except Exception:
         pass
+    # История факта погоды (статистика, эпик weather-stats): одна строка на
+    # успешный фетч цепочки. UNIQUE(ts, src, loc) делает бэкфилл idempotent.
+    conn.execute("""CREATE TABLE IF NOT EXISTS weather_fact_history (
+        ts TEXT NOT NULL, src TEXT NOT NULL, loc TEXT NOT NULL,
+        temperature REAL, humidity REAL, pressure_mm REAL, wind_ms REAL,
+        UNIQUE(ts, src, loc))""")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_wfh_ts ON weather_fact_history(ts)")
     return conn
+
+
+def record_fact_history(src, loc, fact):
+    """Строка в weather_fact_history на успешный фетч (фаза P1 статистики).
+
+    Зовётся из record_forecast (единая точка всех успехов цепочки). Поля,
+    которых источник не отдал, пишутся как NULL (no fake data). Журнал не
+    роняет основной поток."""
+    try:
+        now_iso = datetime.now().isoformat(timespec="seconds")
+        if not isinstance(fact, dict):
+            return
+        conn = _history_conn()
+        try:
+            conn.execute(
+                "INSERT OR IGNORE INTO weather_fact_history "
+                "(ts, src, loc, temperature, humidity, pressure_mm, wind_ms) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (now_iso, str(src), str(loc),
+                 fact.get("temp"), fact.get("humidity"),
+                 fact.get("pressure_mm"), fact.get("wind_speed")))
+            conn.commit()
+        finally:
+            conn.close()
+        # Событие журнала источников (вкладка статистики): успех цепочки.
+        weather_journal_record("fetch_ok", source=str(src))
+    except Exception as e:
+        log.warning("stats: fact history not recorded: %s", e)
+
+
+def backfill_fact_history():
+    """Разовый перенос fact-строк forecast_points (valid_at = created) в
+    weather_fact_history при старте - чтобы графики были непустыми с первого
+    дня. INSERT OR IGNORE: повторный вызов не дублирует строки."""
+    try:
+        conn = _history_conn()
+        try:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO weather_fact_history "
+                "(ts, src, loc, temperature, humidity, pressure_mm, wind_ms) "
+                "SELECT created, provider, loc, temperature, humidity, pressure, NULL "
+                "FROM forecast_points WHERE valid_at = created")
+            conn.commit()
+            if cur.rowcount > 0:
+                log.info("stats: backfilled %d fact rows from forecast_points",
+                         cur.rowcount)
+        finally:
+            conn.close()
+    except Exception as e:
+        log.warning("stats: fact history backfill failed: %s", e)
 
 
 def record_forecast(provider, loc, data):
@@ -648,6 +708,7 @@ def record_forecast(provider, loc, data):
         now = datetime.now()
         now_iso = now.isoformat(timespec="seconds")
         f = data.get("fact") or {}
+        record_fact_history(provider, loc, f)
         rows = [(now_iso, provider, loc, now_iso,
                  f.get("temp"), f.get("humidity"), f.get("pressure_mm"),
                  None, None)]
@@ -737,6 +798,8 @@ def prune_history():
             conn.execute("DELETE FROM observations WHERE ts < datetime('now', ?)",
                          (f"-{HISTORY_DAYS} days",))
             conn.execute("DELETE FROM synop_raw WHERE ts_utc < datetime('now', ?)",
+                         (f"-{HISTORY_DAYS} days",))
+            conn.execute("DELETE FROM weather_fact_history WHERE ts < datetime('now', ?)",
                          (f"-{HISTORY_DAYS} days",))
             conn.commit()
         finally:
@@ -1897,10 +1960,18 @@ def _store_location_result(key, data, note=None, ttl=None):
         is_primary = (data and data.get("src") == "Gismeteo") if cfg.get("primary_source", "yandex") == "gismeteo" else (data and data.get("src") == "Yandex")
         if key == defk or (base_key == defk and (is_primary or not cached_data)):
             LOCATION_CACHE[defk] = {"data": data, "ts": ts, "ttl": entry_ttl}
+            prev_src = (cached_data or {}).get("src") if cached_data else None
             cached_data = data
             last_fetch_time = ts
             last_error_message = sanitize_secrets(note)
             should_save_disk = True
+            new_src = (data or {}).get("src")
+            if new_src and prev_src and new_src != prev_src:
+                # Статистика: смена отображаемого источника (например, квота
+                # Яндекса исчерпана -> фолбэк). note урезан, секретов нет.
+                weather_journal_record("src_switch", source=str(new_src),
+                                       prev_source=str(prev_src),
+                                       note=str(sanitize_secrets(note) or "")[:120])
 
         with KEY_LOCKS_LOCK:
             if len(KEY_LOCKS) > 32:
@@ -2252,6 +2323,12 @@ def _fetch_weather_locked(force, lat, lon, sources=None, key=None):
 
         if key == defk or key == defk + ":yandex":
             last_fetch_time = ts
+            # Статистика: вся цепочка не дала данных (журнал для вкладки).
+            # error уже прогнан через sanitize_secrets, ещё и урезан.
+            weather_journal_record(
+                "chain_fail",
+                error=str(sanitize_secrets(last_error_message) or "")[:160],
+                quota_blocked=bool(primary_quota_blocked))
 
         with KEY_LOCKS_LOCK:
             if len(KEY_LOCKS) > 32:
@@ -2910,6 +2987,62 @@ def cam_journal_query(hours=24):
     return [r for r in recs if r.get("ts", 0) >= cutoff]
 
 
+# ===== Журнал погоды (эпик weather-stats P1: вкладка статистики) =====
+# События: fetch_ok (успех источника цепочки), src_switch (смена отображаемого
+# источника - например квота Яндекса исчерпана, включился фолбэк),
+# chain_fail (вся цепочка не дала данных), cache_restored. Кольцевой буфер в
+# памяти + хвост JSONL на диске (переживает рестарт), по образцу cam_journal.
+# Секреты не пишутся: имена источников и обрезанный last_error.
+WEATHER_JOURNAL_FILE = os.path.join(SCRIPT_DIR, "weather_journal.jsonl")
+WEATHER_JOURNAL_MAX = 4000
+_WEATHER_JOURNAL = []
+_WEATHER_JOURNAL_LOCK = threading.Lock()
+
+
+def weather_journal_record(kind, source=None, **fields):
+    rec = {"ts": int(time.time()), "kind": kind}
+    if source:
+        rec["source"] = source
+    rec.update(fields)
+    with _WEATHER_JOURNAL_LOCK:
+        _WEATHER_JOURNAL.append(rec)
+        if len(_WEATHER_JOURNAL) > WEATHER_JOURNAL_MAX:
+            del _WEATHER_JOURNAL[: len(_WEATHER_JOURNAL) - WEATHER_JOURNAL_MAX]
+    try:
+        with open(WEATHER_JOURNAL_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:
+        pass  # журнал не должен ронять основной поток
+
+
+def weather_journal_load():
+    """При старте: дозагрузка хвоста JSONL (битые строки пропускаются молча)."""
+    try:
+        with open(WEATHER_JOURNAL_FILE, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except Exception:
+        return
+    recs = []
+    for line in lines[-WEATHER_JOURNAL_MAX:]:
+        try:
+            r = json.loads(line)
+            if isinstance(r, dict) and isinstance(r.get("ts"), int):
+                recs.append(r)
+        except Exception:
+            continue
+    with _WEATHER_JOURNAL_LOCK:
+        _WEATHER_JOURNAL.extend(recs)
+    log.info("weather journal loaded %d records from %s",
+             len(recs), WEATHER_JOURNAL_FILE)
+
+
+def weather_journal_query(hours=24):
+    cutoff = int(time.time()) - hours * 3600
+    with _WEATHER_JOURNAL_LOCK:
+        recs = list(_WEATHER_JOURNAL)
+    return [r for r in recs if r.get("ts", 0) >= cutoff]
+
+
 def poll_cam_states_once():
     """Один проход опроса /api/cam/state по всем комнатам (петля и тесты)."""
     rooms = cam_section().get("rooms")
@@ -3446,6 +3579,104 @@ class WeatherHTTPHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
+    def serve_weather_stats(self):
+        """GET /api/weather/stats?days=N: история факта + журнал источников.
+
+        Вкладка статистики (эпик weather-stats). Без Basic auth: класс данных
+        тот же, что /weather.json (уже раздаётся без auth, LAN-only), секретов
+        в ответе нет - только метрики и имена источников.
+        """
+        qs = parse_qs(urlparse(self.path).query)
+        try:
+            days = int(qs.get("days", ["7"])[0])
+        except (ValueError, TypeError):
+            days = 7
+        days = max(1, min(days, HISTORY_DAYS))
+
+        current = None
+        with LOCATION_CACHE_LOCK:
+            if cached_data and isinstance(cached_data, dict):
+                fact = cached_data.get("fact") or {}
+                current = {
+                    "temp": fact.get("temp"),
+                    "humidity": fact.get("humidity"),
+                    "pressure_mm": fact.get("pressure_mm"),
+                    "wind_speed": fact.get("wind_speed"),
+                    "src": cached_data.get("src"),
+                    "city": cached_data.get("city_name"),
+                    "age_min": (round((time.time() - last_fetch_time) / 60, 1)
+                                if last_fetch_time else None),
+                }
+
+        hourly = []
+        daily = []
+        conn = None
+        try:
+            conn = _history_conn()
+            cutoff = "datetime('now', '-%d days')" % days
+            hourly = conn.execute(
+                "SELECT ts, src, temperature, humidity, pressure_mm, wind_ms "
+                "FROM weather_fact_history WHERE ts >= " + cutoff +
+                " ORDER BY ts LIMIT 20000").fetchall()
+            daily = conn.execute(
+                "SELECT date(ts, 'localtime') AS d, "
+                "MIN(temperature), ROUND(AVG(temperature), 1), MAX(temperature), "
+                "ROUND(AVG(humidity), 0), ROUND(AVG(pressure_mm), 1), "
+                "ROUND(AVG(wind_ms), 1), COUNT(*) "
+                "FROM weather_fact_history WHERE ts >= " + cutoff +
+                " GROUP BY d ORDER BY d").fetchall()
+        except Exception as e:
+            log.warning("stats: history query failed: %s", e)
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+        hourly = [
+            {"ts": r[0], "src": r[1], "temp": r[2], "humidity": r[3],
+             "pressure_mm": r[4], "wind_ms": r[5]}
+            for r in hourly
+        ]
+        daily = [
+            {"day": r[0], "tmin": r[1], "tavg": r[2], "tmax": r[3],
+             "humidity": r[4], "pressure_mm": r[5], "wind_ms": r[6], "n": r[7]}
+            for r in daily
+        ]
+
+        # Панель источников: агрегат по fetch_ok из журнала в окне days.
+        sources = {}
+        for rec in weather_journal_query(hours=days * 24):
+            s = rec.get("source")
+            if not s:
+                continue
+            st = sources.setdefault(s, {"ok": 0, "last_ok_ts": None})
+            if rec.get("kind") == "fetch_ok":
+                st["ok"] += 1
+                st["last_ok_ts"] = rec.get("ts")
+        events = weather_journal_query(hours=days * 24)[-500:]
+
+        body = json.dumps({
+            "current": current,
+            "hourly": hourly,
+            "daily": daily,
+            "sources": sources,
+            "events": events,
+            "days": days,
+            "ts": int(time.time()),
+        }, ensure_ascii=False).encode("utf-8")
+        try:
+            self.send_response(200)
+            self.send_cors_headers()
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
     def serve_cam_rooms_admin(self):
         """POST /api/cam/rooms: добавить/убрать камерную комнату (правит config.json).
 
@@ -3925,6 +4156,9 @@ doSave();
             return
         if path == "/api/cam/monitor":
             self.serve_cam_monitor()
+            return
+        if path == "/api/weather/stats":
+            self.serve_weather_stats()
             return
 
         if path == "/sync_time":
@@ -4543,6 +4777,8 @@ def background_refresher():
 def main():
     load_disk_cache()
     cam_journal_load()
+    weather_journal_load()
+    backfill_fact_history()
     cfg = load_config()
     port = int(cfg.get("port", 8085))
 
