@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Статистика погоды</title>
+<style>
+body {
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+	background: #0f1115;
+	color: #e0e6ed;
+	margin: 0;
+	padding: 12px;
+}
+header {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	margin-bottom: 10px;
+}
+header h1 { font-size: 18px; margin: 0; flex: 1 1 auto; }
+.btn-back {
+	background: #1c2530;
+	color: #e0e6ed;
+	border: 1px solid #243447;
+	border-radius: 8px;
+	padding: 8px 14px;
+	font-size: 14px;
+	text-decoration: none;
+	cursor: pointer;
+}
+.idle-badge {
+	color: #8aa0b4;
+	font-size: 12px;
+	border: 1px solid #243447;
+	border-radius: 999px;
+	padding: 2px 10px;
+	white-space: nowrap;
+}
+.idle-badge.idle-warning { color: #ffb457; border-color: #ffb457; }
+.card {
+	background: #141a22;
+	border: 1px solid #1f2b3a;
+	border-radius: 10px;
+	padding: 10px 12px;
+	margin-bottom: 10px;
+}
+.card h2 { font-size: 14px; margin: 0 0 8px 0; color: #aab8c6; font-weight: 600; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.chips button {
+	background: #1c2530;
+	color: #c7d2dc;
+	border: 1px solid #243447;
+	border-radius: 999px;
+	padding: 5px 12px;
+	font-size: 13px;
+	cursor: pointer;
+}
+.chips button.on { background: #24405e; color: #fff; border-color: #3c6ea5; }
+#wx_cur { font-size: 13px; color: #aab8c6; margin-bottom: 8px; }
+svg { width: 100%; height: auto; display: block; }
+.src_row { font-size: 13px; padding: 3px 0; border-bottom: 1px solid #1a2430; }
+.src_row:last-child { border-bottom: none; }
+.ev { font-size: 12px; color: #8aa0b4; padding: 2px 0; }
+.ev b { color: #c7d2dc; font-weight: 600; }
+.meta { font-size: 12px; color: #8aa0b4; }
+#status { font-size: 12px; color: #8aa0b4; min-height: 16px; margin-bottom: 6px; }
+</style>
+</head>
+<body>
+<header>
+	<button class="btn-back" id="back_btn">&#8592; Назад</button>
+	<h1>Статистика погоды</h1>
+	<span class="idle-badge" id="idle_badge">Автовозврат: <span id="idle_countdown">60</span> с</span>
+</header>
+
+<div class="chips" id="wx_ranges">
+	<button id="wxd-1">24ч</button>
+	<button id="wxd-7" class="on">7д</button>
+	<button id="wxd-30">30д</button>
+	<button id="wxd-90">90д</button>
+</div>
+<div class="chips" id="wx_metrics">
+	<button id="wxm-temp" class="on">Темп</button>
+	<button id="wxm-pressure_mm" class="on">Давл</button>
+	<button id="wxm-wind_ms">Ветер</button>
+	<button id="wxm-humidity" class="on">Влажн</button>
+</div>
+
+<div class="card">
+	<h2>Как менялась погода</h2>
+	<div id="wx_cur"></div>
+	<div id="status"></div>
+	<svg id="wx_chart" viewBox="0 0 1000 340" preserveAspectRatio="xMidYMid meet"></svg>
+	<div id="wx_legend" class="meta"></div>
+</div>
+
+<div class="card">
+	<h2>Источники (за диапазон)</h2>
+	<div id="wx_sources"></div>
+</div>
+
+<div class="card">
+	<h2>Журнал источников</h2>
+	<div id="wx_events"></div>
+</div>
+
+<div class="meta" id="wx_days"></div>
+
+<script>
+// Статистика погоды для планшетов (эпик weather-stats): страница раздаётся
+// с планшета (files/web), данные берёт с сервера кэширования через
+// /api/weather/stats (без auth, CORS открыт). ES5, без внешних CDN.
+var WX_COLORS = { temp: "#ffb457", pressure_mm: "#6fd394", wind_ms: "#57b4ff", humidity: "#c792ea" };
+var WX_LABELS = { temp: "Темп, °C", pressure_mm: "Давл, мм", wind_ms: "Ветер, м/с", humidity: "Влажн, %" };
+var wxDays = 7;
+var wxMetrics = { temp: true, pressure_mm: true, wind_ms: false, humidity: true };
+var wxData = null;
+var wxTimer = null;
+var wxBusy = false;
+var serverBase = "";
+
+function $(id) { return document.getElementById(id); }
+
+function svgEl(tag, attrs, text) {
+	var el = document.createElementNS("http://www.w3.org/2000/svg", tag);
+	for (var k in attrs) el.setAttribute(k, attrs[k]);
+	if (text) el.textContent = text;
+	return el;
+}
+
+function wxTimeLabel(iso) {
+	if (!iso) return "";
+	var m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/);
+	if (!m) return String(iso);
+	return m[3] + "." + m[2] + " " + m[4] + ":" + m[5];
+}
+
+function fmtV(v) {
+	if (v == null || isNaN(v)) return "-";
+	return (v > 0 && (v % 1)) ? "+" + v.toFixed(1) : String(Math.round(v * 10) / 10);
+}
+
+// адрес сервера кэширования: из локального /api/settings планшета
+function loadServerBase(cb) {
+	fetch("/api/settings", { cache: "no-store" }).then(function (r) {
+		return r.ok ? r.json() : null;
+	}).then(function (cfg) {
+		var s = (cfg && cfg.server_url) ? String(cfg.server_url) : "";
+		s = s.trim().replace(/\/weather\.json.*$/, "").replace(/\/setup(\.html)?$/, "").replace(/\/$/, "");
+		cb(s);
+	}).catch(function () { cb(""); });
+}
+
+function wxSchedule(ms) {
+	if (wxTimer) clearTimeout(wxTimer);
+	wxTimer = setTimeout(wxPoll, ms);
+}
+
+function wxPoll() {
+	if (document.hidden || wxBusy) return;
+	if (!serverBase) { loadServerBase(function (s) { serverBase = s; wxPoll(); }); return; }
+	wxBusy = true;
+	$("status").textContent = "обновление...";
+	fetch(serverBase + "/api/weather/stats?days=" + wxDays, { cache: "no-store" })
+		.then(function (r) { return r.ok ? r.json() : null; })
+		.then(function (j) {
+			wxBusy = false;
+			if (!j) { $("status").textContent = "сервер не дал данных (обновлено " + nowStr() + ")"; wxSchedule(120000); return; }
+			wxData = j;
+			$("status").textContent = "";
+			wxRender();
+			wxSchedule(600000); // 10 мин: история часовая, чаще незачем
+		})
+		.catch(function () {
+			wxBusy = false;
+			$("status").textContent = "нет связи с сервером (обновлено " + nowStr() + ")";
+			wxSchedule(120000);
+		});
+}
+
+function nowStr() {
+	var d = new Date();
+	return d.toLocaleTimeString();
+}
+
+// точки для метрики: до 7д - почасовые, дальше - дневные агрегаты
+// (дневные строки: day/tmin/tavg/tmax - нормализуем к общему виду hourly)
+function wxSeries() {
+	if (!wxData) return [];
+	if ((wxData.days || wxDays) <= 7) {
+		return (wxData.hourly || []).map(function (h) {
+			return { t: h.ts, temp: h.temp, pressure_mm: h.pressure_mm,
+				wind_ms: h.wind_ms, humidity: h.humidity };
+		});
+	}
+	return (wxData.daily || []).map(function (d) {
+		return { t: d.day, temp: d.tavg, pressure_mm: d.pressure_mm,
+			wind_ms: d.wind_ms, humidity: d.humidity };
+	});
+}
+
+function wxDrawChart(series) {
+	var svg = $("wx_chart");
+	while (svg.firstChild) svg.removeChild(svg.firstChild);
+	var W = 1000, H = 340, padL = 10, padR = 10, padT = 14, padB = 26;
+	var keys = [];
+	Object.keys(wxMetrics).forEach(function (k) { if (wxMetrics[k]) keys.push(k); });
+	var pts = series.filter(function (r) {
+		return keys.some(function (k) { return r[k] != null; });
+	});
+	if (pts.length < 2) {
+		var t = svgEl("text", { x: W / 2, y: H / 2, "text-anchor": "middle", fill: "#8aa0b4", "font-size": "20" },
+			"нет данных за выбранный диапазон (история копится с включения фичи)");
+		svg.appendChild(t);
+		return;
+	}
+	[0.25, 0.5, 0.75].forEach(function (f) {
+		svg.appendChild(svgEl("line", { x1: padL, x2: W - padR, y1: padT + f * (H - padT - padB), y2: padT + f * (H - padT - padB), stroke: "#1f2b3a", "stroke-width": "1" }));
+	});
+	var n = pts.length;
+	keys.forEach(function (k) {
+		var vals = pts.map(function (r) { return r[k]; }).filter(function (v) { return v != null; });
+		if (vals.length < 2) return; // метрика без данных в этом диапазоне - линии нет
+		var mn = Math.min.apply(null, vals), mx = Math.max.apply(null, vals);
+		if (mx - mn < 1e-9) { mn -= 0.5; mx += 0.5; }
+		var d = "";
+		pts.forEach(function (r, i) {
+			if (r[k] == null) return;
+			var x = padL + (n > 1 ? i / (n - 1) : 0) * (W - padL - padR);
+			var y = padT + (1 - (r[k] - mn) / (mx - mn)) * (H - padT - padB);
+			d += (d ? " " : "") + x.toFixed(1) + "," + y.toFixed(1);
+		});
+		if (d) svg.appendChild(svgEl("polyline", { points: d, fill: "none", stroke: WX_COLORS[k], "stroke-width": "2" }));
+	});
+	[[padL, pts[0]], [W / 2, pts[Math.floor(n / 2)]], [W - padR, pts[n - 1]]].forEach(function (p) {
+		svg.appendChild(svgEl("text", { x: p[0], y: H - 6, "text-anchor": p[0] < 50 ? "start" : (p[0] > W - 50 ? "end" : "middle"), fill: "#8aa0b4", "font-size": "13" },
+			wxTimeLabel(p[1].t)));
+	});
+}
+
+function wxRenderLegend(series) {
+	var parts = [];
+	Object.keys(wxMetrics).forEach(function (k) {
+		if (!wxMetrics[k]) return;
+		var vals = series.map(function (r) { return r[k]; }).filter(function (v) { return v != null; });
+		if (!vals.length) return;
+		var mn = Math.min.apply(null, vals), mx = Math.max.apply(null, vals);
+		parts.push('<span style="color:' + WX_COLORS[k] + '">&#9632;</span> ' + WX_LABELS[k] + ": " + fmtV(mn) + " .. " + fmtV(mx));
+	});
+	$("wx_legend").innerHTML = parts.join(" &nbsp; ");
+}
+
+function wxRenderSources(sources) {
+	var box = $("wx_sources");
+	box.innerHTML = "";
+	Object.keys(sources).forEach(function (name) {
+		var st = sources[name] || {};
+		var row = document.createElement("div");
+		row.className = "src_row";
+		row.textContent = name + ": точек " + (st.points || 0) +
+			(st.last_ts ? ", последняя " + wxTimeLabel(st.last_ts) : "") +
+			(st.ok_journal ? " (журнал: ок " + st.ok_journal + ")" : "");
+		box.appendChild(row);
+	});
+	if (!box.children.length) box.innerHTML = '<div class="meta">источников за диапазон нет</div>';
+}
+
+function wxEvText(ev) {
+	if (ev.kind === "fetch_ok") return "источник ответил: " + (ev.source || "?");
+	if (ev.kind === "src_switch") return "смена источника: " + (ev.prev_source || "?") + " -> " + (ev.source || "?") + (ev.note ? " (" + ev.note + ")" : "");
+	if (ev.kind === "chain_fail") return "цепочка не дала данных" + (ev.error ? ": " + ev.error : "");
+	if (ev.kind === "cache_restored") return "кэш восстановлен при старте" + (ev.source ? " - " + ev.source : "");
+	return ev.kind;
+}
+
+function wxRenderEvents(events) {
+	var box = $("wx_events");
+	box.innerHTML = "";
+	(events || []).slice(-10).forEach(function (ev) {
+		var row = document.createElement("div");
+		row.className = "ev";
+		var t = ev.ts ? new Date(String(ev.ts).replace(" ", "T")) : null;
+		var when = t && !isNaN(t.getTime()) ? t.toLocaleString() : String(ev.ts || "");
+		row.innerHTML = "<b>" + when + "</b> " + wxEvText(ev);
+		box.appendChild(row);
+	});
+	if (!box.children.length) box.innerHTML = '<div class="meta">журнал пуст</div>';
+}
+
+function wxRender() {
+	if (!wxData) return;
+	var cur = wxData.current || {};
+	var bits = [];
+	if (cur.temp != null) bits.push(fmtV(cur.temp) + " °C");
+	if (cur.pressure_mm != null) bits.push(cur.pressure_mm + " мм");
+	if (cur.wind_speed != null) bits.push(cur.wind_speed + " м/с");
+	if (cur.humidity != null) bits.push(cur.humidity + "%");
+	$("wx_cur").textContent = (bits.length ? "Сейчас: " + bits.join(", ") : "") +
+		(cur.src ? " - " + cur.src : "") +
+		(cur.age_min != null ? " (обновлено " + cur.age_min + " мин назад)" : "");
+	$("wx_days").textContent = "диапазон: " + (wxData.days || wxDays) + " дн";
+	var series = wxSeries();
+	wxDrawChart(series);
+	wxRenderLegend(series);
+	wxRenderSources(wxData.sources || {});
+	wxRenderEvents(wxData.events || []);
+}
+
+// 60-секундный таймер бездействия с автовозвратом на главный экран (паттерн settings.html)
+var IDLE_TIMEOUT_SEC = 60;
+var idleSecondsLeft = IDLE_TIMEOUT_SEC;
+var idleTimerInterval = null;
+
+function updateIdleBadge() {
+	var cd = $("idle_countdown");
+	if (cd) cd.innerText = String(idleSecondsLeft);
+	var badge = $("idle_badge");
+	if (badge) {
+		if (idleSecondsLeft <= 10) badge.className = "idle-badge idle-warning";
+		else badge.className = "idle-badge";
+	}
+}
+
+function resetIdleTimer() {
+	idleSecondsLeft = IDLE_TIMEOUT_SEC;
+	updateIdleBadge();
+}
+
+function startIdleTimer() {
+	if (idleTimerInterval) clearInterval(idleTimerInterval);
+	updateIdleBadge();
+	idleTimerInterval = setInterval(function () {
+		idleSecondsLeft--;
+		updateIdleBadge();
+		if (idleSecondsLeft <= 0) {
+			clearInterval(idleTimerInterval);
+			window.location.href = "/";
+		}
+	}, 1000);
+}
+
+["click", "touchstart", "keydown", "scroll"].forEach(function (evt) {
+	document.addEventListener(evt, resetIdleTimer, { passive: true });
+});
+
+$("back_btn").addEventListener("click", function () {
+	if (window.history.length > 1) window.history.back();
+	else window.location.href = "/";
+});
+
+[1, 7, 30, 90].forEach(function (d) {
+	$("wxd-" + d).addEventListener("click", function () {
+		wxDays = d;
+		[1, 7, 30, 90].forEach(function (dd) { $("wxd-" + dd).classList.toggle("on", dd === d); });
+		resetIdleTimer();
+		wxPoll();
+	});
+});
+
+Object.keys(wxMetrics).forEach(function (key) {
+	$("wxm-" + key).addEventListener("click", function () {
+		wxMetrics[key] = !wxMetrics[key];
+		$("wxm-" + key).classList.toggle("on", wxMetrics[key]);
+		resetIdleTimer();
+		wxRender(); // перерисовка из уже полученных данных, без запроса
+	});
+});
+
+document.addEventListener("visibilitychange", function () {
+	if (document.hidden) {
+		if (wxTimer) { clearTimeout(wxTimer); wxTimer = null; }
+	} else {
+		resetIdleTimer();
+		wxPoll();
+	}
+});
+
+startIdleTimer(); // не завязан на настройки: возврат в киоск работает всегда
+loadServerBase(function (s) {
+	serverBase = s;
+	if (!s) $("status").textContent = "сервер кэширования не настроен (server_url пуст)";
+	wxPoll();
+});
+</script>
+</body>
+</html>

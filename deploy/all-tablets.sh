@@ -20,7 +20,7 @@ for t in $TABLETS; do
   if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && curl -s -m 2 "http://$ip:8080/health" 2>/dev/null | grep -q '"app":"WeatherInformerKiosk"'; then
     echo "  [OTA HTTP] Обновление веб-файлов через http://$ip:8080/api/upload..."
     upload_ok=1
-    for f in qrcode.min.js setup.html settings.html informer.html; do
+    for f in qrcode.min.js setup.html settings.html informer.html weather_stats.html; do
       if [ -f "$ROOT_DIR/$f" ]; then
         resp=$(curl -s -m 8 -X POST -F "file=@$ROOT_DIR/$f" "http://$ip:8080/api/upload" 2>/dev/null || true)
         if ! echo "$resp" | grep -q '"status":"uploaded"'; then

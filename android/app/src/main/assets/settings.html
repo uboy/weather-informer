@@ -752,7 +752,7 @@ function escapeHtml(str) {
 function updateDeviceRoleUI() {
     var loc = window.location;
     var port = loc.port || "8080";
-    var isServer = (port === "8085" || port === "8099" || (currentCfg && (currentCfg.port === 8085 || currentCfg.role === "caching_server")));
+    var isServer = (port === "8085" || (currentCfg && (currentCfg.port === 8085 || currentCfg.role === "caching_server")));
     var devLabel = document.getElementById("device_info_label");
     var navTitle = document.getElementById("main_nav_title");
     var roleBanner = document.getElementById("role_banner");
@@ -806,19 +806,28 @@ function updateDeviceRoleUI() {
 // ===== Камера (фаза 1): состояние + запрос переключения =====
 var camEnabled = null;
 
-// Ссылка на дашборд и подсказка по планшетам. /dashboard живёт на дев-сервере 8099
-// (переходная схема до разворота прода); на планшетных страницах (8080) этот блок
-// вообще не показывается, ссылка с них не торчит.
+// Ссылка на дашборд и подсказка по планшетам. /dashboard живёт на самом сервере (прод
+// 8085) - ссылка относительная; на планшетных страницах (8080) этот блок вообще
+// не показывается, ссылка с них не торчит.
 function camSetupServerBlock() {
-    var port = window.location.port || "8080";
     var holder = document.getElementById("cam_dash_link");
     if (holder) {
         holder.innerHTML = "";
         var a = document.createElement("a");
         a.style.color = "#8ab4f8";
-        a.href = (port === "8099") ? "/dashboard" : "http://192.168.1.55:8099/dashboard";
-        a.textContent = "Дашборд камер (дев)";
+        a.href = "/dashboard";
+        a.textContent = "Дашборд камер";
         holder.appendChild(a);
+        // Статистика погоды (эпик weather-stats): та же страница дашборда,
+        // вкладка «Погода» открывается параметром ?tab=wx
+        var sep = document.createElement("span");
+        sep.textContent = " - ";
+        holder.appendChild(sep);
+        var a2 = document.createElement("a");
+        a2.style.color = "#8ab4f8";
+        a2.href = "/dashboard?tab=wx";
+        a2.textContent = "Статистика погоды";
+        holder.appendChild(a2);
     }
     var hint = document.getElementById("cam_tablets_hint");
     if (!hint) return;

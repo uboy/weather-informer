@@ -2004,6 +2004,16 @@ function init_menu() {
 		force_bypass_direct_gate = true;
 		get_data();
 	});
+	$("#menu_stats").on("click", function(e) {
+		e.stopPropagation();
+		menu.removeClass("menu_open");
+		// статистика погоды: локальная страница планшета (эпик weather-stats)
+		var dest = "/weather_stats.html";
+		if (window.location.protocol === "file:") {
+			dest = "http://127.0.0.1:8080/weather_stats.html";
+		}
+		window.location.href = dest;
+	});
 	$("#menu_settings").on("click", function(e) {
 		e.stopPropagation();
 		var dest = "/settings.html";
@@ -5705,6 +5715,7 @@ body {
 		</div>
 		<div class="menu_title">Погода</div>
 		<div class="menu_item" id="menu_refresh">Обновить сейчас</div>
+		<div class="menu_item" id="menu_stats">📊 Статистика погоды</div>
 		<div class="menu_title">Управление</div>
 		<div class="menu_item" id="menu_settings">⚙️ Настройки</div>
 		<div class="menu_item" id="menu_upload">📁 Загрузка файлов</div>
