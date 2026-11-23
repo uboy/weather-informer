@@ -752,7 +752,7 @@ function escapeHtml(str) {
 function updateDeviceRoleUI() {
     var loc = window.location;
     var port = loc.port || "8080";
-    var isServer = (port === "8085" || port === "8099" || (currentCfg && (currentCfg.port === 8085 || currentCfg.role === "caching_server")));
+    var isServer = (port === "8085" || (currentCfg && (currentCfg.port === 8085 || currentCfg.role === "caching_server")));
     var devLabel = document.getElementById("device_info_label");
     var navTitle = document.getElementById("main_nav_title");
     var roleBanner = document.getElementById("role_banner");
@@ -807,8 +807,8 @@ function updateDeviceRoleUI() {
 var camEnabled = null;
 
 // Ссылка на дашборд и подсказка по планшетам. /dashboard живёт на самом сервере (прод
-// 8085, с 23.11; переходный дев 8099 выключен) - ссылка относительная; на планшетных
-// страницах (8080) этот блок вообще не показывается, ссылка с них не торчит.
+// 8085) - ссылка относительная; на планшетных страницах (8080) этот блок вообще
+// не показывается, ссылка с них не торчит.
 function camSetupServerBlock() {
     var holder = document.getElementById("cam_dash_link");
     if (holder) {
