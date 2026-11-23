@@ -390,17 +390,19 @@ function monSnap(room) {
   if (monDisabled[room]) return; // выключенную камеру не опрашиваем
   var box = $("ms-" + room);
   if (!box) return;
+  var nextDelay = 60000; // норма: кадр раз в 60 с
   fetch("/api/cam/snapshot?room=" + encodeURIComponent(room) + "&t=" + Date.now(),
         {cache: "no-store"})
     .then(function (r) {
       if (r.status === 403) {
         // планшет сам отказал (disabled/forbidden) - останавливаем опрос комнаты;
-        // 403-комнаты monPoll не воскрешает, медленный перепроб раз в 5 мин
+        // перепроб раз в 5 мин (камеру могли включить обратно на планшете)
         mon403[room] = true;
+        nextDelay = 300000;
         box.innerHTML = '<span class="empty">камера выключена на планшете - опрос остановлен (403)</span>';
         return null;
       }
-      if (r.status === 503) { return null; } // занято (стрим/снапшот) - позже
+      if (r.status === 503) { nextDelay = 30000; return null; } // занято - раньше
       if (!r.ok) throw new Error("HTTP " + r.status);
       return r.blob();
     })
@@ -420,7 +422,7 @@ function monSnap(room) {
       }
     })
     .catch(function () {})
-    .then(function () { monSchedule(room, 60000); }); // completion-driven
+    .then(function () { monSchedule(room, nextDelay); }); // completion-driven
 }
 
 function monPoll() {
@@ -458,12 +460,14 @@ function monPoll() {
           box.innerHTML = '<span class="empty">камера выключена - опрос остановлен</span>';
         }
       } else if (mon403[room]) {
-        // 403-остановленная: не воскрешаем каждый цикл, медленный перепроб 5 мин,
-        // если отдельного таймера ещё нет (monSchedule сбрасывает существующий)
+        // 403-остановленная: не воскрешаем каждый цикл; если таймера нет
+        // (например, снят monStopSnaps) - медленный перепроб 5 мин
         if (!monSnapTimers[room]) monSchedule(room, 300000);
       } else {
         delete monDisabled[room]; // включилась заново - возобновляем
-        monSchedule(room, wasDisabled ? 1000 : 60000);
+        // живой таймер не сбрасываем: monPoll каждые 30 с при интервале кадров
+        // 60 с иначе отодвигает кадр бесконечно (голодаение, найдено E2E 23.11)
+        if (!monSnapTimers[room] || wasDisabled) monSchedule(room, wasDisabled ? 1000 : 60000);
       }
     });
     renderEvents(j.events || []);
