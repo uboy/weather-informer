@@ -309,7 +309,9 @@ function pollLoop() {
 var activeTab = "cam";
 var monBusy = false;
 var monSnapTimers = {};
-var monDisabled = {};  // room -> true: планшет ответил 403 / cam_state.enabled=false
+var monDisabled = {};  // room -> true: cam_state.enabled=false (опрос остановлен)
+var mon403 = {};       // room -> true: планшет ответил 403 на кадр; не долбим,
+                       // перепроб раз в 5 мин (камеру могли включить на планшете)
 var monBlobUrls = {};  // room -> последний objectURL (revoke перед заменой)
 var lastMonRooms = {};
 
@@ -392,9 +394,10 @@ function monSnap(room) {
         {cache: "no-store"})
     .then(function (r) {
       if (r.status === 403) {
-        // планшет сам отказал (disabled/forbidden) - останавливаем опрос комнаты
-        monDisabled[room] = true;
-        box.innerHTML = '<span class="empty">камера выключена на планшете - опрос остановлен</span>';
+        // планшет сам отказал (disabled/forbidden) - останавливаем опрос комнаты;
+        // 403-комнаты monPoll не воскрешает, медленный перепроб раз в 5 мин
+        mon403[room] = true;
+        box.innerHTML = '<span class="empty">камера выключена на планшете - опрос остановлен (403)</span>';
         return null;
       }
       if (r.status === 503) { return null; } // занято (стрим/снапшот) - позже
@@ -403,6 +406,7 @@ function monSnap(room) {
     })
     .then(function (b) {
       if (b && box) {
+        delete mon403[room]; // кадр прошёл - планшет снова отдаёт камеру
         if (monBlobUrls[room]) { try { URL.revokeObjectURL(monBlobUrls[room]); } catch (e) {} }
         var url = URL.createObjectURL(b);
         monBlobUrls[room] = url;
@@ -441,7 +445,8 @@ function monPoll() {
       bits.push("зрителей: " + (info.viewers || 0));
       if (cs && cs.enabled === false) bits.push("выключена на планшете");
       if (cs && cs.last_error) bits.push("ошибка: " + cs.last_error);
-      if (monDisabled[room]) bits.push("опрос кадров остановлен (403)");
+      if (monDisabled[room]) bits.push("опрос остановлен (выключена)");
+      if (mon403[room]) bits.push("опрос остановлен (403)");
       m.textContent = bits.join(", ") || "нет данных";
       var wasDisabled = !!monDisabled[room];
       if (cs && cs.enabled === false) {
@@ -449,9 +454,13 @@ function monPoll() {
         monDisabled[room] = true;
         if (monSnapTimers[room]) { clearTimeout(monSnapTimers[room]); delete monSnapTimers[room]; }
         var box = $("ms-" + room);
-        if (box && !box.querySelector(".empty")) {
+        if (box) {
           box.innerHTML = '<span class="empty">камера выключена - опрос остановлен</span>';
         }
+      } else if (mon403[room]) {
+        // 403-остановленная: не воскрешаем каждый цикл, медленный перепроб 5 мин,
+        // если отдельного таймера ещё нет (monSchedule сбрасывает существующий)
+        if (!monSnapTimers[room]) monSchedule(room, 300000);
       } else {
         delete monDisabled[room]; // включилась заново - возобновляем
         monSchedule(room, wasDisabled ? 1000 : 60000);
@@ -489,7 +498,7 @@ function monStopSnaps() {
 function monStartSnaps() {
   ROOMS.forEach(function (room) {
     var cs = (lastMonRooms[room] || {}).cam_state;
-    if (!monDisabled[room] && !(cs && cs.enabled === false)) monSchedule(room, 500);
+    if (!monDisabled[room] && !mon403[room] && !(cs && cs.enabled === false)) monSchedule(room, 500);
   });
 }
 
