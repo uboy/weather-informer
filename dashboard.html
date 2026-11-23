@@ -87,18 +87,35 @@ var lastPollOk = ""; // время последнего успешного об�
 
 function $(id) { return document.getElementById(id); }
 
-function api(path, cb) {
-  fetch(path, {cache: "no-store"})
-    .then(function (r) {
-      if (r.status === 401) { $("hint").textContent = "требуется вход (HTTP Basic)"; return null; }
-      return r.json();
-    })
-    .then(function (j) { if (j) cb(j); })
-    .catch(function () {
+var API_TIMEOUT_MS = 8000;
+
+// onfail (необязательный) вызывается, когда cb не получит данные: обрыв, таймаут, 401.
+function api(path, cb, onfail) {
+  // F2: без таймаута «чёрная дыра» (порт слушает, ответа нет) копит опросы в pending,
+  // а после восстановления связи они уходят разом, и сервер режет их лимитером (429).
+  var ctl = (typeof AbortController !== "undefined") ? new AbortController() : null;
+  var done = false;
+  var timer = ctl ? setTimeout(function () { try { ctl.abort(); } catch (e) {} }, API_TIMEOUT_MS) : null;
+  var finish = function (failed, j) {
+    if (done) return;
+    done = true;
+    if (timer) clearTimeout(timer);
+    if (failed) {
       // item 11: молчаливый сбой выглядел как «данные живые»; показываем,
       // что связи нет и когда данные обновлялись в последний раз
       $("hint").textContent = "нет связи с сервером (обновлено " + (lastPollOk || "-") + ")";
-    });
+      if (onfail) onfail();
+    } else if (j) {
+      cb(j);
+    }
+  };
+  fetch(path, ctl ? {cache: "no-store", signal: ctl.signal} : {cache: "no-store"})
+    .then(function (r) {
+      if (r.status === 401) { $("hint").textContent = "требуется вход (HTTP Basic)"; finish(true, null); return null; }
+      return r.json();
+    })
+    .then(function (j) { finish(false, j); })
+    .catch(function () { finish(true, null); });
 }
 
 var autoSnap = {};
@@ -253,9 +270,13 @@ function updateSummary(sum) {
     " (обновлено " + lastPollOk + ")";
 }
 
+var pollBusy = false; // F2: новый опрос не стартует, пока предыдущий не завершился
+
 function pollLoop() {
-  if (document.hidden) return;
-  api("/api/cam/summary", updateSummary);
+  if (document.hidden || pollBusy) return;
+  pollBusy = true;
+  api("/api/cam/summary", function (j) { pollBusy = false; updateSummary(j); },
+      function () { pollBusy = false; });
 }
 
 // ===== Зритель: pull-WebRTC (сервер сам подключается к планшету, D4) =====
@@ -301,14 +322,30 @@ $("psound").addEventListener("click", function () {
   viewer.sound = !viewer.sound;
   try { localStorage.setItem("camsound", viewer.sound ? "1" : "0"); } catch (e) {}
   updateSoundBtn();
+  if (viewer.sound) reopenWithSound();
 });
+
+// F1: аудио договаривается в момент offer (флаг audio). Если сессия открыта без звука,
+// одного снятия mute мало - дорожки в потоке нет. Переоткрываем зрителя со звуком:
+// сначала ждём ответа на close (планшет освободит камеру), затем новый offer.
+function reopenWithSound() {
+  if (!viewer || !viewer.pull || !viewer.pullViewerId || viewer.audioOffered) return;
+  var room = viewer.room, vid = viewer.pullViewerId;
+  viewer.pullViewerId = ""; // close не дублировать: он уйдёт своим запросом ниже
+  closeViewer();
+  fetch("/api/cam/webrtc/close?room=" + encodeURIComponent(room), {
+    method: "POST",
+    headers: { "Content-Type": "application/json; charset=utf-8" },
+    body: JSON.stringify({viewer: vid})
+  }).catch(function () {}).then(function () { openViewer(room); });
+}
 
 function openViewer(room) {
   if (viewer) closeViewer();
   var sound = true;
   try { sound = localStorage.getItem("camsound") !== "0"; } catch (e) {}
   viewer = {room: room, ws: null, pc: null, mjpegTimer: null, mediaSeen: 0, closed: false,
-            offered: false, pull: true, pullViewerId: "", sound: sound, failTimer: null};
+            offered: false, pull: true, pullViewerId: "", audioOffered: false, sound: sound, failTimer: null};
   $("ptitle").textContent = "Комната: " + room;
   updateSoundBtn();
   $("player").classList.add("open");
@@ -396,6 +433,7 @@ function startPullPeer(room) {
     .then(function () { return waitForIce(pc, 3000); })
     .then(function () {
       if (!viewer || viewer.closed) return null;
+      viewer.audioOffered = !!viewer.sound; // F1: с каким флагом ушёл offer
       return fetch("/api/cam/webrtc/offer?room=" + encodeURIComponent(room), {
         method: "POST",
         headers: { "Content-Type": "application/json; charset=utf-8" },
@@ -416,6 +454,8 @@ function startPullPeer(room) {
         return;
       }
       viewer.pullViewerId = res.j.viewer || "";
+      // F1: звук включили, пока сессия устанавливалась без него, - переоткрываем со звуком
+      if (!viewer.audioOffered && viewer.sound) { reopenWithSound(); return; }
       pc.setRemoteDescription({type: "answer", sdp: res.j.sdp}).then(function () {
         var chain = Promise.resolve();
         (res.j.candidates || []).forEach(function (c) {
