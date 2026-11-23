@@ -806,18 +806,17 @@ function updateDeviceRoleUI() {
 // ===== Камера (фаза 1): состояние + запрос переключения =====
 var camEnabled = null;
 
-// Ссылка на дашборд и подсказка по планшетам. /dashboard живёт на дев-сервере 8099
-// (переходная схема до разворота прода); на планшетных страницах (8080) этот блок
-// вообще не показывается, ссылка с них не торчит.
+// Ссылка на дашборд и подсказка по планшетам. /dashboard живёт на самом сервере (прод
+// 8085, с 23.11; переходный дев 8099 выключен) - ссылка относительная; на планшетных
+// страницах (8080) этот блок вообще не показывается, ссылка с них не торчит.
 function camSetupServerBlock() {
-    var port = window.location.port || "8080";
     var holder = document.getElementById("cam_dash_link");
     if (holder) {
         holder.innerHTML = "";
         var a = document.createElement("a");
         a.style.color = "#8ab4f8";
-        a.href = (port === "8099") ? "/dashboard" : "http://192.168.1.55:8099/dashboard";
-        a.textContent = "Дашборд камер (дев)";
+        a.href = "/dashboard";
+        a.textContent = "Дашборд камер";
         holder.appendChild(a);
     }
     var hint = document.getElementById("cam_tablets_hint");
